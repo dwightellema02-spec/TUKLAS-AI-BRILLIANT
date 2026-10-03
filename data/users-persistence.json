@@ -1,0 +1,130 @@
+[
+  {
+    "id": "usr_student_01",
+    "email": "student@tuklas.ai",
+    "name": "Juan de la Cruz",
+    "passwordHash": "$2b$10$SGOGNZL00CExpIy4kU49/O1J6yQa3.ClMAzZFW4vy5Ix/NXleijli",
+    "role": "STUDENT",
+    "gradeLevel": 7,
+    "createdAt": "2026-10-01T11:24:18.663Z",
+    "updatedAt": "2026-10-01T11:24:18.663Z"
+  },
+  {
+    "id": "usr_student_02",
+    "email": "maria.clara@tuklas.ai",
+    "name": "Maria Clara de los Santos",
+    "passwordHash": "$2b$10$SGOGNZL00CExpIy4kU49/O1J6yQa3.ClMAzZFW4vy5Ix/NXleijli",
+    "role": "STUDENT",
+    "gradeLevel": 7,
+    "createdAt": "2026-10-01T11:24:18.663Z",
+    "updatedAt": "2026-10-01T11:24:18.663Z"
+  },
+  {
+    "id": "usr_student_03",
+    "email": "crisostomo.ibarra@tuklas.ai",
+    "name": "Crisostomo Ibarra",
+    "passwordHash": "$2b$10$SGOGNZL00CExpIy4kU49/O1J6yQa3.ClMAzZFW4vy5Ix/NXleijli",
+    "role": "STUDENT",
+    "gradeLevel": 7,
+    "createdAt": "2026-10-01T11:24:18.663Z",
+    "updatedAt": "2026-10-01T11:24:18.663Z"
+  },
+  {
+    "id": "usr_student_04",
+    "email": "basilio.magalang@tuklas.ai",
+    "name": "Basilio Magalang",
+    "passwordHash": "$2b$10$SGOGNZL00CExpIy4kU49/O1J6yQa3.ClMAzZFW4vy5Ix/NXleijli",
+    "role": "STUDENT",
+    "gradeLevel": 7,
+    "createdAt": "2026-10-01T11:24:18.663Z",
+    "updatedAt": "2026-10-01T11:24:18.663Z"
+  },
+  {
+    "id": "usr_student_05",
+    "email": "elias.salvi@tuklas.ai",
+    "name": "Elias Salvi",
+    "passwordHash": "$2b$10$SGOGNZL00CExpIy4kU49/O1J6yQa3.ClMAzZFW4vy5Ix/NXleijli",
+    "role": "STUDENT",
+    "gradeLevel": 7,
+    "createdAt": "2026-10-01T11:24:18.663Z",
+    "updatedAt": "2026-10-01T11:24:18.663Z"
+  },
+  {
+    "id": "usr_teacher_01",
+    "email": "teacher@tuklas.ai",
+    "name": "Maria Santos (Teacher)",
+    "passwordHash": "$2b$10$SGOGNZL00CExpIy4kU49/O1J6yQa3.ClMAzZFW4vy5Ix/NXleijli",
+    "role": "TEACHER",
+    "createdAt": "2026-10-01T11:24:18.663Z",
+    "updatedAt": "2026-10-01T11:24:18.663Z"
+  },
+  {
+    "id": "usr_admin_01",
+    "email": "admin@tuklas.ai",
+    "name": "Tuklas Administrator",
+    "passwordHash": "$2b$10$SGOGNZL00CExpIy4kU49/O1J6yQa3.ClMAzZFW4vy5Ix/NXleijli",
+    "role": "ADMIN",
+    "createdAt": "2026-10-01T11:24:18.663Z",
+    "updatedAt": "2026-10-01T11:24:18.663Z"
+  },
+  {
+    "id": "usr_1790853866053",
+    "name": "Dalisay Dimagiba",
+    "email": "repair_student_1790853865814@example.com",
+    "passwordHash": "$2b$10$9xs.IHwJUj6VwYD.B/DmgOknq319OMwW0eCxslznSWhUk0HQNKMpi",
+    "role": "STUDENT",
+    "gradeLevel": 7,
+    "createdAt": "2026-10-01T11:24:26.053Z",
+    "updatedAt": "2026-10-01T11:24:26.053Z"
+  },
+  {
+    "id": "usr_1790853891914",
+    "name": "Dalisay Dimagiba",
+    "email": "repair_student_1790853891720@example.com",
+    "passwordHash": "$2b$10$rhtmfzDsCGD7JZcB/gsuIODwgFtZFobb/4RTCN4IfNgbXlC2Xirhy",
+    "role": "STUDENT",
+    "gradeLevel": 7,
+    "createdAt": "2026-10-01T11:24:51.914Z",
+    "updatedAt": "2026-10-01T11:24:51.914Z"
+  },
+  {
+    "id": "usr_1790853955779",
+    "name": "Rizal Scholar",
+    "email": "student_real_browser_1790853955543@school.edu.ph",
+    "passwordHash": "$2b$10$JnUsl9t7bRZB0yd2PhFDauLGxfU/SGPaa/hirAtVdfvHy82NOSe9m",
+    "role": "STUDENT",
+    "gradeLevel": 7,
+    "createdAt": "2026-10-01T11:25:55.779Z",
+    "updatedAt": "2026-10-01T11:25:55.779Z"
+  },
+  {
+    "id": "usr_1790854212660",
+    "name": "Dalisay Dimagiba",
+    "email": "repair_student_1790854212442@example.com",
+    "passwordHash": "$2b$10$LvImCN57BWUDS4NNF2mzLu/dnZoJ1gq9RtXY7zB8A2uAfnESpe9b2",
+    "role": "STUDENT",
+    "gradeLevel": 7,
+    "createdAt": "2026-10-01T11:30:12.660Z",
+    "updatedAt": "2026-10-01T11:30:12.660Z"
+  },
+  {
+    "id": "usr_1790854471089",
+    "name": "Dalisay Dimagiba",
+    "email": "repair_student_1790854470898@example.com",
+    "passwordHash": "$2b$10$w.VNdOpqE4ikUES2w2y32eXxWxRZYs6FriNjpGmZ8MpLJsbaVyXVy",
+    "role": "STUDENT",
+    "gradeLevel": 7,
+    "createdAt": "2026-10-01T11:34:31.089Z",
+    "updatedAt": "2026-10-01T11:34:31.089Z"
+  },
+  {
+    "id": "usr_1790854793961",
+    "name": "Dalisay Dimagiba",
+    "email": "repair_student_1790854793759@example.com",
+    "passwordHash": "$2b$10$7KUpU9hja9Dw8MP5755juuGpVAVij1dlzBVyWyVmHyDjpr/gkc7oa",
+    "role": "STUDENT",
+    "gradeLevel": 7,
+    "createdAt": "2026-10-01T11:39:53.961Z",
+    "updatedAt": "2026-10-01T11:39:53.961Z"
+  }
+]

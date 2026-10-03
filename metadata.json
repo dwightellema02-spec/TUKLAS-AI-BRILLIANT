@@ -1,0 +1,6 @@
+{
+  "name": "Tuklas AI",
+  "description": "Interactive, adaptive mathematics learning platform aligned with MATATAG curriculum.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

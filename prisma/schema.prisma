@@ -1,0 +1,1082 @@
+// Tuklas AI - Prisma Database Schema
+// Phase 2: Database + Authentication Foundation
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  STUDENT
+  TEACHER
+  ADMIN
+  RESEARCHER
+}
+
+enum LessonStatus {
+  DRAFT
+  REVIEW
+  APPROVED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ResourceType {
+  PDF
+  DOCUMENT
+  YOUTUBE
+  IMAGE
+  LINK
+  TEACHER_NOTE
+}
+
+enum BlockType {
+  TEXT
+  IMAGE
+  VIDEO
+  EXAMPLE
+  QUESTION
+  INTERACTIVE
+  HINT
+  CHECKPOINT
+  PRACTICE
+  SUMMARY
+}
+
+enum ProgressStatus {
+  NOT_STARTED
+  LEARNING
+  DEVELOPING
+  COMPLETED
+  PROFICIENT
+  MASTERED
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE
+  NUMERIC_INPUT
+  TEXT_INPUT
+  TRUE_FALSE
+  EQUATION
+  MATCHING
+  ORDERING
+  // Future types designed into the architecture:
+  DRAG_DROP
+  GRAPH
+  GEOMETRY
+  INTERACTIVE_DIAGRAM
+  FILL_BLANK
+  MULTI_SELECT
+  FRACTION_INPUT
+  TABLE_INPUT
+}
+
+enum QuestionStatus {
+  DRAFT
+  REVIEW
+  APPROVED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum QuestionDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum QuestionSource {
+  TEACHER
+  SYSTEM
+  AI_GENERATED
+  IMPORTED
+}
+
+enum PracticeSessionStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+enum PracticeSetStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum CognitiveLevel {
+  KNOWLEDGE
+  PROCEDURAL
+  APPLICATION
+  HIGHER_ORDER
+}
+
+enum AssessmentType {
+  DIAGNOSTIC
+  FORMATIVE
+  SUMMATIVE
+  PRACTICE
+  PRE_TEST
+  POST_TEST
+}
+
+enum AssessmentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+// -------------------------------------------------------------
+// USER & IDENTITY
+// -------------------------------------------------------------
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         UserRole @default(STUDENT)
+  gradeLevel   Int? // Optional grade (e.g. 7 for Grade 7 student)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  progress                StudentProgress[]
+  authoredLessons         Lesson[]                         @relation("LessonAuthor")
+  lessonSessions          LessonSession[]
+  checkpointAttempts      CheckpointAttempt[]
+  createdQuestions        Question[]                       @relation("QuestionCreator")
+  reviewedQuestions       Question[]                       @relation("QuestionReviewer")
+  createdPracticeSets     PracticeSet[]                    @relation("PracticeSetCreator")
+  practiceSessions        PracticeSession[]                @relation("StudentPracticeSessions")
+  questionAttempts        QuestionAttempt[]                @relation("StudentQuestionAttempts")
+  aiConversations         AITutorConversation[]            @relation("StudentAITutorConversations")
+  mistakeAnalyses         MistakeAnalysis[]                @relation("StudentMistakeAnalyses")
+  adaptiveRecommendations AdaptiveRecommendation[]         @relation("StudentAdaptiveRecommendations")
+  teacherOverrides        AdaptiveRecommendationOverride[] @relation("TeacherRecommendationOverrides")
+  skillMasteries          SkillMastery[]                   @relation("StudentSkillMasteries")
+  taughtClassrooms        Classroom[]                      @relation("TeacherClassrooms")
+  classEnrollments        ClassroomEnrollment[]            @relation("StudentClassroomEnrollments")
+  createdAssessments      Assessment[]                     @relation("AssessmentAuthor")
+  assessmentAttempts      AssessmentAttempt[]              @relation("StudentAssessmentAttempts")
+  researchMetrics         ResearchMetricRecord[]           @relation("StudentResearchMetrics")
+
+  @@index([email])
+  @@index([role])
+}
+
+// -------------------------------------------------------------
+// CURRICULUM HIERARCHY
+// Subject -> Grade -> Term -> Unit -> Lesson -> Competency -> Skill
+// -------------------------------------------------------------
+
+model Subject {
+  id          String   @id @default(uuid())
+  code        String   @unique // e.g. "MATH"
+  name        String // "Mathematics"
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  grades Grade[]
+}
+
+model Grade {
+  id        String   @id @default(uuid())
+  subjectId String
+  level     Int // e.g. 7
+  name      String // "Grade 7"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  terms   Term[]
+
+  @@unique([subjectId, level])
+}
+
+model Term {
+  id         String   @id @default(uuid())
+  gradeId    String
+  termNumber Int // 1, 2, 3
+  name       String // "Term 1"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  grade Grade  @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+  units Unit[]
+
+  @@unique([gradeId, termNumber])
+}
+
+model Unit {
+  id            String   @id @default(uuid())
+  termId        String
+  sequenceOrder Int
+  title         String // e.g. "Numbers and Algebraic Expressions"
+  description   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  term         Term         @relation(fields: [termId], references: [id], onDelete: Cascade)
+  lessons      Lesson[]
+  competencies Competency[]
+
+  @@index([termId, sequenceOrder])
+}
+
+model Lesson {
+  id                   String       @id @default(uuid())
+  unitId               String
+  authorId             String?
+  sequenceOrder        Int
+  title                String // e.g. "Understanding Integers"
+  description          String?
+  learningObjectives   String[] // Array of objectives
+  status               LessonStatus @default(DRAFT)
+  videoUrl             String? // Optional Mathisipan / YouTube resource link
+  estimatedMinutes     Int          @default(15)
+  prerequisiteLessonId String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  unit                    Unit                     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  author                  User?                    @relation("LessonAuthor", fields: [authorId], references: [id])
+  prerequisiteLesson      Lesson?                  @relation("LessonPrerequisites", fields: [prerequisiteLessonId], references: [id], onDelete: SetNull)
+  dependentLessons        Lesson[]                 @relation("LessonPrerequisites")
+  progressRecords         StudentProgress[]
+  resources               LessonResource[]
+  contentBlocks           LessonContentBlock[]
+  skills                  LessonSkill[]
+  sessions                LessonSession[]
+  checkpointAttempts      CheckpointAttempt[]
+  questions               Question[]
+  practiceSets            PracticeSet[]
+  aiConversations         AITutorConversation[]
+  mistakeAnalyses         MistakeAnalysis[]
+  adaptiveRecommendations AdaptiveRecommendation[]
+  assessments             Assessment[]
+
+  @@index([unitId, sequenceOrder])
+  @@index([status])
+}
+
+model LessonResource {
+  id            String       @id @default(uuid())
+  lessonId      String
+  type          ResourceType
+  title         String
+  url           String?
+  youtubeId     String?
+  provider      String?      @default("YOUTUBE")
+  channelName   String?
+  thumbnailUrl  String?
+  description   String?
+  duration      String?
+  status        String?      @default("APPROVED")
+  addedBy       String?
+  notes         String?
+  fileName      String?
+  fileSize      Int?
+  storagePath   String?
+  sequenceOrder Int          @default(1)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId, sequenceOrder])
+}
+
+model LessonContentBlock {
+  id            String    @id @default(uuid())
+  lessonId      String
+  type          BlockType
+  sequenceOrder Int
+  title         String?
+  content       String // Rich text, Markdown, explanation, or JSON payload
+  metadata      String? // Additional configuration parameters in JSON
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId, sequenceOrder])
+}
+
+model LessonSkill {
+  id        String   @id @default(uuid())
+  lessonId  String
+  skillId   String
+  createdAt DateTime @default(now())
+
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  skill  Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([lessonId, skillId])
+}
+
+model Competency {
+  id            String   @id @default(uuid())
+  unitId        String
+  code          String // e.g. "M7NS-Ia-1"
+  statement     String // DepEd MATATAG Competency statement
+  sequenceOrder Int
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  unit   Unit    @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  skills Skill[]
+
+  @@index([unitId, sequenceOrder])
+}
+
+model Skill {
+  id            String   @id @default(uuid())
+  competencyId  String
+  title         String // e.g. "Identify integers", "Compare integers"
+  description   String?
+  sequenceOrder Int
+  difficulty    Float    @default(1.0) // 1.0 to 5.0
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  competency              Competency               @relation(fields: [competencyId], references: [id], onDelete: Cascade)
+  progress                StudentProgress[]
+  lessons                 LessonSkill[]
+  questions               Question[]
+  practiceSets            PracticeSet[]
+  aiConversations         AITutorConversation[]
+  mistakeAnalyses         MistakeAnalysis[]
+  adaptiveRecommendations AdaptiveRecommendation[]
+  masteries               SkillMastery[]
+
+  // Prerequisite self-referential relations
+  prerequisites SkillPrerequisite[] @relation("SkillPrerequisites")
+  requiredBy    SkillPrerequisite[] @relation("PrerequisiteFor")
+
+  @@index([competencyId, sequenceOrder])
+}
+
+model SkillPrerequisite {
+  id                  String   @id @default(uuid())
+  skillId             String
+  prerequisiteSkillId String
+  createdAt           DateTime @default(now())
+
+  skill             Skill @relation("SkillPrerequisites", fields: [skillId], references: [id], onDelete: Cascade)
+  prerequisiteSkill Skill @relation("PrerequisiteFor", fields: [prerequisiteSkillId], references: [id], onDelete: Cascade)
+
+  @@unique([skillId, prerequisiteSkillId])
+}
+
+// -------------------------------------------------------------
+// STUDENT PROGRESS & MASTERY STORAGE
+// -------------------------------------------------------------
+
+model StudentProgress {
+  id                 String         @id @default(uuid())
+  userId             String
+  lessonId           String?
+  skillId            String?
+  status             ProgressStatus @default(NOT_STARTED)
+  progressPercentage Float          @default(0.0)
+  startedAt          DateTime?
+  completedAt        DateTime?
+
+  // Future Research & Mastery metric fields (0.0 to 1.0)
+  understandingScore Float @default(0.0)
+  accuracyScore      Float @default(0.0)
+  applicationScore   Float @default(0.0)
+  consistencyScore   Float @default(0.0)
+  compositeScore     Float @default(0.0)
+
+  attemptCount Int      @default(0)
+  lastActivity DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson? @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  skill  Skill?  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, skillId])
+  @@index([userId, status])
+}
+
+// -------------------------------------------------------------
+// PHASE 5: LESSON SESSIONS & CHECKPOINT ATTEMPTS
+// -------------------------------------------------------------
+
+model LessonSession {
+  id                  String    @id @default(uuid())
+  userId              String
+  lessonId            String
+  currentSectionIndex Int       @default(0)
+  completedBlockIds   String[]  @default([])
+  startedAt           DateTime  @default(now())
+  lastActivityAt      DateTime  @default(now())
+  completedAt         DateTime?
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+  @@index([userId, lastActivityAt])
+}
+
+model CheckpointAttempt {
+  id        String   @id @default(uuid())
+  userId    String
+  lessonId  String
+  blockId   String
+  attempt   Int      @default(1)
+  answer    String
+  isCorrect Boolean  @default(false)
+  feedback  String?
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([userId, lessonId, blockId])
+}
+
+// -------------------------------------------------------------
+// PHASE 6: QUESTION & PRACTICE ENGINE
+// -------------------------------------------------------------
+
+model Question {
+  id                String             @id @default(uuid())
+  lessonId          String?
+  skillId           String?
+  type              QuestionType
+  prompt            String // Mathematical question text with LaTeX support
+  explanation       String? // Detailed pedagogical worked explanation
+  difficulty        QuestionDifficulty @default(MEDIUM)
+  status            QuestionStatus     @default(DRAFT)
+  source            QuestionSource     @default(TEACHER)
+  createdById       String?
+  reviewedById      String?
+  questionData      String // JSON string for choices, answer, tolerance, matchingPairs, etc.
+  metadata          String? // JSON string for tags, formatting flags, etc.
+  correctFeedback   String? // Immediate reinforcement when answered correctly
+  incorrectFeedback String? // Guiding pedagogical hints on mistake
+  allowRetry        Boolean            @default(true)
+  maxAttempts       Int                @default(3)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  lesson               Lesson?                   @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  skill                Skill?                    @relation(fields: [skillId], references: [id], onDelete: SetNull)
+  createdBy            User?                     @relation("QuestionCreator", fields: [createdById], references: [id])
+  reviewedBy           User?                     @relation("QuestionReviewer", fields: [reviewedById], references: [id])
+  practiceSetQuestions PracticeSetQuestion[]
+  sessionQuestions     PracticeSessionQuestion[]
+  attempts             QuestionAttempt[]
+  aiConversations      AITutorConversation[]
+  cognitiveLevel       CognitiveLevel?           @default(PROCEDURAL)
+  assessmentItems      AssessmentItem[]
+
+  @@index([skillId, status])
+  @@index([lessonId, status])
+  @@index([difficulty])
+  @@index([type])
+  @@index([status])
+}
+
+model PracticeSet {
+  id            String            @id @default(uuid())
+  title         String
+  description   String?
+  lessonId      String?
+  skillId       String?
+  status        PracticeSetStatus @default(DRAFT)
+  questionCount Int               @default(0)
+  createdById   String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  lesson    Lesson?               @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  skill     Skill?                @relation(fields: [skillId], references: [id], onDelete: SetNull)
+  createdBy User?                 @relation("PracticeSetCreator", fields: [createdById], references: [id])
+  questions PracticeSetQuestion[]
+  sessions  PracticeSession[]
+
+  @@index([lessonId, status])
+  @@index([skillId, status])
+}
+
+model PracticeSetQuestion {
+  id            String @id @default(uuid())
+  practiceSetId String
+  questionId    String
+  order         Int    @default(1)
+
+  practiceSet PracticeSet @relation(fields: [practiceSetId], references: [id], onDelete: Cascade)
+  question    Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([practiceSetId, questionId])
+  @@index([practiceSetId, order])
+}
+
+model PracticeSession {
+  id             String                @id @default(uuid())
+  studentId      String
+  practiceSetId  String?
+  lessonId       String?
+  skillId        String?
+  status         PracticeSessionStatus @default(NOT_STARTED)
+  startedAt      DateTime              @default(now())
+  completedAt    DateTime?
+  score          Float                 @default(0.0)
+  totalQuestions Int                   @default(0)
+  correctAnswers Int                   @default(0)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  student         User                      @relation("StudentPracticeSessions", fields: [studentId], references: [id], onDelete: Cascade)
+  practiceSet     PracticeSet?              @relation(fields: [practiceSetId], references: [id], onDelete: SetNull)
+  questions       PracticeSessionQuestion[]
+  attempts        QuestionAttempt[]
+  aiConversations AITutorConversation[]
+
+  @@index([studentId, status])
+  @@index([practiceSetId])
+}
+
+model PracticeSessionQuestion {
+  id                String    @id @default(uuid())
+  practiceSessionId String
+  questionId        String
+  order             Int
+  completedAt       DateTime?
+
+  practiceSession PracticeSession @relation(fields: [practiceSessionId], references: [id], onDelete: Cascade)
+  question        Question        @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([practiceSessionId, questionId])
+  @@index([practiceSessionId, order])
+}
+
+model QuestionAttempt {
+  id                String   @id @default(uuid())
+  studentId         String
+  questionId        String
+  practiceSessionId String?
+  skillId           String?
+  answer            String // Raw answer string or JSON serialization
+  isCorrect         Boolean
+  attemptNumber     Int      @default(1)
+  timeTakenMs       Int?
+  hintUsed          Boolean  @default(false)
+  submittedAt       DateTime @default(now())
+
+  student           User                      @relation("StudentQuestionAttempts", fields: [studentId], references: [id], onDelete: Cascade)
+  question          Question                  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  practiceSession   PracticeSession?          @relation(fields: [practiceSessionId], references: [id], onDelete: SetNull)
+  analysisEvidences MistakeAnalysisEvidence[]
+
+  @@index([studentId, questionId])
+  @@index([practiceSessionId])
+  @@index([studentId, submittedAt])
+}
+
+// -------------------------------------------------------------
+// PHASE 7: AI TUTOR CONVERSATION & MESSAGE MODELS
+// -------------------------------------------------------------
+
+model AITutorConversation {
+  id                String   @id @default(uuid())
+  studentId         String
+  lessonId          String?
+  skillId           String?
+  questionId        String?
+  practiceSessionId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  student         User             @relation("StudentAITutorConversations", fields: [studentId], references: [id], onDelete: Cascade)
+  lesson          Lesson?          @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  skill           Skill?           @relation(fields: [skillId], references: [id], onDelete: SetNull)
+  question        Question?        @relation(fields: [questionId], references: [id], onDelete: SetNull)
+  practiceSession PracticeSession? @relation(fields: [practiceSessionId], references: [id], onDelete: SetNull)
+  messages        AITutorMessage[]
+
+  @@index([studentId, lessonId])
+  @@index([studentId, questionId])
+  @@index([practiceSessionId])
+  @@index([studentId, createdAt])
+}
+
+model AITutorMessage {
+  id              String             @id @default(uuid())
+  conversationId  String
+  role            AITutorRole
+  content         String // Plaintext or LaTeX educational guidance
+  messageType     AITutorMessageType @default(HINT)
+  hintLevel       Int? // 1, 2, 3...
+  guidingQuestion String?
+  metadata        String? // JSON string for structured metadata, cost tracking, token metrics
+  createdAt       DateTime           @default(now())
+
+  conversation AITutorConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+enum AITutorRole {
+  STUDENT
+  TUTOR
+  SYSTEM
+}
+
+enum AITutorMessageType {
+  QUESTION
+  HINT
+  GUIDING_QUESTION
+  EXPLANATION
+  EXAMPLE
+  FEEDBACK
+  CLARIFICATION
+  REDIRECT
+}
+
+enum AITutorHelpLevel {
+  LEVEL_1_HINT
+  LEVEL_2_HINT
+  GUIDING_QUESTION
+  CONCEPT_EXPLANATION
+  WORKED_EXAMPLE
+  FULL_EXPLANATION
+}
+
+// -------------------------------------------------------------
+// PHASE 8: AI MISTAKE ANALYZER & EVIDENCE MODELS
+// -------------------------------------------------------------
+
+model MistakeAnalysis {
+  id                String          @id @default(uuid())
+  studentId         String
+  skillId           String?
+  lessonId          String?
+  practiceSessionId String?
+  category          MistakeCategory @default(UNKNOWN)
+  observation       String // Factual statement of evidence
+  pattern           String // Inferred pattern from attempts
+  possibleCause     String? // Pedagogical hypothesis
+  confidence        Float // 0.0 to 1.0 confidence score
+  recommendation    String // Actionable educational recommendation
+  evidenceSummary   String? // Compact text or JSON summary of evidence
+  status            AnalysisStatus  @default(COMPLETED)
+  trigger           AnalysisTrigger @default(PRACTICE_COMPLETED)
+  analyzerVersion   String          @default("1.0")
+  metadata          String? // JSON: model, token usage, deterministic stats
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  student   User                      @relation("StudentMistakeAnalyses", fields: [studentId], references: [id], onDelete: Cascade)
+  skill     Skill?                    @relation(fields: [skillId], references: [id], onDelete: SetNull)
+  lesson    Lesson?                   @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  evidences MistakeAnalysisEvidence[]
+
+  @@index([studentId, skillId])
+  @@index([studentId, createdAt])
+  @@index([category])
+  @@index([status])
+}
+
+model MistakeAnalysisEvidence {
+  id             String   @id @default(uuid())
+  analysisId     String
+  attemptId      String
+  relevanceScore Float?   @default(1.0)
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  analysis MistakeAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  attempt  QuestionAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@unique([analysisId, attemptId])
+  @@index([analysisId])
+  @@index([attemptId])
+}
+
+enum MistakeCategory {
+  CALCULATION_ERROR
+  CONCEPTUAL_MISUNDERSTANDING
+  PREREQUISITE_GAP
+  APPLICATION_DIFFICULTY
+  SIGN_ERROR
+  PROCEDURAL_ERROR
+  READING_OR_INTERPRETATION_ERROR
+  INCONSISTENT_PERFORMANCE
+  POSSIBLE_CARELESS_ERROR
+  QUESTION_TYPE_DIFFICULTY
+  UNKNOWN
+}
+
+enum AnalysisStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  OUTDATED
+}
+
+enum AnalysisTrigger {
+  PRACTICE_COMPLETED
+  TEACHER_REQUESTED
+  N_NEW_ATTEMPTS
+  SKILL_THRESHOLD_REACHED
+}
+
+// -------------------------------------------------------------
+// PHASE 9: ADAPTIVE LEARNING ENGINE MODELS
+// -------------------------------------------------------------
+
+model AdaptiveRecommendation {
+  id                      String                       @id @default(uuid())
+  studentId               String
+  skillId                 String?
+  lessonId                String?
+  decisionType            AdaptiveDecisionType
+  reason                  String // Human-readable rationale for recommendation
+  evidenceSummary         String? // Compact text or JSON summary of evidence
+  confidence              AdaptiveConfidence           @default(MEDIUM)
+  recommendedActivityType RecommendedActivityType
+  recommendedActivityId   String? // Target practiceSetId, lessonId, or skillId
+  source                  AdaptiveSource               @default(RULE_ENGINE)
+  status                  AdaptiveRecommendationStatus @default(ACTIVE)
+  targetDifficulty        QuestionDifficulty? // EASY, MEDIUM, HARD
+  metadata                String? // JSON: rule triggers, performance metrics, AI explanation
+  createdAt               DateTime                     @default(now())
+  updatedAt               DateTime                     @updatedAt
+  expiresAt               DateTime?
+
+  student   User                             @relation("StudentAdaptiveRecommendations", fields: [studentId], references: [id], onDelete: Cascade)
+  skill     Skill?                           @relation(fields: [skillId], references: [id], onDelete: SetNull)
+  lesson    Lesson?                          @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  overrides AdaptiveRecommendationOverride[]
+
+  @@index([studentId, status])
+  @@index([studentId, skillId])
+  @@index([decisionType])
+  @@index([createdAt])
+}
+
+model AdaptiveRecommendationOverride {
+  id               String               @id @default(uuid())
+  recommendationId String
+  teacherId        String
+  originalDecision AdaptiveDecisionType
+  overrideDecision AdaptiveDecisionType
+  reason           String
+  createdAt        DateTime             @default(now())
+
+  recommendation AdaptiveRecommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+  teacher        User                   @relation("TeacherRecommendationOverrides", fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@index([recommendationId])
+  @@index([teacherId])
+}
+
+enum AdaptiveDecisionType {
+  REMEDIATE
+  REPEAT_LESSON
+  PRACTICE_EASIER
+  PRACTICE_SAME_DIFFICULTY
+  PRACTICE_HARDER
+  REVIEW_PREREQUISITE
+  CONTINUE
+  RETRY
+  TEACHER_REVIEW
+  INSUFFICIENT_EVIDENCE
+}
+
+enum AdaptiveSource {
+  RULE_ENGINE
+  AI_ASSISTED
+  TEACHER_OVERRIDE
+}
+
+enum AdaptiveRecommendationStatus {
+  ACTIVE
+  COMPLETED
+  DISMISSED
+  EXPIRED
+  SUPERSEDED
+}
+
+enum AdaptiveConfidence {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum RecommendedActivityType {
+  PRACTICE_SET
+  LESSON_REVIEW
+  PREREQUISITE_LESSON
+  AI_TUTOR_SESSION
+  TEACHER_CONSULTATION
+  CONTINUE_PATH
+}
+
+// -------------------------------------------------------------
+// PHASE 10: MASTERY ENGINE MODELS
+// -------------------------------------------------------------
+
+model SkillMastery {
+  id               String       @id @default(uuid())
+  studentId        String
+  skillId          String
+  status           MasteryLevel @default(NOT_STARTED)
+  evidenceSummary  String? // Compact text summary of evidence
+  accuracy         Float        @default(0.0) // 0.0 to 1.0
+  recentAccuracy   Float        @default(0.0) // 0.0 to 1.0
+  consistencyScore Float        @default(0.0) // 0.0 to 1.0
+  applicationScore Float        @default(0.0) // 0.0 to 1.0
+  attemptCount     Int          @default(0)
+  masteryVersion   String       @default("MASTERY_V1")
+  lastEvaluatedAt  DateTime     @default(now())
+  metadata         String? // JSON: metrics breakdown, difficulty, question types, explanation
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  student User                  @relation("StudentSkillMasteries", fields: [studentId], references: [id], onDelete: Cascade)
+  skill   Skill                 @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  history SkillMasteryHistory[]
+
+  @@unique([studentId, skillId])
+  @@index([studentId, status])
+  @@index([skillId, status])
+  @@index([lastEvaluatedAt])
+}
+
+model SkillMasteryHistory {
+  id              String        @id @default(uuid())
+  skillMasteryId  String
+  previousStatus  MasteryLevel?
+  newStatus       MasteryLevel
+  reason          String
+  evidenceSummary String?
+  masteryVersion  String        @default("MASTERY_V1")
+  metadata        String? // JSON snapshot of metrics
+  createdAt       DateTime      @default(now())
+
+  mastery SkillMastery @relation(fields: [skillMasteryId], references: [id], onDelete: Cascade)
+
+  @@index([skillMasteryId])
+  @@index([createdAt])
+}
+
+enum MasteryLevel {
+  NOT_STARTED
+  LEARNING
+  DEVELOPING
+  PROFICIENT
+  MASTERED
+}
+
+// -------------------------------------------------------------
+// PHASE 12: TEACHER CLASSROOM, ENROLLMENT & ASSIGNMENT MODELS
+// -------------------------------------------------------------
+
+model Classroom {
+  id         String   @id @default(uuid())
+  name       String // e.g. "Grade 7 - Section Mabini"
+  gradeLevel Int      @default(7)
+  subject    String   @default("Mathematics")
+  schoolYear String   @default("2026-2027")
+  teacherId  String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  teacher               User                   @relation("TeacherClassrooms", fields: [teacherId], references: [id], onDelete: Cascade)
+  enrollments           ClassroomEnrollment[]
+  assignments           Assignment[]
+  assessmentAssignments AssessmentAssignment[]
+
+  @@index([teacherId])
+  @@index([gradeLevel])
+}
+
+model ClassroomEnrollment {
+  id          String   @id @default(uuid())
+  classroomId String
+  studentId   String
+  enrolledAt  DateTime @default(now())
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  student   User      @relation("StudentClassroomEnrollments", fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([classroomId, studentId])
+  @@index([classroomId])
+  @@index([studentId])
+}
+
+model Assignment {
+  id            String    @id @default(uuid())
+  classroomId   String
+  title         String
+  description   String?
+  lessonId      String?
+  practiceSetId String?
+  dueDate       DateTime?
+  status        String    @default("PUBLISHED") // "DRAFT" | "PUBLISHED" | "ARCHIVED"
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+
+  @@index([classroomId])
+  @@index([lessonId])
+  @@index([practiceSetId])
+  @@index([status])
+}
+
+// -------------------------------------------------------------
+// PHASE 14: ASSESSMENT & RESEARCH ANALYTICS MODELS
+// -------------------------------------------------------------
+
+model Assessment {
+  id                      String           @id @default(uuid())
+  title                   String
+  description             String?
+  type                    AssessmentType   @default(FORMATIVE)
+  status                  AssessmentStatus @default(DRAFT)
+  timeLimitMinutes        Int?
+  passingScorePercent     Float            @default(70.0)
+  authorId                String
+  lessonId                String?
+  unitId                  String?
+  gradeLevel              Int              @default(7)
+  shuffleQuestions        Boolean          @default(false)
+  showFeedbackImmediately Boolean          @default(true)
+  metadata                String? // JSON string for extra configuration
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
+
+  author      User                   @relation("AssessmentAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  lesson      Lesson?                @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  items       AssessmentItem[]
+  assignments AssessmentAssignment[]
+  attempts    AssessmentAttempt[]
+
+  @@index([authorId])
+  @@index([lessonId])
+  @@index([type])
+  @@index([status])
+  @@index([gradeLevel])
+}
+
+model AssessmentItem {
+  id             String          @id @default(uuid())
+  assessmentId   String
+  questionId     String
+  sequenceOrder  Int             @default(1)
+  points         Float           @default(1.0)
+  cognitiveLevel CognitiveLevel? @default(PROCEDURAL)
+
+  assessment Assessment               @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  question   Question                 @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  responses  AssessmentItemResponse[]
+
+  @@unique([assessmentId, questionId])
+  @@index([assessmentId, sequenceOrder])
+  @@index([questionId])
+}
+
+model AssessmentAssignment {
+  id           String    @id @default(uuid())
+  assessmentId String
+  classroomId  String?
+  studentId    String? // optional direct student assignment
+  dueDate      DateTime?
+  assignedAt   DateTime  @default(now())
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  classroom  Classroom? @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+
+  @@index([assessmentId])
+  @@index([classroomId])
+  @@index([studentId])
+}
+
+model AssessmentAttempt {
+  id             String         @id @default(uuid())
+  assessmentId   String
+  studentId      String
+  assessmentType AssessmentType @default(FORMATIVE)
+  status         String         @default("IN_PROGRESS") // "IN_PROGRESS" | "SUBMITTED" | "GRADED"
+  score          Float          @default(0.0)
+  maxScore       Float          @default(0.0)
+  scorePercent   Float          @default(0.0)
+  isPassed       Boolean        @default(false)
+  startedAt      DateTime       @default(now())
+  submittedAt    DateTime?
+  timeTakenMs    Int?
+  metadata       String? // JSON summary of skill and cognitive breakdowns
+
+  assessment Assessment               @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  student    User                     @relation("StudentAssessmentAttempts", fields: [studentId], references: [id], onDelete: Cascade)
+  responses  AssessmentItemResponse[]
+
+  @@index([assessmentId])
+  @@index([studentId])
+  @@index([assessmentType])
+  @@index([submittedAt])
+}
+
+model AssessmentItemResponse {
+  id               String           @id @default(uuid())
+  attemptId        String
+  assessmentItemId String
+  questionId       String
+  studentAnswer    String
+  isCorrect        Boolean          @default(false)
+  scoreAwarded     Float            @default(0.0)
+  timeTakenMs      Int?
+  hintUsed         Boolean          @default(false)
+  mistakeCategory  MistakeCategory?
+  cognitiveLevel   CognitiveLevel?  @default(PROCEDURAL)
+  feedbackGiven    String?
+  submittedAt      DateTime         @default(now())
+
+  attempt        AssessmentAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  assessmentItem AssessmentItem    @relation(fields: [assessmentItemId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId])
+  @@index([assessmentItemId])
+  @@index([questionId])
+}
+
+model ResearchMetricRecord {
+  id                 String          @id @default(uuid())
+  studentId          String
+  classroomId        String?
+  skillId            String?
+  lessonId           String?
+  assessmentId       String?
+  assessmentType     AssessmentType?
+  metric             String // "UNDERSTANDING" | "ACCURACY" | "APPLICATION" | "CONSISTENCY"
+  value              Float
+  level              String // "INSUFFICIENT_EVIDENCE" | "LOW" | "DEVELOPING" | "PROFICIENT" | "HIGH"
+  confidence         Float           @default(1.0)
+  evidenceCount      Int             @default(0)
+  calculationVersion String          @default("RESEARCH_V1")
+  evidenceSummary    String? // JSON string of exact counts, streaks, and timestamps
+  calculatedAt       DateTime        @default(now())
+
+  student User @relation("StudentResearchMetrics", fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, metric])
+  @@index([classroomId])
+  @@index([skillId])
+  @@index([lessonId])
+  @@index([calculatedAt])
+}
