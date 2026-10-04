@@ -60,6 +60,11 @@ export interface RecentMessageItem {
   createdAt?: string;
 }
 
+export interface AITutorGrounding {
+  sources: import("../documents/types").GroundingSource[];
+  inventory: import("../documents/grounding").ResourceInventoryItem[];
+}
+
 export interface AITutorContext {
   student: StudentContextData;
   curriculum: CurriculumContextData;
@@ -83,6 +88,8 @@ export interface AITutorContext {
     recentAccuracy: number;
     summary?: string;
   };
+  /** Phase 22: retrieved lesson/document material and an honest inventory of attached resources. */
+  grounding: AITutorGrounding;
 }
 
 export interface StructuredTutorResponse {
@@ -92,6 +99,8 @@ export interface StructuredTutorResponse {
   hintLevel?: number;
   encouragement?: string;
   nextStep?: string;
+  /** Source ids ([S1]..) the response relied on; validated against the retrieved set. */
+  citedSourceIds?: string[];
 }
 
 export interface TutorAIRequest {
@@ -100,6 +109,10 @@ export interface TutorAIRequest {
   maxTokens?: number;
   temperature?: number;
   timeoutMs?: number;
+  /** Structured grounding, so non-LLM engines can use the same evidence as the prompt. */
+  grounding?: AITutorGrounding;
+  /** The student's latest message, for engines that cannot parse the prompt reliably. */
+  studentQuery?: string;
 }
 
 export interface TutorAIResponseRaw {
@@ -140,6 +153,8 @@ export interface TutorMessageDTO {
   guidingQuestion?: string | null;
   encouragement?: string | null;
   createdAt: string;
+  /** Phase 22: sources the response is grounded in (verified server-side). */
+  citations?: import("../documents/types").SourceCitation[];
 }
 
 export interface TutorAPIResponse {

@@ -31,6 +31,8 @@ The architecture is built completely from scratch with a modular, data-driven de
 - [x] **Phase 9: Adaptive Learning Engine** — Deterministic rule-first next-step guidance, EASY/MEDIUM/HARD difficulty stepping, prerequisite remediation, teacher override audit logs, and secondary AI explanations.
 - [x] **Phase 10: Mastery Engine** — 5 controlled mastery levels (`NOT_STARTED`, `LEARNING`, `DEVELOPING`, `PROFICIENT`, `MASTERED`), multi-dimensional evidence (accuracy, recent window, consistency score, application index, difficulty diversity), prerequisite inspection, longitudinal audit trail (`SkillMasteryHistory`), student mastery detail views, and teacher competency matrix.
 
+- [x] **Phase 22: Document Intelligence + Grounded Learning** — Real PDF/DOCX/TXT upload, validation, text extraction, chunking and BM25 retrieval; the AI Tutor is grounded in lesson content, teacher notes and extracted documents with verified citations, answer-key and draft/locked-lesson protection, and honest handling of unreadable files and videos. See [`docs/PHASE_22_VERIFICATION.md`](docs/PHASE_22_VERIFICATION.md) for evidence and limitations.
+
 ---
 
 ## 3. Phase 7 Architecture: AI Tutor

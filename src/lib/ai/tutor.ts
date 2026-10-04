@@ -130,6 +130,8 @@ export class AITutorService {
         maxTokens: 500,
         temperature: 0.3,
         timeoutMs: 12000,
+        grounding: context.grounding,
+        studentQuery,
       });
     } catch (providerError) {
       console.warn("Primary AI provider failed, activating local pedagogical engine fallback:", providerError);
@@ -138,6 +140,8 @@ export class AITutorService {
         systemPrompt,
         userPrompt,
         maxTokens: 500,
+        grounding: context.grounding,
+        studentQuery,
       });
     }
 
@@ -155,6 +159,8 @@ export class AITutorService {
       metadata: JSON.stringify({
         encouragement: structured.encouragement,
         nextStep: structured.nextStep,
+        citedSourceIds: structured.citedSourceIds ?? [],
+        groundedSourceCount: context.grounding.sources.length,
         provider: rawResponse.provider,
         model: rawResponse.model,
       }),
@@ -177,6 +183,10 @@ export class AITutorService {
         guidingQuestion: savedTutorMessage.guidingQuestion,
         encouragement: structured.encouragement,
         createdAt: new Date(savedTutorMessage.createdAt).toISOString(),
+        citations: (structured.citedSourceIds ?? [])
+          .map((id) => context.grounding.sources.find((s) => s.sourceId === id))
+          .filter((s): s is NonNullable<typeof s> => Boolean(s))
+          .map((s) => ({ sourceId: s.sourceId, title: s.title, sectionLabel: s.sectionLabel, page: s.pageStart })),
       },
       providerInfo: {
         provider: rawResponse.provider,

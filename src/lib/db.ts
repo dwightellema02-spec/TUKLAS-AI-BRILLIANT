@@ -69,6 +69,12 @@ export interface LessonResourceItem {
   fileName?: string;
   fileSize?: number;
   storagePath?: string;
+  // Phase 22: document intelligence metadata
+  extractionStatus?: string;
+  extractionError?: string;
+  pageCount?: number;
+  charCount?: number;
+  contentHash?: string;
   sequenceOrder: number;
   createdAt: Date;
   updatedAt: Date;
@@ -300,6 +306,8 @@ export interface SeedDataStore {
   classrooms: any[];
   classroomEnrollments: any[];
   assignments: any[];
+  /** Phase 22: extracted document/note chunks (in-memory fallback mirror of the ResourceChunk table). */
+  resourceChunks: Array<import("./documents/types").StoredChunk>;
 }
 
 // -------------------------------------------------------------
@@ -1674,6 +1682,7 @@ export const fallbackStore: SeedDataStore = {
       enrolledAt: new Date("2026-08-16T00:00:00Z"),
     },
   ],
+  resourceChunks: [],
   assignments: [
     {
       id: "asg_01",
@@ -2416,16 +2425,6 @@ export const dbService = {
       learningObjectives?: string[];
       estimatedMinutes?: number;
       prerequisiteLessonId?: string;
-      resources?: Array<{
-        type: ResourceType;
-        title: string;
-        url?: string;
-        youtubeId?: string;
-        notes?: string;
-        fileName?: string;
-        fileSize?: number;
-        storagePath?: string;
-      }>;
       contentBlocks?: Array<{
         type: BlockType;
         title?: string;
@@ -2472,23 +2471,7 @@ export const dbService = {
       lesson.prerequisiteLessonId = data.prerequisiteLessonId;
     if (data.skillIds !== undefined) lesson.skillIds = data.skillIds;
 
-    if (data.resources !== undefined) {
-      lesson.resources = data.resources.map((r, i) => ({
-        id: `res_${Date.now()}_${i}`,
-        lessonId: id,
-        type: r.type,
-        title: r.title,
-        url: r.url,
-        youtubeId: r.youtubeId,
-        notes: r.notes,
-        fileName: r.fileName,
-        fileSize: r.fileSize,
-        storagePath: r.storagePath,
-        sequenceOrder: i + 1,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }));
-    }
+    // Resources are intentionally NOT editable here: see addLessonDocumentResource / removeLessonResource.
 
     if (data.contentBlocks !== undefined) {
       lesson.contentBlocks = data.contentBlocks.map((b, i) => ({
@@ -3251,53 +3234,205 @@ export const dbService = {
    * Remove a video resource from a lesson
    */
   async removeLessonVideo(lessonId: string, resourceId: string, userRole: string, userId: string) {
+    const result = await this.removeLessonResource(lessonId, resourceId, userRole, userId);
+    return { success: result.success, removed: result.removed };
+  },
+
+  // -------------------------------------------------------------
+  // PHASE 22: DOCUMENT RESOURCES + EXTRACTED CHUNKS
+  // -------------------------------------------------------------
+
+  /** Verify the caller may modify a lesson's resources and return the lesson. */
+  async assertCanEditLesson(lessonId: string, userRole: string, userId: string) {
     if (userRole !== "TEACHER" && userRole !== "ADMIN") {
       throw new Error("Forbidden: Teacher or Administrator access required.");
     }
-
     const lesson = await this.getLessonById(lessonId);
     if (!lesson) throw new Error("Lesson not found");
-
     if (userRole !== "ADMIN" && lesson.authorId && lesson.authorId !== userId) {
       throw new Error("Forbidden: You are not authorized to modify another teacher's lesson.");
     }
+    return lesson;
+  },
+
+  /**
+   * Attach an uploaded document (PDF/DOCX/TXT) or teacher note to a lesson together with its extraction result.
+   * Resource row and chunks are written together.
+   */
+  async addLessonDocumentResource(
+    lessonId: string,
+    userRole: string,
+    userId: string,
+    data: {
+      type: "PDF" | "DOCUMENT" | "TEACHER_NOTE";
+      title: string;
+      fileName?: string;
+      fileSize?: number;
+      storagePath?: string;
+      notes?: string;
+      ingest: import("./documents/types").IngestResult;
+    }
+  ) {
+    const lesson = await this.assertCanEditLesson(lessonId, userRole, userId);
+    const nextOrder = (lesson.resources?.length || 0) + 1;
+    const { ingest } = data;
 
     try {
       if (hasValidDatabaseUrl) {
-        await prisma.lessonResource.delete({
-          where: { id: resourceId },
-        });
-
-        // If no more youtube resources, clear videoUrl
-        const remainingYt = await prisma.lessonResource.count({
-          where: { lessonId, type: "YOUTUBE" },
-        });
-        if (remainingYt === 0) {
-          await prisma.lesson.update({
-            where: { id: lessonId },
-            data: { videoUrl: null },
+        return await prisma.$transaction(async (tx) => {
+          const resource = await tx.lessonResource.create({
+            data: {
+              lessonId,
+              type: data.type,
+              title: data.title,
+              fileName: data.fileName,
+              fileSize: data.fileSize,
+              storagePath: data.storagePath,
+              notes: data.notes,
+              addedBy: userId,
+              sequenceOrder: nextOrder,
+              extractionStatus: ingest.status,
+              extractionError: ingest.error,
+              pageCount: ingest.pageCount,
+              charCount: ingest.charCount,
+              contentHash: ingest.contentHash,
+            },
           });
-        }
-        return { success: true };
+          if (ingest.chunks.length > 0) {
+            await tx.resourceChunk.createMany({
+              data: ingest.chunks.map((c) => ({
+                resourceId: resource.id,
+                lessonId,
+                ordinal: c.ordinal,
+                text: c.text,
+                sectionLabel: c.sectionLabel,
+                pageStart: c.pageStart,
+                pageEnd: c.pageEnd,
+                isAnswerKey: c.isAnswerKey,
+              })),
+            });
+          }
+          return resource;
+        });
       }
     } catch (e) {
       if (process.env.NODE_ENV === "production") {
-        throw new Error(`Database error removing video: ${e instanceof Error ? e.message : String(e)}`);
+        throw new Error(`Database error attaching document: ${e instanceof Error ? e.message : String(e)}`);
       }
-      console.warn("removeLessonVideo fallback:", e);
+      console.warn("addLessonDocumentResource fallback:", e);
     }
 
-    const targetLesson = fallbackStore.curriculum.lessons.find((l) => l.id === lessonId);
-    if (targetLesson && targetLesson.resources) {
-      const idx = targetLesson.resources.findIndex((r) => r.id === resourceId);
-      if (idx !== -1) {
-        targetLesson.resources.splice(idx, 1);
-        const hasYt = targetLesson.resources.some((r) => r.type === "YOUTUBE");
-        if (!hasYt) targetLesson.videoUrl = undefined;
+    const resourceId = `res_doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const now = new Date();
+    const resource: LessonResourceItem = {
+      id: resourceId,
+      lessonId,
+      type: data.type as ResourceType,
+      title: data.title,
+      fileName: data.fileName,
+      fileSize: data.fileSize,
+      storagePath: data.storagePath,
+      notes: data.notes,
+      addedBy: userId,
+      sequenceOrder: nextOrder,
+      extractionStatus: ingest.status,
+      extractionError: ingest.error,
+      pageCount: ingest.pageCount,
+      charCount: ingest.charCount,
+      contentHash: ingest.contentHash,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const target = fallbackStore.curriculum.lessons.find((l) => l.id === lessonId);
+    if (target) {
+      if (!target.resources) target.resources = [];
+      target.resources.push(resource);
+    }
+    for (const c of ingest.chunks) {
+      fallbackStore.resourceChunks.push({
+        ...c,
+        id: `chk_${resourceId}_${c.ordinal}`,
+        resourceId,
+        lessonId,
+      });
+    }
+    return resource;
+  },
+
+  /** Remove any resource (video, document, note) from a lesson, with its chunks. Scoped to the lesson. */
+  async removeLessonResource(lessonId: string, resourceId: string, userRole: string, userId: string) {
+    await this.assertCanEditLesson(lessonId, userRole, userId);
+
+    try {
+      if (hasValidDatabaseUrl) {
+        const existing = await prisma.lessonResource.findFirst({ where: { id: resourceId, lessonId } });
+        if (!existing) return { success: false as const, removed: null };
+        await prisma.lessonResource.delete({ where: { id: resourceId } }); // chunks cascade
+        if (existing.type === "YOUTUBE") {
+          const remainingYt = await prisma.lessonResource.count({ where: { lessonId, type: "YOUTUBE" } });
+          if (remainingYt === 0) {
+            await prisma.lesson.update({ where: { id: lessonId }, data: { videoUrl: null } });
+          }
+        }
+        return { success: true as const, removed: existing as unknown as LessonResourceItem };
       }
+    } catch (e) {
+      if (process.env.NODE_ENV === "production") {
+        throw new Error(`Database error removing resource: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      console.warn("removeLessonResource fallback:", e);
     }
 
-    return { success: true };
+    const target = fallbackStore.curriculum.lessons.find((l) => l.id === lessonId);
+    const idx = target?.resources?.findIndex((r) => r.id === resourceId) ?? -1;
+    if (!target || idx === -1) return { success: false as const, removed: null };
+    const [removed] = target.resources.splice(idx, 1);
+    fallbackStore.resourceChunks = fallbackStore.resourceChunks.filter((c) => c.resourceId !== resourceId);
+    if (removed.type === "YOUTUBE" && !target.resources.some((r) => r.type === "YOUTUBE")) {
+      target.videoUrl = undefined;
+    }
+    return { success: true as const, removed };
+  },
+
+  /** Chunks for a lesson, joined with their resource's title/type. Answer-key chunks are excluded by default. */
+  async getLessonChunks(lessonId: string, opts: { includeAnswerKeys?: boolean } = {}) {
+    type Row = import("./documents/types").StoredChunk & { resourceTitle: string; resourceType: string };
+    let rows: Row[] = [];
+
+    try {
+      if (hasValidDatabaseUrl) {
+        const found = await prisma.resourceChunk.findMany({
+          where: { lessonId, ...(opts.includeAnswerKeys ? {} : { isAnswerKey: false }) },
+          include: { resource: { select: { title: true, type: true } } },
+          orderBy: [{ resourceId: "asc" }, { ordinal: "asc" }],
+        });
+        return found.map((c) => ({
+          id: c.id,
+          resourceId: c.resourceId,
+          lessonId: c.lessonId,
+          ordinal: c.ordinal,
+          text: c.text,
+          sectionLabel: c.sectionLabel,
+          pageStart: c.pageStart ?? undefined,
+          pageEnd: c.pageEnd ?? undefined,
+          isAnswerKey: c.isAnswerKey,
+          resourceTitle: c.resource.title,
+          resourceType: c.resource.type as string,
+        })) as Row[];
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === "production") throw e;
+      console.warn("getLessonChunks fallback:", e);
+    }
+
+    const lesson = fallbackStore.curriculum.lessons.find((l) => l.id === lessonId);
+    rows = fallbackStore.resourceChunks
+      .filter((c) => c.lessonId === lessonId && (opts.includeAnswerKeys || !c.isAnswerKey))
+      .map((c) => {
+        const res = lesson?.resources?.find((r) => r.id === c.resourceId);
+        return { ...c, resourceTitle: res?.title || "Resource", resourceType: (res?.type as string) || "DOCUMENT" };
+      });
+    return rows;
   },
 
   /**

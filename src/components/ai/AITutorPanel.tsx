@@ -230,6 +230,20 @@ export function AITutorPanel({
                       </div>
                     )}
 
+                    {!isStudent && msg.citations && msg.citations.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Sources">
+                        {msg.citations.map((c) => (
+                          <span
+                            key={c.sourceId}
+                            className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200"
+                            title={`${c.title} - ${c.sectionLabel}`}
+                          >
+                            Source: {c.title} &middot; {c.sectionLabel}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
                     {!isStudent && msg.encouragement && (
                       <div className="mt-2 text-[11px] font-semibold text-emerald-600 italic">
                         {msg.encouragement}

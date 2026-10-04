@@ -287,9 +287,35 @@ model LessonResource {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
-  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  // Phase 22: document intelligence metadata
+  extractionStatus String? // EXTRACTED | NO_TEXT | FAILED | TRUNCATED (null for non-document resources)
+  extractionError  String?
+  pageCount        Int?
+  charCount        Int?
+  contentHash      String?
+
+  lesson Lesson          @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  chunks ResourceChunk[]
 
   @@index([lessonId, sequenceOrder])
+}
+
+/// Phase 22: indexed, retrievable text chunks extracted from a lesson resource (PDF/DOCX/TXT/teacher note).
+model ResourceChunk {
+  id           String  @id @default(uuid())
+  resourceId   String
+  lessonId     String
+  ordinal      Int
+  text         String
+  sectionLabel String
+  pageStart    Int?
+  pageEnd      Int?
+  isAnswerKey  Boolean @default(false)
+
+  resource LessonResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId])
+  @@index([resourceId, ordinal])
 }
 
 model LessonContentBlock {

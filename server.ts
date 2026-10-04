@@ -3,6 +3,7 @@
  * Full-stack Express server with Vite middleware in development and static serving in production.
  */
 
+import "dotenv/config"; // must load before modules that read process.env at import time (e.g. AUTH_SECRET)
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
@@ -14,6 +15,10 @@ import { validateEmail, validatePassword, validateName, validateRole } from "./s
 import { canUserAccessPath } from "./src/lib/auth/rbac.ts";
 import { validateAndExtractYouTube, YouTubeService } from "./src/lib/youtube.ts";
 import { LessonStatus, UserRole } from "@prisma/client";
+import { validateUpload, ingestDocument, DOCUMENT_LIMITS } from "./src/lib/documents/index.ts";
+import { saveOriginal, deleteOriginal } from "./src/lib/documents/file-store.ts";
+import { generateQuestionsFromChunks } from "./src/lib/documents/question-generation.ts";
+import { getAIProvider, LocalTutorEngine } from "./src/lib/ai/provider.ts";
 import { AITutorService } from "./src/lib/ai/tutor.ts";
 import { MistakeAnalyzerService } from "./src/lib/ai/mistake-analyzer.ts";
 import { AdaptiveEngine } from "./src/lib/adaptive/index.ts";
@@ -241,7 +246,13 @@ app.get("/api/curriculum", async (_req: Request, res: Response) => {
 
 app.get("/api/lessons", async (req: Request, res: Response) => {
   try {
-    const status = req.query.status as LessonStatus | undefined;
+    const session = getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    }
+    // Students (and any non-staff role) only ever see published lessons.
+    const staff = session.role === "TEACHER" || session.role === "ADMIN";
+    const status = staff ? (req.query.status as LessonStatus | undefined) : ("PUBLISHED" as LessonStatus);
     const unitId = req.query.unitId as string | undefined;
     const lessons = await dbService.getLessons({ status, unitId });
     return res.json({ data: lessons });
@@ -260,14 +271,18 @@ app.get("/api/lessons/:id", async (req: Request, res: Response) => {
     }
 
     const session = getSessionFromRequest(req);
-    // Student protection: Students can only view PUBLISHED lessons
-    if (session?.role === "STUDENT" && lesson.status !== "PUBLISHED") {
+    if (!session) {
+      return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    }
+    const staff = session.role === "TEACHER" || session.role === "ADMIN";
+    // Non-staff roles can only view PUBLISHED lessons
+    if (!staff && lesson.status !== "PUBLISHED") {
       return res.status(403).json({
         error: "Forbidden: This lesson has not been published yet.",
       });
     }
 
-    return res.json({ data: lesson });
+    return res.json({ data: staff ? lesson : toStudentLessonView(lesson) });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to retrieve lesson";
     return res.status(500).json({ error: message });
@@ -322,14 +337,14 @@ app.put("/api/lessons/:id", async (req: Request, res: Response) => {
       return res.status(403).json({ error: "Forbidden: You are not authorized to edit another teacher's lesson" });
     }
 
-    const { title, description, learningObjectives, estimatedMinutes, resources, contentBlocks, skillIds } = req.body;
+    // Resources are managed only through dedicated endpoints so extracted documents are never clobbered.
+    const { title, description, learningObjectives, estimatedMinutes, contentBlocks, skillIds } = req.body;
 
     const updated = await dbService.updateLesson(id, {
       title,
       description,
       learningObjectives,
       estimatedMinutes,
-      resources,
       contentBlocks,
       skillIds,
     });
@@ -493,6 +508,284 @@ app.delete("/api/lessons/:id/video/:resourceId", async (req: Request, res: Respo
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to remove video resource";
     const status = message.includes("Forbidden") ? 403 : 500;
+    return res.status(status).json({ error: message });
+  }
+});
+
+// Students must not see storage keys, content hashes, uploader ids or raw extraction diagnostics.
+function toStudentLessonView<T extends { resources?: unknown[] }>(lesson: T): T {
+  if (!lesson.resources) return lesson;
+  return {
+    ...lesson,
+    resources: lesson.resources.map((r) => {
+      const { storagePath, contentHash, addedBy, extractionError, charCount, ...safe } = r as Record<string, unknown>;
+      return safe;
+    }),
+  };
+}
+
+// -------------------------------------------------------------
+// PHASE 22: DOCUMENT UPLOAD, NOTES & EXTRACTION STATUS
+// -------------------------------------------------------------
+
+const uploadHistory = new Map<string, number[]>();
+const UPLOADS_PER_WINDOW = 20;
+const UPLOAD_WINDOW_MS = 10 * 60 * 1000;
+
+function checkUploadRateLimit(userId: string): boolean {
+  const now = Date.now();
+  const recent = (uploadHistory.get(userId) || []).filter((t) => now - t < UPLOAD_WINDOW_MS);
+  if (recent.length >= UPLOADS_PER_WINDOW) {
+    uploadHistory.set(userId, recent);
+    return false;
+  }
+  recent.push(now);
+  uploadHistory.set(userId, recent);
+  return true;
+}
+
+function publicResourceView(resource: Record<string, any>) {
+  const { storagePath, ...rest } = resource;
+  return rest;
+}
+
+// Auth + ownership are checked BEFORE the (up to 25MB) body is buffered.
+const authorizeDocumentUpload = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    }
+    if (!checkUploadRateLimit(session.userId)) {
+      return res.status(429).json({ error: "Too many uploads. Please wait a few minutes and try again." });
+    }
+    await dbService.assertCanEditLesson(req.params.id, session.role, session.userId);
+    (req as any).session = session;
+    return next();
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Upload not permitted";
+    const status = message.includes("Forbidden") ? 403 : message.includes("not found") ? 404 : 500;
+    return res.status(status).json({ error: message });
+  }
+};
+
+const rawUploadBody = (req: Request, res: Response, next: NextFunction) => {
+  express.raw({ type: () => true, limit: DOCUMENT_LIMITS.MAX_FILE_BYTES + 1024 })(req, res, (err?: any) => {
+    if (err) {
+      const tooLarge = err.type === "entity.too.large";
+      return res.status(tooLarge ? 413 : 400).json({
+        error: tooLarge ? "File exceeds the 25MB upload limit." : "The upload could not be read.",
+      });
+    }
+    return next();
+  });
+};
+
+app.post("/api/lessons/:id/documents", authorizeDocumentUpload, rawUploadBody, async (req: Request, res: Response) => {
+  let storedKey: string | undefined;
+  try {
+    const session = (req as any).session as SessionPayload;
+    const { id } = req.params;
+
+    const rawName = decodeURIComponent(String(req.headers["x-file-name"] || ""));
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+
+    const validation = await validateUpload(buffer, rawName);
+    if (!validation.ok) {
+      return res.status(validation.status).json({ error: validation.error });
+    }
+
+    const ingest = await ingestDocument(buffer, validation.kind);
+
+    // Keep the original only when we could read it; unreadable files are reported but not retained.
+    const keepOriginal = ingest.status === "EXTRACTED" || ingest.status === "TRUNCATED";
+    if (keepOriginal) {
+      storedKey = saveOriginal(buffer, validation.kind.toLowerCase());
+    }
+
+    const requestedTitle = decodeURIComponent(String(req.headers["x-resource-title"] || "")).trim().slice(0, 200);
+    const resource = await dbService.addLessonDocumentResource(id, session.role, session.userId, {
+      type: validation.kind === "PDF" ? "PDF" : "DOCUMENT",
+      title: requestedTitle || validation.safeFileName,
+      fileName: validation.safeFileName,
+      fileSize: buffer.length,
+      storagePath: storedKey,
+      ingest,
+    });
+
+    return res.status(201).json({
+      data: publicResourceView(resource as any),
+      extraction: {
+        status: ingest.status,
+        error: ingest.error,
+        pageCount: ingest.pageCount,
+        chunkCount: ingest.chunks.length,
+        usableByAITutor: ingest.status === "EXTRACTED" || ingest.status === "TRUNCATED",
+      },
+    });
+  } catch (error: unknown) {
+    deleteOriginal(storedKey);
+    const message = error instanceof Error ? error.message : "Failed to upload document";
+    const status = message.includes("Forbidden") ? 403 : 500;
+    console.error("Document upload error:", message);
+    return res.status(status).json({ error: status === 403 ? message : "Failed to process the document." });
+  }
+});
+
+// Teacher notes are real, retrievable lesson material (chunked and indexed like documents).
+app.post("/api/lessons/:id/notes", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    }
+    const title = typeof req.body?.title === "string" ? req.body.title.trim().slice(0, 200) : "";
+    const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
+    if (!title || !notes) return res.status(400).json({ error: "Note title and content are required." });
+    if (notes.length > 20000) return res.status(413).json({ error: "Teacher notes are limited to 20,000 characters." });
+
+    const ingest = await ingestDocument(Buffer.from(notes, "utf-8"), "TXT");
+    const resource = await dbService.addLessonDocumentResource(req.params.id, session.role, session.userId, {
+      type: "TEACHER_NOTE",
+      title,
+      notes,
+      ingest,
+    });
+    return res.status(201).json({ data: publicResourceView(resource as any) });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to add teacher note";
+    const status = message.includes("Forbidden") ? 403 : message.includes("not found") ? 404 : 500;
+    return res.status(status).json({ error: message });
+  }
+});
+
+app.delete("/api/lessons/:id/resources/:resourceId", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    }
+    const result = await dbService.removeLessonResource(req.params.id, req.params.resourceId, session.role, session.userId);
+    if (!result.success) return res.status(404).json({ error: "Resource not found on this lesson." });
+    deleteOriginal(result.removed?.storagePath);
+    return res.json({ success: true });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to remove resource";
+    const status = message.includes("Forbidden") ? 403 : message.includes("not found") ? 404 : 500;
+    return res.status(status).json({ error: message });
+  }
+});
+
+// Teacher-facing view of what the AI Tutor can actually read from a resource.
+app.get("/api/lessons/:id/resources/:resourceId/extraction", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    }
+    const lesson = await dbService.assertCanEditLesson(req.params.id, session.role, session.userId);
+    const resource = lesson.resources?.find((r: any) => r.id === req.params.resourceId);
+    if (!resource) return res.status(404).json({ error: "Resource not found on this lesson." });
+
+    const chunks = (await dbService.getLessonChunks(req.params.id, { includeAnswerKeys: true })).filter(
+      (c) => c.resourceId === req.params.resourceId
+    );
+    return res.json({
+      data: {
+        resourceId: resource.id,
+        title: resource.title,
+        status: resource.extractionStatus ?? null,
+        error: resource.extractionError ?? null,
+        pageCount: resource.pageCount ?? null,
+        charCount: resource.charCount ?? null,
+        chunkCount: chunks.length,
+        answerKeyChunkCount: chunks.filter((c) => c.isAnswerKey).length,
+        preview: chunks.slice(0, 5).map((c) => ({
+          sectionLabel: c.sectionLabel,
+          isAnswerKey: c.isAnswerKey,
+          text: c.text.slice(0, 300),
+        })),
+      },
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to load extraction details";
+    const status = message.includes("Forbidden") ? 403 : message.includes("not found") ? 404 : 500;
+    return res.status(status).json({ error: message });
+  }
+});
+
+// Draft lesson-aligned questions from a document's extracted text. Evidence-verified; saved as DRAFT only.
+app.post("/api/lessons/:id/resources/:resourceId/generate-questions", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    }
+    const lesson = await dbService.assertCanEditLesson(req.params.id, session.role, session.userId);
+    const resource = lesson.resources?.find((r: any) => r.id === req.params.resourceId);
+    if (!resource) return res.status(404).json({ error: "Resource not found on this lesson." });
+    if (resource.extractionStatus !== "EXTRACTED" && resource.extractionStatus !== "TRUNCATED") {
+      return res.status(422).json({
+        error: "This resource has no readable text, so questions cannot be generated from it.",
+      });
+    }
+
+    const provider = getAIProvider();
+    if (provider instanceof LocalTutorEngine) {
+      return res.status(503).json({
+        error: "Question generation needs the external AI provider, which is not configured or is unavailable. No questions were generated.",
+      });
+    }
+
+    const count = Math.min(Math.max(parseInt(String(req.body?.count ?? "3"), 10) || 3, 1), 5);
+    const chunks = (await dbService.getLessonChunks(req.params.id, { includeAnswerKeys: false })).filter(
+      (c) => c.resourceId === req.params.resourceId
+    );
+
+    let outcome;
+    try {
+      outcome = await generateQuestionsFromChunks({ provider, chunks, count });
+    } catch (e) {
+      console.error("Question generation provider error:", e instanceof Error ? e.message : e);
+      return res.status(502).json({ error: "The AI provider could not generate questions right now. Please try again later." });
+    }
+
+    const created = [];
+    for (const q of outcome.accepted) {
+      const saved = await dbService.createQuestion(
+        {
+          lessonId: req.params.id,
+          skillId: (lesson as any).skills?.[0]?.skillId,
+          type: q.type as any,
+          prompt: q.prompt,
+          explanation: q.explanation,
+          difficulty: q.difficulty as any,
+          status: "DRAFT" as any,
+          source: "AI_GENERATED" as any,
+          questionData: q.questionData,
+          metadata: {
+            generatedFrom: {
+              resourceId: req.params.resourceId,
+              chunkId: q.sourceChunkId,
+              evidenceQuote: q.evidenceQuote,
+              answerVerification: q.answerVerification,
+            },
+          },
+        },
+        session.userId
+      );
+      created.push(saved);
+    }
+
+    return res.status(201).json({
+      data: created,
+      rejectedCount: outcome.rejected.length,
+      rejected: outcome.rejected.slice(0, 10),
+      note: "Questions are saved as DRAFT. Review each one before publishing.",
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to generate questions";
+    const status = message.includes("Forbidden") ? 403 : message.includes("not found") ? 404 : 500;
     return res.status(status).json({ error: message });
   }
 });
