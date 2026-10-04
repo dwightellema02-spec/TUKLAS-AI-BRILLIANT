@@ -2,6 +2,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import type { AIProvider, TutorAIRequest, TutorAIResponseRaw } from "./types";
+import { realizePlan } from "./conversation/realizer";
 
 /**
  * Default Gemini model. Override with AI_MODEL. The name is validated for shape only;
@@ -126,6 +127,30 @@ export class LocalTutorEngine implements AIProvider {
   readonly defaultModel = "tuklas-pedagogical-v1";
 
   async generateTutorResponse(request: TutorAIRequest): Promise<TutorAIResponseRaw> {
+    // Phase 23: when a pedagogical plan is supplied, realize it (strategy-driven, state-aware, varied)
+    // instead of keyword matching.
+    if (request.plan && request.conversationState) {
+      const realized = realizePlan(request.plan, {
+        state: request.conversationState,
+        lessonTitle: request.lessonTitle,
+        skillTitle: request.skillTitle,
+        sources: request.grounding?.sources ?? [],
+      });
+      return {
+        text: JSON.stringify({
+          responseType: realized.responseType,
+          message: realized.message,
+          guidingQuestion: realized.guidingQuestion,
+          hintLevel: realized.hintLevel,
+          encouragement: realized.encouragement,
+          nextStep: realized.nextStep,
+          citedSourceIds: realized.citedSourceIds,
+        }),
+        provider: this.name,
+        model: "tuklas-plan-realizer-v1",
+      };
+    }
+
     // Keyword heuristics must see the student's context, never quoted source text (which is untrusted data).
     const prompt = request.userPrompt
       .replace(/=== SOURCE MATERIAL[\s\S]*?=== END SOURCE MATERIAL ===/g, "")

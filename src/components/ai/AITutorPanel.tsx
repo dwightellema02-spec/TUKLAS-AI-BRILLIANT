@@ -215,6 +215,8 @@ export function AITutorPanel({
                           {msg.messageType === "EXPLANATION" && "Concept Review"}
                           {msg.messageType === "EXAMPLE" && "Worked Example"}
                           {msg.messageType === "REDIRECT" && "Guidance"}
+                          {msg.messageType === "FEEDBACK" && "Feedback"}
+                          {msg.messageType === "CLARIFICATION" && "Note"}
                         </span>
                       </div>
                     )}

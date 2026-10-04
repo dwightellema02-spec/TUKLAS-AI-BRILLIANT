@@ -1683,7 +1683,9 @@ app.get("/api/ai/conversations/:id", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Conversation not found or access denied." });
     }
 
-    return res.json({ data: conversation });
+    // The pedagogical state holds pending problems and their answers: never send it to the client.
+    const { stateJson: _internalState, ...safeConversation } = conversation as typeof conversation & { stateJson?: string | null };
+    return res.json({ data: safeConversation });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load conversation";
     return res.status(500).json({ error: message });
@@ -1772,6 +1774,9 @@ app.get("/api/teacher/students/:studentId/insights", async (req: Request, res: R
     }
 
     const { studentId } = req.params;
+    if (!(await TeacherService.isTeacherAuthorizedForStudent(session.userId, studentId, session.role))) {
+      return res.status(403).json({ error: "Forbidden: This student is not in one of your classes." });
+    }
     const { skillId, limit } = req.query;
 
     const insights = await dbService.getMistakeAnalysesForStudent(studentId, {
@@ -1788,6 +1793,25 @@ app.get("/api/teacher/students/:studentId/insights", async (req: Request, res: R
 });
 
 // Teacher/Admin manually triggers learning pattern analysis for a student
+// Phase 23: conversations where the AI Tutor judged this student needs their teacher.
+app.get("/api/teacher/students/:studentId/tutor-flags", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Admin privileges required." });
+    }
+    const { studentId } = req.params;
+    if (!(await TeacherService.isTeacherAuthorizedForStudent(session.userId, studentId, session.role))) {
+      return res.status(403).json({ error: "Forbidden: This student is not in one of your classes." });
+    }
+    const flags = await dbService.getTutorAttentionFlags(studentId, 10);
+    return res.json({ data: flags });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to load tutor flags";
+    return res.status(500).json({ error: message });
+  }
+});
+
 app.post("/api/teacher/students/:studentId/analyze", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
@@ -1796,6 +1820,9 @@ app.post("/api/teacher/students/:studentId/analyze", async (req: Request, res: R
     }
 
     const { studentId } = req.params;
+    if (!(await TeacherService.isTeacherAuthorizedForStudent(session.userId, studentId, session.role))) {
+      return res.status(403).json({ error: "Forbidden: This student is not in one of your classes." });
+    }
     const { skillId, lessonId, practiceSessionId, maxAttempts } = req.body;
 
     const analysis = await MistakeAnalyzerService.analyzeStudentMistakes({

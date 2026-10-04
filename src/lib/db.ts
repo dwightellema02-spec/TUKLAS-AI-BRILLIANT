@@ -4553,18 +4553,22 @@ export const dbService = {
     practiceSessionId?: string | null;
   }) {
     const { studentId, lessonId, skillId, questionId, practiceSessionId } = params;
+    // A conversation is only continued while it is "live": after a long gap the student starts a fresh
+    // dialogue (fresh scaffolding state) instead of resuming hours-old pedagogical state.
+    const IDLE_LIMIT_MS = 3 * 60 * 60 * 1000;
+    const cutoff = new Date(Date.now() - IDLE_LIMIT_MS);
 
     try {
       if (hasValidDatabaseUrl) {
-        // Find existing conversation matching context
         const existing = await prisma.aITutorConversation.findFirst({
           where: {
             studentId,
-            ...(questionId ? { questionId } : {}),
-            ...(practiceSessionId ? { practiceSessionId } : {}),
-            ...(lessonId && !questionId ? { lessonId } : {}),
+            questionId: questionId || null,
+            practiceSessionId: practiceSessionId || null,
+            lessonId: lessonId || null,
+            updatedAt: { gte: cutoff },
           },
-          orderBy: { createdAt: "desc" },
+          orderBy: { updatedAt: "desc" },
         });
 
         if (existing) return existing;
@@ -4580,16 +4584,20 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (process.env.NODE_ENV === "production") throw e;
       console.warn("getOrCreateAITutorConversation prisma fallback:", e);
     }
 
-    const existing = fallbackStore.aiConversations.find(
-      (c) =>
-        c.studentId === studentId &&
-        (questionId ? c.questionId === questionId : true) &&
-        (practiceSessionId ? c.practiceSessionId === practiceSessionId : true) &&
-        (lessonId && !questionId ? c.lessonId === lessonId : true)
-    );
+    const existing = fallbackStore.aiConversations
+      .filter(
+        (c) =>
+          c.studentId === studentId &&
+          (c.questionId || null) === (questionId || null) &&
+          (c.practiceSessionId || null) === (practiceSessionId || null) &&
+          (c.lessonId || null) === (lessonId || null) &&
+          new Date(c.updatedAt).getTime() >= cutoff.getTime()
+      )
+      .sort((x, y) => new Date(y.updatedAt).getTime() - new Date(x.updatedAt).getTime())[0];
 
     if (existing) return existing;
 
@@ -4600,12 +4608,97 @@ export const dbService = {
       skillId: skillId || null,
       questionId: questionId || null,
       practiceSessionId: practiceSessionId || null,
+      stateJson: null as string | null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
     fallbackStore.aiConversations.push(newConv);
     return newConv;
+  },
+
+  /**
+   * Phase 23: conversations where the tutor judged the student needs the teacher (frustration, repeated
+   * wrong answers, long confusion, or an explicit hand-off). Reads only the student's own conversations.
+   */
+  async getTutorAttentionFlags(studentId: string, limit: number = 10) {
+    type Flag = {
+      conversationId: string;
+      lessonId: string | null;
+      questionId: string | null;
+      updatedAt: Date;
+      reasons: string[];
+      mistakePatterns: Record<string, number>;
+      recentStudentMessages: string[];
+      lastStrategy?: string;
+    };
+    const describe = (conv: { id: string; lessonId: string | null; questionId: string | null; updatedAt: Date; stateJson: string | null }): Flag | null => {
+      if (!conv.stateJson) return null;
+      let st: any;
+      try {
+        st = JSON.parse(conv.stateJson);
+      } catch {
+        return null;
+      }
+      if (!st?.needsTeacherAttention) return null;
+      const reasons: string[] = [];
+      if ((st.frustration ?? 0) >= 2) reasons.push("Showed repeated frustration");
+      if ((st.wrongOnProblem ?? 0) >= 4) reasons.push(`${st.wrongOnProblem} wrong attempts on one problem`);
+      if ((st.consecutiveConfusion ?? 0) >= 4) reasons.push(`Said they were confused ${st.consecutiveConfusion} times in a row`);
+      if (st.strategyHistory?.some((h: any) => h.strategy === "SUGGEST_TEACHER")) reasons.push("The tutor suggested asking the teacher");
+      if (reasons.length === 0) reasons.push("The tutor flagged this conversation");
+      return {
+        conversationId: conv.id,
+        lessonId: conv.lessonId,
+        questionId: conv.questionId,
+        updatedAt: conv.updatedAt,
+        reasons,
+        mistakePatterns: st.diagnoses ?? {},
+        recentStudentMessages: (st.recentStudentStatements ?? []).slice(-3),
+        lastStrategy: st.strategyHistory?.[st.strategyHistory.length - 1]?.strategy,
+      };
+    };
+
+    try {
+      if (hasValidDatabaseUrl) {
+        const convs = await prisma.aITutorConversation.findMany({
+          where: { studentId, stateJson: { contains: '"needsTeacherAttention":true' } },
+          orderBy: { updatedAt: "desc" },
+          take: limit,
+        });
+        return convs.map(describe).filter((f): f is Flag => f !== null);
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === "production") throw e;
+      console.warn("getTutorAttentionFlags prisma fallback:", e);
+    }
+    return fallbackStore.aiConversations
+      .filter((c) => c.studentId === studentId)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .map(describe)
+      .filter((f): f is Flag => f !== null)
+      .slice(0, limit);
+  },
+
+  /** Phase 23: persist the tutor's conversation state (strategy history, scaffold, pending problems). */
+  async saveAITutorConversationState(conversationId: string, studentId: string, stateJson: string) {
+    try {
+      if (hasValidDatabaseUrl) {
+        const res = await prisma.aITutorConversation.updateMany({
+          where: { id: conversationId, studentId },
+          data: { stateJson },
+        });
+        return res.count === 1;
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === "production") throw e;
+      console.warn("saveAITutorConversationState prisma fallback:", e);
+    }
+    const conv = fallbackStore.aiConversations.find((c) => c.id === conversationId && c.studentId === studentId);
+    if (!conv) return false;
+    conv.stateJson = stateJson;
+    conv.updatedAt = new Date();
+    return true;
   },
 
   /**
@@ -4701,11 +4794,13 @@ export const dbService = {
   async getAITutorMessages(conversationId: string, limit: number = 20) {
     try {
       if (hasValidDatabaseUrl) {
-        return await prisma.aITutorMessage.findMany({
+        // Latest N messages (oldest first). Ordering ascending with `take` would return the FIRST N forever.
+        const latest = await prisma.aITutorMessage.findMany({
           where: { conversationId },
-          orderBy: { createdAt: "asc" },
+          orderBy: { createdAt: "desc" },
           take: limit,
         });
+        return latest.reverse();
       }
     } catch (e) {
       console.warn("getAITutorMessages prisma fallback:", e);

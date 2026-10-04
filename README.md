@@ -33,6 +33,8 @@ The architecture is built completely from scratch with a modular, data-driven de
 
 - [x] **Phase 22: Document Intelligence + Grounded Learning** — Real PDF/DOCX/TXT upload, validation, text extraction, chunking and BM25 retrieval; the AI Tutor is grounded in lesson content, teacher notes and extracted documents with verified citations, answer-key and draft/locked-lesson protection, and honest handling of unreadable files and videos. See [`docs/PHASE_22_VERIFICATION.md`](docs/PHASE_22_VERIFICATION.md) for evidence and limitations.
 
+- [x] **Phase 23: Tutor Conversational Core** — The AI Tutor now reads each student message (intent, hedging, frustration), judges answers deterministically with mistake diagnosis, keeps persisted conversation state, and follows a pedagogical policy (changes approach when the student stays stuck, targets specific misconceptions, fades help, verifies independence with a new problem, hands off to the teacher honestly). Model output is verified against the plan and replaced if it breaks the rules. See [`docs/PHASE_23_VERIFICATION.md`](docs/PHASE_23_VERIFICATION.md).
+
 ---
 
 ## 3. Phase 7 Architecture: AI Tutor

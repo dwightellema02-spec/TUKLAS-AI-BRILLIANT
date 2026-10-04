@@ -15,7 +15,10 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
     "test:phase22": "AI_PROVIDER=local tsx scripts/test-phase22-documents.ts",
-    "test:phase22:pg": "tsx scripts/test-phase22-prisma.ts"
+    "test:phase22:pg": "tsx scripts/test-phase22-prisma.ts",
+    "test:phase23": "AI_PROVIDER=local tsx scripts/test-phase23-conversation.ts",
+    "test:phase23:pg": "tsx scripts/test-phase23-prisma.ts",
+    "eval:tutor": "tsx scripts/eval-tutor-conversations.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

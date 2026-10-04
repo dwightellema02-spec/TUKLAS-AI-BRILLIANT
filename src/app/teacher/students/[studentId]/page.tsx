@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth/auth-context";
 import { TeacherNav, StudentDetailView } from "@/components/teacher";
+import { TutorFlagsCard } from "@/components/teacher/TutorFlagsCard";
 import { Button } from "@/components/ui/Button";
 import { Loader2, ArrowLeft, RotateCcw } from "lucide-react";
 import type { StudentDetailDTO } from "@/lib/teacher/teacher-types";
@@ -84,6 +85,7 @@ export default function TeacherStudentDetailPage({
             onNavigateLesson={(lessonId) => handleNav(`/teacher/lessons/${lessonId}/edit`)}
           />
         )}
+        {detail && !loading && <TutorFlagsCard studentId={studentId} />}
       </div>
     </div>
   );

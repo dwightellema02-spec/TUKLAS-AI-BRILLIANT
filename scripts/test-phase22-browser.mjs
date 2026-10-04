@@ -31,7 +31,8 @@ const tctx = await browser.newContext();
 await login(tctx, "teacher@tuklas.ai");
 const tp = await tctx.newPage();
 const errors = [];
-tp.on("pageerror", (e) => errors.push(e.message));
+// Vite dev-server HMR websocket noise is tooling, not an app error.
+tp.on("pageerror", (e) => { if (!/WebSocket/i.test(e.message)) errors.push(e.message); });
 await tp.goto(base + "/teacher/lessons/lsn_01/edit");
 await tp.getByText("Add Document").first().waitFor({ timeout: 20000 });
 await tp.getByText("Add Document").first().click();
@@ -72,7 +73,7 @@ const sctx = await browser.newContext();
 await login(sctx, "student@tuklas.ai");
 const sp = await sctx.newPage();
 const serrors = [];
-sp.on("pageerror", (e) => serrors.push(e.message));
+sp.on("pageerror", (e) => { if (!/WebSocket/i.test(e.message)) serrors.push(e.message); });
 await sp.goto(base + "/student/lessons/lsn_01");
 await sp.getByRole("button", { name: "AI Tutor" }).first().waitFor({ timeout: 20000 });
 await sp.getByRole("button", { name: "AI Tutor" }).first().click();

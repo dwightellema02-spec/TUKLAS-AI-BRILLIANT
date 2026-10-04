@@ -65,6 +65,13 @@ export interface AITutorGrounding {
   inventory: import("../documents/grounding").ResourceInventoryItem[];
 }
 
+export interface AITutorConversationView {
+  /** Authoritative, deterministic evaluation of the student's latest answer. */
+  evaluationSummary?: string;
+  stateSummary: string;
+  plan: import("./conversation/types").ResponsePlan;
+}
+
 export interface AITutorContext {
   student: StudentContextData;
   curriculum: CurriculumContextData;
@@ -90,6 +97,8 @@ export interface AITutorContext {
   };
   /** Phase 22: retrieved lesson/document material and an honest inventory of attached resources. */
   grounding: AITutorGrounding;
+  /** Phase 23: conversation state summary and the plan for this turn (absent for non-conversational callers). */
+  conversation?: AITutorConversationView;
 }
 
 export interface StructuredTutorResponse {
@@ -113,6 +122,11 @@ export interface TutorAIRequest {
   grounding?: AITutorGrounding;
   /** The student's latest message, for engines that cannot parse the prompt reliably. */
   studentQuery?: string;
+  /** Phase 23: the pedagogical plan and state this response must realize. */
+  plan?: import("./conversation/types").ResponsePlan;
+  conversationState?: import("./conversation/types").ConversationState;
+  lessonTitle?: string;
+  skillTitle?: string;
 }
 
 export interface TutorAIResponseRaw {
@@ -161,6 +175,12 @@ export interface TutorAPIResponse {
   success: boolean;
   conversationId: string;
   message: TutorMessageDTO;
+  /** Phase 23: which pedagogical move was made and how the student's answer was judged. */
+  pedagogy?: {
+    strategy: string;
+    evaluation: "CORRECT" | "INCORRECT" | "NONE";
+    phase: string;
+  };
   providerInfo: {
     provider: string;
     model: string;

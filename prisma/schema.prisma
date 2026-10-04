@@ -623,6 +623,8 @@ model AITutorConversation {
   skillId           String?
   questionId        String?
   practiceSessionId String?
+  /// Phase 23: serialized ConversationState (strategy history, scaffold level, pending problems...)
+  stateJson         String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
