@@ -379,7 +379,7 @@ export default function StudentLearningPathPage({ onNavigate }: StudentLearningP
                             </Badge>
                           ) : isAvailable ? (
                             <Badge variant="secondary" className="text-[10px]">
-                              Available to Start
+                              {node.openedByTeacher ? "Opened by your teacher" : "Available to Start"}
                             </Badge>
                           ) : (
                             <Badge variant="outline" className="text-[10px] gap-1 text-slate-500">

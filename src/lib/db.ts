@@ -324,6 +324,8 @@ export interface SeedDataStore {
   classrooms: any[];
   classroomEnrollments: any[];
   assignments: any[];
+  /** Phase 39: teacher lesson openings (mirror of the LessonUnlock table). */
+  lessonUnlocks: Array<{ id: string; classroomId: string; lessonId: string; studentId: string; createdById: string; createdAt: Date }>;
   /** Phase 22: extracted document/note chunks (in-memory fallback mirror of the ResourceChunk table). */
   resourceChunks: Array<import("./documents/types").StoredChunk>;
 }
@@ -1701,6 +1703,7 @@ export const fallbackStore: SeedDataStore = {
     },
   ],
   resourceChunks: [],
+  lessonUnlocks: [],
   assignments: [
     {
       id: "asg_01",
@@ -2208,6 +2211,19 @@ export const dbService = {
     };
   },
 
+  /** Ids of lessons a teacher has opened for this student: class-wide ("" student) or for the student, in a class they are enrolled in that is not archived. */
+  async getTeacherOpenedLessonIds(studentId: string): Promise<Set<string>> {
+    if (hasValidDatabaseUrl) {
+      const enr = await prisma.classroomEnrollment.findMany({ where: { studentId, classroom: { archivedAt: null } }, select: { classroomId: true } });
+      if (enr.length === 0) return new Set();
+      const rows = await prisma.lessonUnlock.findMany({ where: { classroomId: { in: enr.map((e) => e.classroomId) }, studentId: { in: ["", studentId] } }, select: { lessonId: true } });
+      return new Set(rows.map((r) => r.lessonId));
+    }
+    const live = new Set((fallbackStore.classrooms as any[]).filter((c) => !c.archivedAt).map((c) => c.id));
+    const mine = new Set((fallbackStore.classroomEnrollments as any[]).filter((e) => e.studentId === studentId && live.has(e.classroomId)).map((e) => e.classroomId));
+    return new Set(fallbackStore.lessonUnlocks.filter((u) => mine.has(u.classroomId) && (u.studentId === "" || u.studentId === studentId)).map((u) => u.lessonId));
+  },
+
   /**
    * Retrieve Student's Complete Learning Path Progression
    */
@@ -2228,6 +2244,9 @@ export const dbService = {
         completedLessonIds.add(p.lessonId);
       }
     });
+
+    // lessons this student's teacher has opened early (for the class or for this student)
+    const teacherOpened = await this.getTeacherOpenedLessonIds(userId);
 
     // Determine state for each lesson
     const pathNodes = publishedLessons.map((lesson, idx) => {
@@ -2273,6 +2292,10 @@ export const dbService = {
         }
       }
 
+      // a teacher's opening replaces the sequence/prerequisite lock for this lesson only
+      const openedByTeacher = isLocked && teacherOpened.has(lesson.id);
+      if (openedByTeacher) { isLocked = false; lockReasons.length = 0; }
+
       if (prog?.status === "COMPLETED" || (prog?.progressPercentage || 0) >= 100) {
         state = "COMPLETED";
       } else if (prog?.status === "LEARNING" || (prog?.progressPercentage || 0) > 0) {
@@ -2292,6 +2315,7 @@ export const dbService = {
         status: lesson.status,
         state,
         lockReasons: state === "LOCKED" ? lockReasons : [],
+        openedByTeacher,
         progressPercentage: prog?.progressPercentage || 0,
         startedAt: prog?.startedAt,
         completedAt: prog?.completedAt,

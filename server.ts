@@ -2757,6 +2757,30 @@ app.post("/api/teacher/classes/:classId/assignments", async (req: Request, res: 
   }
 });
 
+// Phase 39: which lessons are open for a class beyond the course sequence
+app.get("/api/teacher/classes/:classId/lesson-access", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    return res.json({ data: await ClassroomService.getLessonAccess(actorOf(session), req.params.classId) });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to load lesson access");
+  }
+});
+
+app.post("/api/teacher/classes/:classId/lesson-access", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const { lessonId, studentId, open, through } = req.body ?? {};
+    if (through === true) await ClassroomService.openLessonsThrough(actorOf(session), req.params.classId, lessonId);
+    else await ClassroomService.setLessonOpen(actorOf(session), req.params.classId, { lessonId, studentId, open });
+    return res.json({ data: await ClassroomService.getLessonAccess(actorOf(session), req.params.classId) });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to change lesson access");
+  }
+});
+
 // Teacher asks pedagogical questions to the Teacher AI Assistant
 app.post("/api/teacher/ai-assistant", async (req: Request, res: Response) => {
   try {

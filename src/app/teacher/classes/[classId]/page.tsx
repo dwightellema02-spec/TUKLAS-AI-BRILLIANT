@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useAuth, authFetch } from "@/lib/auth/auth-context";
-import { TeacherNav, StudentTable, MasteryDistributionCard } from "@/components/teacher";
+import { TeacherNav, StudentTable, MasteryDistributionCard, LessonAccessCard } from "@/components/teacher";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import {
@@ -303,6 +303,8 @@ export default function TeacherClassDetailPage({
                 </ul>
               )}
             </div>
+
+            <LessonAccessCard classId={classId} students={(classData.students || []).map((s: any) => ({ id: s.id, name: s.name }))} />
 
             {/* Assignments Section */}
             <div className="bg-white rounded-3xl border border-slate-200/90 p-6 shadow-xs space-y-4">

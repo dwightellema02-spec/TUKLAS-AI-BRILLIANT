@@ -937,9 +937,28 @@ model Classroom {
   enrollments           ClassroomEnrollment[]
   assignments           Assignment[]
   assessmentAssignments AssessmentAssignment[]
+  lessonUnlocks         LessonUnlock[]
 
   @@index([teacherId])
   @@index([gradeLevel])
+}
+
+/// Phase 39: a teacher opens a lesson that the course sequence would still keep locked, for a whole class (studentId = "")
+/// or for one student of the class. The lesson must still be published; the student's own progress is never altered.
+model LessonUnlock {
+  id          String   @id @default(uuid())
+  classroomId String
+  lessonId    String
+  /// "" = every student of the class; otherwise one student's id
+  studentId   String   @default("")
+  createdById String
+  createdAt   DateTime @default(now())
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+
+  @@unique([classroomId, lessonId, studentId])
+  @@index([classroomId])
+  @@index([studentId])
 }
 
 model ClassroomEnrollment {

@@ -20,6 +20,16 @@ export interface ClassroomRecord {
   updatedAt: Date;
 }
 
+export interface UnlockRecord {
+  id: string;
+  classroomId: string;
+  lessonId: string;
+  /** "" = the whole class */
+  studentId: string;
+  createdById: string;
+  createdAt: Date;
+}
+
 export interface EnrollmentRecord {
   id: string;
   classroomId: string;
@@ -253,6 +263,37 @@ export const ClassroomRepo = {
     }
     const classIds = (fallbackStore.classrooms as any[]).filter((c) => c.teacherId === teacherId && !c.archivedAt).map((c) => c.id);
     return (fallbackStore.classroomEnrollments as any[]).some((e) => classIds.includes(e.classroomId) && e.studentId === studentId);
+  },
+
+  // ----------------------------------------------------------------------------------------
+  // Lesson openings (Phase 39). studentId "" = the whole class.
+  // ----------------------------------------------------------------------------------------
+  async listUnlocks(classroomId: string): Promise<UnlockRecord[]> {
+    if (dbMode()) return (await prisma.lessonUnlock.findMany({ where: { classroomId }, orderBy: { createdAt: "asc" } })) as UnlockRecord[];
+    return fallbackStore.lessonUnlocks.filter((u) => u.classroomId === classroomId);
+  },
+
+  async addUnlock(classroomId: string, lessonId: string, studentId: string, createdById: string): Promise<void> {
+    if (dbMode()) {
+      await prisma.lessonUnlock.upsert({
+        where: { classroomId_lessonId_studentId: { classroomId, lessonId, studentId } },
+        update: {},
+        create: { classroomId, lessonId, studentId, createdById },
+      });
+      return;
+    }
+    if (fallbackStore.lessonUnlocks.some((u) => u.classroomId === classroomId && u.lessonId === lessonId && u.studentId === studentId)) return;
+    fallbackStore.lessonUnlocks.push({ id: `unl_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`, classroomId, lessonId, studentId, createdById, createdAt: new Date() });
+  },
+
+  async removeUnlock(classroomId: string, lessonId: string, studentId: string): Promise<boolean> {
+    if (dbMode()) {
+      const r = await prisma.lessonUnlock.deleteMany({ where: { classroomId, lessonId, studentId } });
+      return r.count > 0;
+    }
+    const before = fallbackStore.lessonUnlocks.length;
+    fallbackStore.lessonUnlocks = fallbackStore.lessonUnlocks.filter((u) => !(u.classroomId === classroomId && u.lessonId === lessonId && u.studentId === studentId));
+    return fallbackStore.lessonUnlocks.length < before;
   },
 
   // ----------------------------------------------------------------------------------------

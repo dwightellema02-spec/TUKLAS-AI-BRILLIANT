@@ -20,6 +20,7 @@ Each student: open the site on their phone or laptop → **Sign In → Need a ne
 - **The tutor guides, it does not give answers.** If a student asks for the answer it asks a question back. You can adjust its behaviour on the AI Settings page (`/teacher/ai-settings`) — note these settings apply to **all teachers on this installation** for now.
 - **Voice** works only in browsers that support speech input (Chrome/Edge on Android and desktop; Safari is partial; Firefox none). If the microphone button is missing, students can type. Only the text is kept, never a recording — but Chrome itself may send the audio to Google to turn it into text (see the pilot checklist).
 - **Archive** an assessment to hide it from students; the results stay.
+- **Lesson order:** students take lessons in course order and cannot start one until the one before is finished. If your class is ahead or behind, open the class page and use **Lesson access**: open a lesson for the whole class, for one student, or use "Open through here" to open everything up to a lesson. Students see "Opened by your teacher". Closing a lesson never removes work a student has already started.
 - **Late work:** due dates are shown to students but nothing is blocked when they pass.
 - **Timed tests** end automatically when time runs out (the answers entered so far are submitted).
 - **A student forgot their password?** An administrator can set a temporary one.

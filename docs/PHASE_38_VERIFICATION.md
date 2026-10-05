@@ -32,7 +32,7 @@ The PostgreSQL run found the lesson-ordering bug above (a student could not leav
 ## Not verified / limits — read before using with a class
 * **Not reviewed by a DepEd curriculum specialist or a teacher.** Wording, difficulty and pacing are unvalidated; a teacher should read each lesson before students use it. Lesson text is English only.
 * **Only Weeks 1–6.** Weeks 7–10 (rational numbers, roots) and Terms 2–3 are not loaded. After Week 6 a student reaches the integers lesson (Term 2) next.
-* Lessons are strictly sequential (existing platform behaviour): a student cannot open Week 4 until Week 3 is completed, even if the class is ahead. There is no teacher override yet.
+* Lessons are strictly sequential (existing platform behaviour): a student cannot open Week 4 until Week 3 is completed. Phase 39 adds a teacher control to open lessons early.
 * The learning-path header shows the term of the first lesson ("Term 1") even when the path continues into Term 2.
 * **The built-in tutor's coaching is still integer-centred.** Its right/wrong verdict on a practice question comes from the question's stored answer key and is correct on every seeded numeric practice question (tested both ways). But its hints are generic ("let's break it into small steps") and carry no polygon, percent or rate content; real topic-aware coaching is not built.
 * The in-memory sandbox (no database) keeps its own small demo curriculum; this content is for the PostgreSQL deployment.
@@ -51,4 +51,4 @@ Opening the lessons in a real browser (student on a 390px phone, teacher on a la
 
 Also checked and fine: all 14 Week 1 sections render (21 formulas, no KaTeX errors, no sideways scroll at 390px); checkpoints show feedback and are graded server-side; lesson sessions persist; the learning path unlocks Week 2 after Week 1 and states why later lessons are locked; the tutor's verdict is right on all 53 numeric practice questions, for a correct and a wrong answer.
 
-Not fixed (decision needed): lessons are strictly sequential with no teacher override.
+Lessons are strictly sequential; the teacher override for this was added in Phase 39.
