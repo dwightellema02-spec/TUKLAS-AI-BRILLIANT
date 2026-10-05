@@ -8,7 +8,7 @@ import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
-import { dbService, fallbackStore, LessonIncompleteError } from "./src/lib/db.ts";
+import { dbService, fallbackStore, LessonIncompleteError, hasValidDatabaseUrl } from "./src/lib/db.ts";
 import { hashPassword, verifyPassword } from "./src/lib/auth/password.ts";
 import { createSessionToken, verifySessionToken, SessionPayload } from "./src/lib/auth/session.ts";
 import { gradeChoiceAnswer, toStudentBlockView } from "./src/lib/lesson/block-grading.ts";
@@ -39,6 +39,20 @@ if (process.env.TRUST_PROXY === "true") app.set("trust proxy", 1);
 const DUMMY_PASSWORD_HASH = "$2b$10$CwTycUXWue0Thq9StjUM0uJ8y3wRZBZl4kG5K2D9wH5g8h4mJrJ1e";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const isProd = process.env.NODE_ENV === "production";
+
+// Without a PostgreSQL database the app serves the in-memory DEMO accounts, whose password is public.
+// A production server must therefore either have a database or be started in an explicitly acknowledged demo mode.
+const DEMO_MODE_ACK = "I_UNDERSTAND_DEMO_ACCOUNTS_ARE_PUBLIC";
+if (isProd && !hasValidDatabaseUrl && process.env.ALLOW_DEMO_MODE !== DEMO_MODE_ACK) {
+  console.error(
+    "Refusing to start in production without a PostgreSQL DATABASE_URL: the in-memory demo accounts have a public password. " +
+      `For a throwaway demo only, set ALLOW_DEMO_MODE=${DEMO_MODE_ACK}.`
+  );
+  process.exit(1);
+}
+if (isProd && !hasValidDatabaseUrl) {
+  console.warn("WARNING: DEMO MODE. Public demo accounts are enabled and all data is lost on restart. Do not put real student data here.");
+}
 
 app.use(express.json());
 

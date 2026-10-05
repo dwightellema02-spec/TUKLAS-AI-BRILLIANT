@@ -1,0 +1,7 @@
+node_modules
+dist
+.git
+.env*
+storage
+eval-output
+data/users-persistence.json
