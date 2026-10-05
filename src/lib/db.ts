@@ -4548,11 +4548,16 @@ export const dbService = {
     }
 
     // 7. Update Session score & correct count
-    const allSessionAttempts = fallbackStore.questionAttempts.filter((a) => a.practiceSessionId === sessionId);
-    // Count distinct questions answered correctly
-    const correctQuestionIds = new Set(
-      allSessionAttempts.filter((a) => a.isCorrect).map((a) => a.questionId)
-    );
+    // Count distinct questions answered correctly. In database mode the attempts are rows in PostgreSQL (the in-memory list
+    // only holds sandbox attempts), so read them from there: counting from memory made every real practice session score
+    // at most 1 correct answer.
+    const correctQuestionIds = new Set<string>();
+    if (hasValidDatabaseUrl) {
+      const rows = await prisma.questionAttempt.findMany({ where: { practiceSessionId: sessionId, isCorrect: true }, select: { questionId: true } });
+      rows.forEach((r) => correctQuestionIds.add(r.questionId));
+    } else {
+      fallbackStore.questionAttempts.filter((a) => a.practiceSessionId === sessionId && a.isCorrect).forEach((a) => correctQuestionIds.add(a.questionId));
+    }
     if (validationResult.isCorrect) correctQuestionIds.add(questionId);
 
     const totalQuestions = session.totalQuestions || 1;
@@ -4930,6 +4935,64 @@ export const dbService = {
       .map(describe)
       .filter((f): f is Flag => f !== null)
       .slice(0, limit);
+  },
+
+  /** Phase 36: how many answers from these students are linked to a skill, and how many are not (skill-level analytics need the link). */
+  async countAttemptsBySkillLink(studentIds: string[]): Promise<{ linked: number; unlinked: number }> {
+    if (studentIds.length === 0) return { linked: 0, unlinked: 0 };
+    if (hasValidDatabaseUrl) {
+      const [linked, unlinked] = await Promise.all([
+        prisma.questionAttempt.count({ where: { studentId: { in: studentIds }, skillId: { not: null } } }),
+        prisma.questionAttempt.count({ where: { studentId: { in: studentIds }, skillId: null } }),
+      ]);
+      return { linked, unlinked };
+    }
+    const mine = fallbackStore.questionAttempts.filter((a: any) => studentIds.includes(a.studentId));
+    return { linked: mine.filter((a: any) => a.skillId).length, unlinked: mine.filter((a: any) => !a.skillId).length };
+  },
+
+  /**
+   * Phase 36: how each student has used the tutor: when, how much, and whether the tutor flagged a conversation for the teacher.
+   * One query for the whole class (not one per student). Reasons mirror getTutorAttentionFlags.
+   */
+  async getTutorActivityForStudents(studentIds: string[]): Promise<Map<string, { lastAt: Date | null; conversations: number; studentMessages: number; flagged: Array<{ updatedAt: Date; reasons: string[] }> }>> {
+    const out = new Map<string, { lastAt: Date | null; conversations: number; studentMessages: number; flagged: Array<{ updatedAt: Date; reasons: string[] }> }>();
+    for (const id of studentIds) out.set(id, { lastAt: null, conversations: 0, studentMessages: 0, flagged: [] });
+    if (studentIds.length === 0) return out;
+    const reasonsOf = (stateJson: string | null): string[] | null => {
+      if (!stateJson) return null;
+      let st: any;
+      try { st = JSON.parse(stateJson); } catch { return null; }
+      if (!st?.needsTeacherAttention) return null;
+      const r: string[] = [];
+      if ((st.frustration ?? 0) >= 2) r.push("showed repeated frustration");
+      if ((st.wrongOnProblem ?? 0) >= 4) r.push(`${st.wrongOnProblem} wrong attempts on one problem`);
+      if ((st.consecutiveConfusion ?? 0) >= 4) r.push(`said they were confused ${st.consecutiveConfusion} times in a row`);
+      if (st.strategyHistory?.some((h: any) => h.strategy === "SUGGEST_TEACHER")) r.push("the tutor suggested asking the teacher");
+      if (r.length === 0) r.push("the tutor flagged the conversation");
+      return r;
+    };
+    const add = (studentId: string, updatedAt: Date, stateJson: string | null, msgCount: number) => {
+      const e = out.get(studentId);
+      if (!e) return;
+      e.conversations += 1;
+      e.studentMessages += msgCount;
+      if (!e.lastAt || updatedAt > e.lastAt) e.lastAt = updatedAt;
+      const reasons = reasonsOf(stateJson);
+      if (reasons) e.flagged.push({ updatedAt, reasons });
+    };
+    if (hasValidDatabaseUrl) {
+      const convs = await prisma.aITutorConversation.findMany({ where: { studentId: { in: studentIds } }, select: { id: true, studentId: true, updatedAt: true, stateJson: true } });
+      const counts = await prisma.aITutorMessage.groupBy({ by: ["conversationId"], where: { role: "STUDENT", conversation: { studentId: { in: studentIds } } }, _count: { _all: true } });
+      const countOf = new Map(counts.map((c) => [c.conversationId, c._count._all]));
+      for (const c of convs) add(c.studentId, c.updatedAt, c.stateJson, countOf.get(c.id) ?? 0);
+      return out;
+    }
+    for (const c of fallbackStore.aiConversations.filter((x: any) => studentIds.includes(x.studentId))) {
+      const n = fallbackStore.aiMessages.filter((m: any) => m.conversationId === c.id && m.role === "STUDENT").length;
+      add(c.studentId, new Date(c.updatedAt), c.stateJson ?? null, n);
+    }
+    return out;
   },
 
   /** Phase 23: persist the tutor's conversation state (strategy history, scaffold, pending problems). */

@@ -827,6 +827,34 @@ export class AssessmentService {
     return out;
   }
 
+  /** Phase 36: graded attempts for a set of students (for teacher analytics). One query; no answers, only scores. */
+  static async gradedAttemptsForStudents(studentIds: string[]): Promise<Array<{ studentId: string; assessmentId: string; title: string; type: AssessmentType; scorePercent: number; isPassed: boolean; submittedAt: Date; skillBreakdown: Record<string, { skillTitle: string; correct: number; total: number }> }>> {
+    if (studentIds.length === 0) return [];
+    const parse = (m: string | null | undefined) => { try { return (JSON.parse(m ?? "{}").skillBreakdown ?? {}) as Record<string, { skillTitle: string; correct: number; total: number }>; } catch { return {}; } };
+    if (hasValidDatabaseUrl) {
+      const rows = await prisma.assessmentAttempt.findMany({ where: { studentId: { in: studentIds }, status: "GRADED" }, include: { assessment: { select: { title: true } } }, orderBy: { submittedAt: "asc" } });
+      return rows.map((r) => ({ studentId: r.studentId, assessmentId: r.assessmentId, title: r.assessment.title, type: r.assessmentType as AssessmentType, scorePercent: r.scorePercent, isPassed: r.isPassed, submittedAt: r.submittedAt ?? r.startedAt, skillBreakdown: parse(r.metadata) }));
+    }
+    return assessmentFallbackStore.attempts
+      .filter((a) => studentIds.includes(a.studentId) && a.status === "GRADED")
+      .map((a) => ({ studentId: a.studentId, assessmentId: a.assessmentId, title: assessmentFallbackStore.assessments.find((x) => x.id === a.assessmentId)?.title ?? "Assessment", type: a.assessmentType, scorePercent: a.scorePercent, isPassed: a.isPassed, submittedAt: a.submittedAt ?? a.startedAt, skillBreakdown: parse((a as any).metadata) }));
+  }
+
+  /** Phase 36: published/archived assessments assigned to any of these classes (whole class or one student). */
+  static async assignmentsForClasses(classIds: string[]): Promise<Array<{ assessmentId: string; title: string; type: AssessmentType; status: AssessmentStatus; classroomId: string; studentId?: string; itemCount: number }>> {
+    if (classIds.length === 0) return [];
+    if (hasValidDatabaseUrl) {
+      const rows = await prisma.assessmentAssignment.findMany({ where: { classroomId: { in: classIds }, assessment: { status: { in: ["PUBLISHED", "ARCHIVED"] } } }, include: { assessment: { select: { title: true, type: true, status: true, _count: { select: { items: true } } } } } });
+      return rows.map((r) => ({ assessmentId: r.assessmentId, title: r.assessment.title, type: r.assessment.type as AssessmentType, status: r.assessment.status as AssessmentStatus, classroomId: r.classroomId as string, studentId: r.studentId ?? undefined, itemCount: r.assessment._count.items }));
+    }
+    const out: Array<{ assessmentId: string; title: string; type: AssessmentType; status: AssessmentStatus; classroomId: string; studentId?: string; itemCount: number }> = [];
+    for (const a of assessmentFallbackStore.assessments) {
+      if (a.status !== "PUBLISHED" && a.status !== "ARCHIVED") continue;
+      for (const x of a.assignments) if (x.classroomId && classIds.includes(x.classroomId)) out.push({ assessmentId: a.id, title: a.title, type: a.type, status: a.status, classroomId: x.classroomId, studentId: x.studentId, itemCount: a.items.length });
+    }
+    return out;
+  }
+
   /** Staff listing: admins see everything; a teacher sees their own. */
   static async listAssessments(filters: { type?: AssessmentType; status?: AssessmentStatus; gradeLevel?: number; lessonId?: string }, userId: string, userRole: string): Promise<AssessmentDTO[]> {
     if (!isStaff(userRole)) throw new AssessmentError("Forbidden: Teacher or Administrator access required.", 403);

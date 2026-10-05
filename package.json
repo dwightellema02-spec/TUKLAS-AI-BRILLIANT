@@ -41,7 +41,9 @@
     "test:phase33:pg": "tsx scripts/test-phase33-prisma.ts",
     "test:phase34:journey": "node scripts/test-phase34-journey.mjs",
     "test:phase34:pg": "tsx scripts/test-phase34-prisma.ts",
-    "test:phase35": "AI_PROVIDER=local tsx scripts/test-phase35-tutor-safety.ts"
+    "test:phase35": "AI_PROVIDER=local tsx scripts/test-phase35-tutor-safety.ts",
+    "test:phase36": "AI_PROVIDER=local tsx scripts/test-phase36-analytics.ts",
+    "test:phase36:pg": "tsx scripts/test-phase36-prisma.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts",

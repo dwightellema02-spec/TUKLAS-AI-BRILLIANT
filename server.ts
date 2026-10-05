@@ -2489,12 +2489,13 @@ app.get("/api/teacher/dashboard", async (req: Request, res: Response) => {
       return res.status(403).json({ error: "Forbidden: Teacher or Administrator credentials required." });
     }
 
-    const dashboard = await TeacherService.getTeacherDashboard(session.userId, session.role);
+    const classId = typeof req.query.classId === "string" && req.query.classId ? req.query.classId : undefined;
+    const dashboard = await TeacherService.getTeacherDashboard(session.userId, session.role, { classId });
     return res.json({ data: dashboard });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load teacher dashboard";
     console.error("Teacher dashboard API error:", error);
-    return res.status(500).json({ error: message });
+    return res.status(message.includes("Forbidden") ? 403 : 500).json({ error: message });
   }
 });
 

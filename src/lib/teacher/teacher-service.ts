@@ -17,9 +17,13 @@ import type {
   MasteryDistributionDTO,
   DifficultSkillDTO,
   StudentSupportSignalDTO,
+  AssessmentPerformanceDTO,
+  LessonPerformanceDTO,
   TeacherActivityItemDTO,
 } from "./teacher-types";
 import type { MasteryLevel } from "@/lib/mastery/mastery-types";
+import { AssessmentService } from "@/lib/assessment/assessment-service";
+import { buildSupportSignals, buildGroupRecommendations, studentStatus, lastActivity, type StudentEvidence } from "./class-evidence";
 
 interface StudentBundle {
   user: any;
@@ -27,6 +31,9 @@ interface StudentBundle {
   masteries: any[];
   sessions: any[];
   mistakes: any[];
+  /** Graded assessment attempts (scores only). */
+  assessments: Awaited<ReturnType<typeof AssessmentService.gradedAttemptsForStudents>>;
+  tutor: { lastAt: Date | null; conversations: number; studentMessages: number; flagged: Array<{ updatedAt: Date; reasons: string[] }> };
 }
 
 export class TeacherService {
@@ -130,8 +137,30 @@ export class TeacherService {
     // 9. Aggregate Mistake Categories (Phase 8 MistakeAnalyzer Integration)
     const commonMistakes = this.aggregateCommonMistakes(bundles);
 
-    // 10. Generate "Needs Attention" Support Signals
-    const needsAttention = this.generateSupportSignals(enrolledStudents, bundles);
+    // 10. Evidence-based support signals, group recommendations, assessment and lesson performance
+    const skillTitles = new Map<string, string>(((await dbService.getSkills()) as any[]).map((sk) => [sk.id, sk.title]));
+    const enrollments = await ClassroomRepo.listEnrollments(authorizedClassIds);
+    const classNames = new Map(classes.map((c) => [c.id, c.name]));
+    const evidence: StudentEvidence[] = uniqueStudentIds
+      .filter((sid) => bundles.get(sid))
+      .map((sid) => {
+        const mine = enrollments.filter((e) => e.studentId === sid);
+        return this.toEvidence(sid, bundles.get(sid)!, {
+          classroomIds: mine.map((e) => e.classroomId),
+          classroomName: classNames.get(mine[0]?.classroomId) || "Classroom",
+          enrolledAt: mine.length ? new Date(Math.min(...mine.map((e) => new Date(e.enrolledAt).getTime()))) : null,
+          skillTitles,
+        });
+      });
+    const needsAttention = buildSupportSignals(evidence, new Date()) as StudentSupportSignalDTO[];
+    const dataNotes: string[] = [];
+    const link = await dbService.countAttemptsBySkillLink(uniqueStudentIds);
+    if (link.unlinked > 0 && link.unlinked >= link.linked) {
+      dataNotes.push(`${link.unlinked} of ${link.linked + link.unlinked} answers come from questions that are not linked to a skill. Skill-level views (mastery, difficult skills, recommendations) cannot use them: choose a skill when you create a question.`);
+    }
+    const groupRecommendations = buildGroupRecommendations(evidence);
+    const assessmentPerformance = await this.assessmentPerformance(authorizedClassIds, enrollments, bundles);
+    const lessonPerformance = await this.lessonPerformance(authorizedClassIds, enrollments, bundles);
 
     // 11. Recent Activity Timeline
     const recentActivity = await this.getRecentTeacherActivity(uniqueStudentIds, authorizedLessons, bundles);
@@ -162,6 +191,12 @@ export class TeacherService {
       difficultSkills,
       commonMistakes,
       needsAttention,
+      needsAttentionTotal: needsAttention.length,
+      dataNotes,
+      groupRecommendations,
+      assessmentPerformance,
+      lessonPerformance,
+      classFilter: options.classId ? { id: options.classId, name: classes[0]?.name ?? "" } : undefined,
       recentActivity,
     };
   }
@@ -378,6 +413,15 @@ export class TeacherService {
       completedAt: ps.completedAt ? new Date(ps.completedAt).toISOString() : undefined,
     }));
 
+    // Phase 36: assessments, tutor use and the evidence-based support signal for this student
+    const bundle = (await this.loadBundles([studentId])).get(studentId)!;
+    const skillTitles = new Map<string, string>(((await dbService.getSkills()) as any[]).map((sk) => [sk.id, sk.title]));
+    const evidence = this.toEvidence(studentId, bundle, { classroomIds: classrooms.map((c) => c.id), classroomName: classrooms[0]?.name || "Classroom", skillTitles });
+    const support = (buildSupportSignals([evidence], new Date())[0] as StudentSupportSignalDTO | undefined) ?? null;
+    const latestByAssessment = new Map<string, (typeof bundle.assessments)[number]>();
+    for (const a of bundle.assessments) { const cur = latestByAssessment.get(a.assessmentId); if (!cur || new Date(a.submittedAt) > new Date(cur.submittedAt)) latestByAssessment.set(a.assessmentId, a); }
+    const assessmentResults = Array.from(latestByAssessment.values()).map((a) => ({ assessmentId: a.assessmentId, title: a.title, type: a.type, scorePercent: a.scorePercent, isPassed: a.isPassed, submittedAt: new Date(a.submittedAt).toISOString() }));
+
     return {
       student: {
         id: studentUser.id,
@@ -386,6 +430,9 @@ export class TeacherService {
         gradeLevel: studentUser.gradeLevel || 7,
         classrooms,
       },
+      assessmentResults,
+      support,
+      tutorUse: { conversations: bundle.tutor.conversations, studentMessages: bundle.tutor.studentMessages, lastAt: bundle.tutor.lastAt ? new Date(bundle.tutor.lastAt).toISOString() : null, flaggedConversations: bundle.tutor.flagged.length },
       currentLesson,
       learningPathNodes,
       masteries,
@@ -443,10 +490,14 @@ export class TeacherService {
           dbService.getStudentPracticeHistory(id) as Promise<any[]>,
           dbService.getMistakeAnalysesForStudent(id, { limit: 100, includeOutdated: true }) as Promise<any[]>,
         ]);
-        out.set(id, { user, progress, masteries, sessions, mistakes });
+        out.set(id, { user, progress, masteries, sessions, mistakes, assessments: [], tutor: { lastAt: null, conversations: 0, studentMessages: 0, flagged: [] } });
       }
     };
     await Promise.all(Array.from({ length: Math.min(6, Math.max(studentIds.length, 1)) }, worker));
+    // assessments and tutor use: one query each for the whole group
+    const [attempts, tutor] = await Promise.all([AssessmentService.gradedAttemptsForStudents(studentIds), dbService.getTutorActivityForStudents(studentIds)]);
+    for (const a of attempts) out.get(a.studentId)?.assessments.push(a);
+    for (const [id, t] of tutor) { const b = out.get(id); if (b) b.tutor = t; }
     return out;
   }
 
@@ -457,20 +508,47 @@ export class TeacherService {
       const t = s.completedAt || s.startedAt;
       if (t) times.push(new Date(t).getTime());
     });
+    b.assessments.forEach((a) => a.submittedAt && times.push(new Date(a.submittedAt).getTime()));
+    if (b.tutor.lastAt) times.push(new Date(b.tutor.lastAt).getTime());
     return times.length > 0 ? new Date(Math.max(...times)) : null;
+  }
+
+  /** The plain evidence record the analytics rules work on (see class-evidence.ts). */
+  private static toEvidence(id: string, b: StudentBundle, ctx: { classroomIds: string[]; classroomName: string; enrolledAt?: Date | null; skillTitles: Map<string, string> }): StudentEvidence {
+    const sessions = b.sessions.filter((x: any) => x.totalQuestions > 0);
+    return {
+      id,
+      name: b.user?.name || "Student",
+      classroomIds: ctx.classroomIds,
+      classroomName: ctx.classroomName,
+      enrolledAt: ctx.enrolledAt ?? null,
+      lastActivityAt: this.lastActivityOf(b), // lessons, practice, assessments and tutor use
+      lessonsStarted: b.progress.filter((p: any) => p.lessonId).length,
+      lessonsCompleted: b.progress.filter((p: any) => p.lessonId && p.status === "COMPLETED").length,
+      practice: {
+        sessions: sessions.length,
+        questions: sessions.reduce((n: number, x: any) => n + x.totalQuestions, 0),
+        correct: sessions.reduce((n: number, x: any) => n + (x.correctAnswers || 0), 0),
+        recent: sessions.map((x: any) => ({ at: new Date(x.completedAt || x.startedAt), questions: x.totalQuestions, correct: x.correctAnswers || 0 })),
+      },
+      assessments: b.assessments.map((a) => ({ assessmentId: a.assessmentId, title: a.title, type: a.type, scorePercent: a.scorePercent, isPassed: a.isPassed, submittedAt: new Date(a.submittedAt) })),
+      masteries: b.masteries.map((m: any) => ({ skillId: m.skillId, skillTitle: m.skill?.title || ctx.skillTitles.get(m.skillId) || "Skill", status: String(m.status), accuracy: Number(m.accuracy) || 0, attemptCount: Number(m.attemptCount ?? m.totalAttempts ?? 0) })),
+      mistakes: b.mistakes.map((m: any) => ({ category: m.category || "UNKNOWN", skillId: m.skillId ?? null, skillTitle: m.skill?.title || (m.skillId ? ctx.skillTitles.get(m.skillId) : undefined) })),
+      tutor: b.tutor,
+    };
   }
 
   /** Practice accuracy (0-100) from real sessions, or null when the student has no scored practice yet. */
   private static accuracyOf(b: StudentBundle): number | null {
-    let sum = 0;
-    let n = 0;
+    let questions = 0;
+    let correct = 0;
     b.sessions.forEach((s: any) => {
       if (s.totalQuestions > 0) {
-        sum += (s.correctAnswers / s.totalQuestions) * 100;
-        n++;
+        questions += s.totalQuestions;
+        correct += s.correctAnswers || 0;
       }
     });
-    return n > 0 ? Math.round(sum / n) : null;
+    return questions > 0 ? Math.round((correct / questions) * 100) : null;
   }
 
   // -------------------------------------------------------------
@@ -517,16 +595,11 @@ export class TeacherService {
         const lastAct = this.lastActivityOf(b!);
         const overallAccuracy = this.accuracyOf(b!);
 
-        // Status is derived only from real evidence. No data means "NO_DATA", never a made-up "ACTIVE".
-        let status: StudentListItemDTO["status"] = "ACTIVE";
-        const now = Date.now();
-        if (!lastAct && overallAccuracy === null) {
-          status = "NO_DATA";
-        } else if (overallAccuracy !== null && overallAccuracy < 60) {
-          status = "NEEDS_SUPPORT";
-        } else if (!lastAct || now - lastAct.getTime() > 14 * 24 * 60 * 60 * 1000) {
-          status = "INACTIVE";
-        }
+        // Status is derived only from real evidence (lessons, practice, assessments, tutor use). No data means "NO_DATA".
+        const status: StudentListItemDTO["status"] = studentStatus(
+          this.toEvidence(studentId, b!, { classroomIds: [], classroomName: "", skillTitles: new Map() }),
+          new Date()
+        );
 
         studentMap.set(studentId, {
           id: studentId,
@@ -635,59 +708,65 @@ export class TeacherService {
       .sort((a, b) => b.count - a.count);
   }
 
-  private static generateSupportSignals(
-    students: StudentListItemDTO[],
+  /** How each assessment assigned to these classes went (scores of each student's latest graded attempt). */
+  private static async assessmentPerformance(
+    classIds: string[],
+    enrollments: Array<{ classroomId: string; studentId: string }>,
     bundles: Map<string, StudentBundle>
-  ): StudentSupportSignalDTO[] {
-    const signals: StudentSupportSignalDTO[] = [];
-
-    students.forEach((s) => {
-      const topMistake = (() => {
-        const counts: Record<string, number> = {};
-        (bundles.get(s.id)?.mistakes ?? []).forEach((ma: any) => {
-          const cat = ma.category || "CONCEPTUAL_MISUNDERSTANDING";
-          counts[cat] = (counts[cat] ?? 0) + 1;
-        });
-        const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
-        return top ? this.formatMistakeCategory(top[0]) : undefined;
-      })();
-
-      if (s.overallAccuracy !== null && s.overallAccuracy < 60) {
-        signals.push({
-          studentId: s.id,
-          studentName: s.name,
-          classroomName: s.classrooms[0]?.name || "Classroom",
-          signalType: "LOW_ACCURACY",
-          severity: "HIGH",
-          details: `Practice accuracy is currently ${s.overallAccuracy}%.${topMistake ? ` Most frequent diagnosed pattern: ${topMistake}.` : ""}`,
-          skillTitle: s.primaryMastery?.skillTitle,
-          suggestedAction: "Recommend foundational practice or conduct 1-on-1 check-in.",
-        });
-      } else if (s.status === "INACTIVE") {
-        signals.push({
-          studentId: s.id,
-          studentName: s.name,
-          classroomName: s.classrooms[0]?.name || "Classroom",
-          signalType: "INSUFFICIENT_ACTIVITY",
-          severity: "MEDIUM",
-          details: "No learning activity recorded in the past 14 days.",
-          suggestedAction: "Send friendly reminder or check assignment availability.",
-        });
-      } else if (s.primaryMastery?.status === "DEVELOPING") {
-        signals.push({
-          studentId: s.id,
-          studentName: s.name,
-          classroomName: s.classrooms[0]?.name || "Classroom",
-          signalType: "PERSISTENT_DEVELOPING",
-          severity: "LOW",
-          details: `Showing partial understanding in ${s.primaryMastery.skillTitle}.${topMistake ? ` Most frequent diagnosed pattern: ${topMistake}.` : ""}`,
-          skillTitle: s.primaryMastery.skillTitle,
-          suggestedAction: "Assign a few medium-difficulty practice questions on this skill.",
-        });
+  ): Promise<AssessmentPerformanceDTO[]> {
+    const assigned = await AssessmentService.assignmentsForClasses(classIds);
+    const byAssessment = new Map<string, { title: string; type: string; status: string; students: Set<string> }>();
+    for (const a of assigned) {
+      const g = byAssessment.get(a.assessmentId) ?? { title: a.title, type: a.type, status: a.status, students: new Set<string>() };
+      if (a.studentId) g.students.add(a.studentId);
+      else for (const e of enrollments) if (e.classroomId === a.classroomId) g.students.add(e.studentId);
+      byAssessment.set(a.assessmentId, g);
+    }
+    const out: AssessmentPerformanceDTO[] = [];
+    for (const [assessmentId, g] of byAssessment) {
+      const latest = new Map<string, { scorePercent: number; isPassed: boolean; at: number }>();
+      for (const sid of g.students) {
+        for (const a of bundles.get(sid)?.assessments ?? []) {
+          if (a.assessmentId !== assessmentId) continue;
+          const at = new Date(a.submittedAt).getTime();
+          const cur = latest.get(sid);
+          if (!cur || at > cur.at) latest.set(sid, { scorePercent: a.scorePercent, isPassed: a.isPassed, at });
+        }
       }
-    });
+      const scores = Array.from(latest.values());
+      out.push({
+        assessmentId, title: g.title, type: g.type, status: g.status, assigned: g.students.size, completed: scores.length,
+        meanScorePercent: scores.length ? Math.round((scores.reduce((n, x) => n + x.scorePercent, 0) / scores.length) * 10) / 10 : null,
+        passRate: scores.length ? Math.round((scores.filter((x) => x.isPassed).length / scores.length) * 100) / 100 : null,
+      });
+    }
+    return out.sort((a, b) => a.title.localeCompare(b.title));
+  }
 
-    return signals.slice(0, 6);
+  /** How the class is doing in the lessons that were assigned to it or that its students have started. */
+  private static async lessonPerformance(
+    classIds: string[],
+    enrollments: Array<{ classroomId: string; studentId: string }>,
+    bundles: Map<string, StudentBundle>
+  ): Promise<LessonPerformanceDTO[]> {
+    const studentIds = new Set(enrollments.map((e) => e.studentId));
+    const lessonIds = new Set<string>();
+    for (const a of await ClassroomRepo.listAssignments(classIds, { status: "PUBLISHED" })) if (a.lessonId) lessonIds.add(a.lessonId);
+    bundles.forEach((b, sid) => { if (studentIds.has(sid)) b.progress.forEach((p: any) => p.lessonId && lessonIds.add(String(p.lessonId))); });
+    const out: LessonPerformanceDTO[] = [];
+    for (const lessonId of lessonIds) {
+      let started = 0, completed = 0, q = 0, c = 0;
+      studentIds.forEach((sid) => {
+        const b = bundles.get(sid);
+        if (!b) return;
+        const p = b.progress.find((x: any) => String(x.lessonId) === lessonId);
+        if (p) { started++; if (p.status === "COMPLETED" || (p.progressPercentage ?? 0) >= 100) completed++; }
+        b.sessions.forEach((x: any) => { if (String(x.lessonId) === lessonId && x.totalQuestions > 0) { q += x.totalQuestions; c += x.correctAnswers || 0; } });
+      });
+      const lesson = (await dbService.getLessonById(lessonId)) as any;
+      out.push({ lessonId, title: lesson?.title || "Lesson", studentsStarted: started, studentsCompleted: completed, totalStudents: studentIds.size, practiceAccuracy: q > 0 ? Math.round((c / q) * 100) : null, practiceQuestions: q });
+    }
+    return out.sort((a, b) => b.studentsStarted - a.studentsStarted || a.title.localeCompare(b.title));
   }
 
   private static async getRecentTeacherActivity(

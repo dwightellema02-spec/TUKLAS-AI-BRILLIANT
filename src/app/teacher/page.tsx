@@ -7,6 +7,9 @@ import {
   TeacherQuickActions,
   TeacherStatsOverview,
   MasteryDistributionCard,
+  GroupRecommendationsCard,
+  AssessmentPerformanceCard,
+  LessonPerformanceCard,
   DifficultSkillsCard,
   NeedsAttentionPanel,
   TeacherActivityTimeline,
@@ -41,16 +44,20 @@ export default function TeacherPage({ onNavigate }: TeacherPageProps) {
     else window.location.pathname = path;
   };
 
-  const loadDashboard = async () => {
+  const [classFilter, setClassFilter] = useState("");
+  const [allClasses, setAllClasses] = useState<Array<{ id: string; name: string }>>([]);
+
+  const loadDashboard = async (classId: string = classFilter) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/teacher/dashboard");
+      const res = await fetch(`/api/teacher/dashboard${classId ? `?classId=${encodeURIComponent(classId)}` : ""}`);
       if (!res.ok) {
         throw new Error(`Failed to load teacher dashboard (${res.status})`);
       }
       const json = await res.json();
       setDashboardData(json.data);
+      if (!classId) setAllClasses((json.data.classes || []).map((c: any) => ({ id: c.id, name: c.name })));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to load dashboard data";
       setError(msg);
@@ -61,11 +68,11 @@ export default function TeacherPage({ onNavigate }: TeacherPageProps) {
 
   useEffect(() => {
     if (user && (user.role === "TEACHER" || user.role === "ADMIN")) {
-      loadDashboard();
+      loadDashboard(classFilter);
     } else if (!authLoading) {
       setLoading(false);
     }
-  }, [user, authLoading]);
+  }, [user, authLoading, classFilter]);
 
   // 1. Unauthenticated Gate
   if (!authLoading && !user) {
@@ -154,7 +161,7 @@ export default function TeacherPage({ onNavigate }: TeacherPageProps) {
           <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-xs">
             <h2 className="text-lg font-bold text-slate-900 mb-2">We couldn't load your dashboard</h2>
             <p className="text-sm text-slate-500 mb-6">{error || "Data loading failed"}</p>
-            <Button variant="primary" onClick={loadDashboard} className="gap-2 bg-teal-600 hover:bg-teal-700">
+            <Button variant="primary" onClick={() => loadDashboard()} className="gap-2 bg-teal-600 hover:bg-teal-700">
               <RotateCcw className="w-4 h-4" />
               <span>Try Again</span>
             </Button>
@@ -171,6 +178,10 @@ export default function TeacherPage({ onNavigate }: TeacherPageProps) {
     masteryDistribution,
     difficultSkills,
     needsAttention,
+    groupRecommendations,
+    assessmentPerformance,
+    lessonPerformance,
+    dataNotes,
     recentActivity,
   } = dashboardData;
 
@@ -225,6 +236,18 @@ export default function TeacherPage({ onNavigate }: TeacherPageProps) {
           </div>
         </div>
 
+        {(allClasses.length > 1 || classFilter) && (
+          <div className="mb-6 flex items-center gap-2 text-xs">
+            <label htmlFor="class-filter" className="font-bold text-slate-700">Show</label>
+            <select id="class-filter" data-testid="class-filter" value={classFilter} onChange={(e) => setClassFilter(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 bg-white text-xs">
+              <option value="">All my classes</option>
+              {allClasses.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        )}
+
+        {(dataNotes ?? []).map((n, i) => <p key={i} data-testid="data-note" role="note" className="mb-4 text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">{n}</p>)}
+
         {/* Quick Actions */}
         <TeacherQuickActions
           onCreateLesson={() => handleNav("/teacher/lessons/new")}
@@ -256,6 +279,12 @@ export default function TeacherPage({ onNavigate }: TeacherPageProps) {
             onSelectStudent={(studentId) => handleNav(`/teacher/students/${studentId}`)}
           />
         </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+          <GroupRecommendationsCard items={groupRecommendations ?? []} onSelectStudent={(id) => handleNav(`/teacher/students/${id}`)} />
+          <AssessmentPerformanceCard items={assessmentPerformance ?? []} onOpen={(id) => handleNav(`/teacher/assessments/${id}`)} />
+        </div>
+        <div className="mb-8"><LessonPerformanceCard items={lessonPerformance ?? []} /></div>
 
         {/* Recent Activity Timeline */}
         <TeacherActivityTimeline activities={recentActivity} />

@@ -37,6 +37,9 @@ export function StudentDetailView({
     mistakePatterns,
     adaptiveRecommendations,
     recentPractice,
+    assessmentResults,
+    support,
+    tutorUse,
   } = detail;
 
   return (
@@ -53,6 +56,15 @@ export function StudentDetailView({
           <span>Back to Students List</span>
         </Button>
       </div>
+
+      {/* Why this student may need support, with the evidence (Phase 36) */}
+      {support && (
+        <div data-testid="student-support" className={`rounded-3xl border p-5 shadow-xs ${support.severity === "HIGH" ? "border-red-200 bg-red-50/40" : "border-amber-200 bg-amber-50/40"}`}>
+          <h2 className="text-sm font-black text-slate-900 mb-1">Why this student may need support</h2>
+          <ul className="text-xs text-slate-700 list-disc pl-4 space-y-0.5">{(support.evidence ?? [support.details]).map((e, i) => <li key={i}>{e}</li>)}</ul>
+          <p className="text-xs text-teal-800 font-medium mt-2">Suggested next step: {support.suggestedAction}</p>
+        </div>
+      )}
 
       {/* Student Profile Card */}
       <div className="bg-white rounded-3xl border border-slate-200/90 p-6 shadow-xs">
@@ -236,6 +248,19 @@ export function StudentDetailView({
         <h2 className="text-sm font-bold text-slate-900 mb-3">
           Recent Practice History
         </h2>
+        {(assessmentResults ?? []).length > 0 && (
+          <div data-testid="student-assessments" className="mb-4">
+            <h3 className="text-sm font-bold text-slate-900 mb-2">Assessments</h3>
+            <ul className="divide-y divide-slate-100 text-xs">
+              {assessmentResults.map((a) => (
+                <li key={a.assessmentId} className="py-1.5 flex justify-between gap-3"><span>{a.title}<span className="text-slate-400"> · {a.type.replace("_", "-").toLowerCase()} · {new Date(a.submittedAt).toLocaleDateString()}</span></span><span className="font-bold">{Math.round(a.scorePercent)}%{a.isPassed ? "" : " (below pass mark)"}</span></li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {tutorUse && tutorUse.conversations > 0 && (
+          <p data-testid="student-tutor-use" className="text-xs text-slate-600 mb-3">AI tutor: {tutorUse.studentMessages} message{tutorUse.studentMessages === 1 ? "" : "s"} across {tutorUse.conversations} conversation{tutorUse.conversations === 1 ? "" : "s"}{tutorUse.flaggedConversations > 0 ? `, ${tutorUse.flaggedConversations} flagged for you` : ""}.</p>
+        )}
         {recentPractice.length === 0 ? (
           <p className="text-xs text-slate-400">No practice sets completed yet.</p>
         ) : (

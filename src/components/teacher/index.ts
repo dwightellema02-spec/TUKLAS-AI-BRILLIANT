@@ -8,3 +8,4 @@ export * from "./TeacherActivityTimeline";
 export * from "./TeacherAIAssistantModal";
 export * from "./StudentTable";
 export * from "./StudentDetailView";
+export * from "./ClassInsightCards";
