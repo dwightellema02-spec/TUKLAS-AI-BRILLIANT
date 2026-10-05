@@ -198,11 +198,33 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  const [completeError, setCompleteError] = useState<string | null>(null);
+
   const handleCompleteLesson = async () => {
-    const allIds = blocks.map((b) => b.id);
-    setCompletedBlockIds(allIds);
-    setIsCompleted(true);
-    await syncSession(activeSectionIndex, allIds, true);
+    setCompleteError(null);
+    try {
+      const res = await fetch(`/api/student/lessons/${lessonId}/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentSectionIndex: activeSectionIndex, completedBlockIds, isCompleted: true }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.status === 409 && Array.isArray(json.missingBlockIds)) {
+        // Send the student to the first question they still have to answer correctly.
+        const idx = blocks.findIndex((b) => json.missingBlockIds.includes(b.id));
+        setCompleteError(json.error || "Some questions still need a correct answer.");
+        if (idx >= 0) setActiveSectionIndex(idx);
+        return;
+      }
+      if (!res.ok) {
+        setCompleteError(json.error || "Could not complete the lesson. Please try again.");
+        return;
+      }
+      setCompletedBlockIds(blocks.map((b) => b.id));
+      setIsCompleted(true);
+    } catch {
+      setCompleteError("Network error. Please try again.");
+    }
   };
 
   // Progress metrics
@@ -422,6 +444,7 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
                   <span>Previous</span>
                 </Button>
 
+                {completeError && <p role="alert" className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">{completeError}</p>}
                 <div className="flex items-center gap-2">
                   {activeSectionIndex === totalBlocks - 1 ? (
                     <Button
@@ -480,6 +503,7 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
                 <div>
                   <h3 className="font-bold text-slate-900 text-sm">Finished All Sections?</h3>
                   <p className="text-xs text-slate-500">Record your progress and advance in your learning path.</p>
+                  {completeError && <p role="alert" className="text-xs text-amber-800 mt-1">{completeError}</p>}
                 </div>
                 <Button variant="primary" onClick={handleCompleteLesson} className="gap-2 bg-emerald-600 hover:bg-emerald-700">
                   <CheckCircle2 className="w-4 h-4" />

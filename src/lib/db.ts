@@ -4,6 +4,14 @@
  */
 
 import { isGradableType, parseChoiceBlock } from "./lesson/block-grading";
+
+/** Thrown when a student tries to complete a lesson that still has unanswered questions. */
+export class LessonIncompleteError extends Error {
+  constructor(public missingBlockIds: string[]) {
+    super(`Answer ${missingBlockIds.length} remaining question${missingBlockIds.length === 1 ? "" : "s"} correctly to complete this lesson.`);
+    this.name = "LessonIncompleteError";
+  }
+}
 import fs from "fs";
 import path from "path";
 import {
@@ -2354,6 +2362,20 @@ export const dbService = {
   },
 
   /**
+   * Which gradable questions of a lesson has this student not yet answered correctly?
+   * Only well-formed questions count (a broken one cannot be answered, so it must not block completion).
+   */
+  async getLessonCompletionStatus(userId: string, lessonId: string) {
+    const lesson: any = await this.getLessonById(lessonId);
+    const required: string[] = ((lesson?.contentBlocks || []) as any[])
+      .filter((b) => isGradableType(b.type) && parseChoiceBlock(b))
+      .map((b) => b.id);
+    const attempts: any[] = (await this.getCheckpointAttempts(userId, lessonId)) as any[];
+    const correct = new Set(attempts.filter((a) => a.isCorrect).map((a) => a.blockId));
+    return { required, correct: required.filter((id) => correct.has(id)), missing: required.filter((id) => !correct.has(id)) };
+  },
+
+  /**
    * Update student progress on a lesson (e.g. Started or Block completion)
    */
   async updateStudentProgress(
@@ -2366,6 +2388,15 @@ export const dbService = {
     }
   ) {
     const now = new Date();
+
+    // A lesson is complete only when every question in it has been answered correctly at least once.
+    let missing: string[] = [];
+    if (payload.action === "COMPLETE" || payload.action === "UPDATE_BLOCKS") {
+      missing = (await this.getLessonCompletionStatus(userId, lessonId)).missing;
+      if (payload.action === "COMPLETE" && missing.length > 0) {
+        throw new LessonIncompleteError(missing);
+      }
+    }
 
     // Pure transition shared by both stores. Quality scores start at 0: they are evidence
     // fields owned by mastery/practice, never invented here.
@@ -2382,7 +2413,7 @@ export const dbService = {
       } else if (payload.action === "UPDATE_BLOCKS") {
         const total = payload.totalBlocks || 4;
         const completed = (payload.completedBlockIndex ?? 0) + 1;
-        pct = Math.max(pct, Math.min(100, Math.round((completed / total) * 100)));
+        pct = Math.max(pct, Math.min(missing.length > 0 ? 99 : 100, Math.round((completed / total) * 100)));
         if (pct >= 100) {
           status = "COMPLETED";
           completedAt = completedAt ?? now;

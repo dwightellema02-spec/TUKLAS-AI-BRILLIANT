@@ -8,7 +8,7 @@ import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
-import { dbService, fallbackStore } from "./src/lib/db.ts";
+import { dbService, fallbackStore, LessonIncompleteError } from "./src/lib/db.ts";
 import { hashPassword, verifyPassword } from "./src/lib/auth/password.ts";
 import { createSessionToken, verifySessionToken, SessionPayload } from "./src/lib/auth/session.ts";
 import { gradeChoiceAnswer, toStudentBlockView } from "./src/lib/lesson/block-grading.ts";
@@ -492,6 +492,7 @@ app.post("/api/lessons/:id/video", async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
+    await dbService.assertCanEditLesson(id, session.role, session.userId);
     const { title, url, youtubeId, notes, metadata, channelName, thumbnailUrl, description, duration } = req.body;
 
     if (!url && !youtubeId) {
@@ -527,7 +528,7 @@ app.post("/api/lessons/:id/video", async (req: Request, res: Response) => {
     return res.status(201).json({ data: resource });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to attach video resource";
-    const status = message.includes("Forbidden") ? 403 : 500;
+    const status = ownershipStatus(message) ?? 500;
     return res.status(status).json({ error: message });
   }
 });
@@ -936,6 +937,9 @@ app.post("/api/student/progress", async (req: Request, res: Response) => {
 
     return res.json({ data: updated });
   } catch (error: unknown) {
+    if (error instanceof LessonIncompleteError) {
+      return res.status(409).json({ error: error.message, missingBlockIds: error.missingBlockIds });
+    }
     const message = error instanceof Error ? error.message : "Failed to update progress";
     return res.status(500).json({ error: message });
   }
@@ -952,6 +956,14 @@ app.post("/api/units/:unitId/reorder-lessons", async (req: Request, res: Respons
     const { orderedLessonIds } = req.body;
     if (!Array.isArray(orderedLessonIds)) {
       return res.status(400).json({ error: "orderedLessonIds must be an array of strings" });
+    }
+    // The order of a unit is shared by every teacher in it, so a teacher may reorder only a unit whose lessons
+    // they all authored; otherwise an administrator does it.
+    if (session.role !== "ADMIN") {
+      const lessonsInUnit: any[] = (await dbService.getLessons({ unitId })) as any[];
+      if (lessonsInUnit.some((l) => l.authorId && l.authorId !== session.userId)) {
+        return res.status(403).json({ error: "Forbidden: This unit contains another teacher's lessons. Ask an administrator to reorder it." });
+      }
     }
 
     const result = await dbService.reorderLessons(unitId, orderedLessonIds, session.role);
@@ -1031,9 +1043,25 @@ app.post("/api/student/lessons/:id/session", async (req: Request, res: Response)
     const { currentSectionIndex, completedBlockIds, isCompleted } = req.body;
     if (!(await ensureLessonAccess(res, userId, id))) return;
 
+    // The server, not the browser, decides which questions are done: a block that must be answered counts as
+    // completed only if the student has answered it correctly. Other blocks (reading, video) are self-reported.
+    const lessonNow: any = await dbService.getLessonById(id);
+    const blockIds: string[] = ((lessonNow?.contentBlocks || []) as any[]).map((b) => b.id);
+    const status = await dbService.getLessonCompletionStatus(userId, id);
+    const gradable = new Set(status.required);
+    const claimed: string[] = Array.isArray(completedBlockIds) ? completedBlockIds.filter((x: unknown) => typeof x === "string") : [];
+    const safeCompleted = Array.from(new Set([...claimed.filter((b) => blockIds.includes(b) && !gradable.has(b)), ...status.correct]));
+
+    if (isCompleted && status.missing.length > 0) {
+      return res.status(409).json({
+        error: `Answer ${status.missing.length} remaining question${status.missing.length === 1 ? "" : "s"} correctly to complete this lesson.`,
+        missingBlockIds: status.missing,
+      });
+    }
+
     const updated = await dbService.saveLessonSession(userId, id, {
       currentSectionIndex,
-      completedBlockIds,
+      completedBlockIds: Array.isArray(completedBlockIds) ? safeCompleted : undefined,
       isCompleted,
     });
 
@@ -1092,6 +1120,30 @@ app.post(["/api/student/lessons/:id/checkpoint", "/api/student/lessons/:id/check
   }
 });
 
+// ---- Ownership: a teacher may change only what they authored; admins may change anything. ----
+const ownershipStatus = (message: string): number | null =>
+  message.includes("Forbidden") ? 403 : /not found/i.test(message) ? 404 : null;
+
+async function requireOwnedQuestion(res: Response, session: SessionPayload, questionId: string): Promise<boolean> {
+  const q: any = await dbService.getQuestionById(questionId);
+  if (!q) { res.status(404).json({ error: "Question not found." }); return false; }
+  if (session.role !== "ADMIN" && q.createdById && q.createdById !== session.userId) {
+    res.status(403).json({ error: "Forbidden: You are not authorized to modify another teacher's question." });
+    return false;
+  }
+  return true;
+}
+
+async function requireOwnedPracticeSet(res: Response, session: SessionPayload, setId: string): Promise<boolean> {
+  const set: any = await dbService.getPracticeSetById(setId);
+  if (!set) { res.status(404).json({ error: "Practice set not found." }); return false; }
+  if (session.role !== "ADMIN" && set.createdById && set.createdById !== session.userId) {
+    res.status(403).json({ error: "Forbidden: You are not authorized to modify another teacher's practice set." });
+    return false;
+  }
+  return true;
+}
+
 app.post("/api/lessons/:id/blocks", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
@@ -1100,6 +1152,7 @@ app.post("/api/lessons/:id/blocks", async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
+    await dbService.assertCanEditLesson(id, session.role, session.userId);
     const { type, title, content, metadata } = req.body;
 
     if (!type || !content) {
@@ -1116,7 +1169,7 @@ app.post("/api/lessons/:id/blocks", async (req: Request, res: Response) => {
     return res.status(201).json({ data: block });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to add block";
-    return res.status(500).json({ error: message });
+    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1128,6 +1181,7 @@ app.put("/api/lessons/:id/blocks/:blockId", async (req: Request, res: Response) 
     }
 
     const { id, blockId } = req.params;
+    await dbService.assertCanEditLesson(id, session.role, session.userId);
     const { type, title, content, metadata } = req.body;
 
     const block = await dbService.updateContentBlock(id, blockId, {
@@ -1140,7 +1194,7 @@ app.put("/api/lessons/:id/blocks/:blockId", async (req: Request, res: Response) 
     return res.json({ data: block });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to update block";
-    return res.status(500).json({ error: message });
+    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1152,12 +1206,13 @@ app.delete("/api/lessons/:id/blocks/:blockId", async (req: Request, res: Respons
     }
 
     const { id, blockId } = req.params;
+    await dbService.assertCanEditLesson(id, session.role, session.userId);
     await dbService.deleteContentBlock(id, blockId);
 
     return res.json({ success: true });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to delete block";
-    return res.status(500).json({ error: message });
+    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1169,6 +1224,7 @@ app.post("/api/lessons/:id/reorder-blocks", async (req: Request, res: Response) 
     }
 
     const { id } = req.params;
+    await dbService.assertCanEditLesson(id, session.role, session.userId);
     const { orderedBlockIds } = req.body;
 
     if (!Array.isArray(orderedBlockIds)) {
@@ -1179,7 +1235,7 @@ app.post("/api/lessons/:id/reorder-blocks", async (req: Request, res: Response) 
     return res.json(result);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to reorder blocks";
-    return res.status(500).json({ error: message });
+    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1258,6 +1314,8 @@ app.post("/api/questions", async (req: Request, res: Response) => {
     if (!type || !prompt) {
       return res.status(400).json({ error: "Question type and prompt are required." });
     }
+    // Attaching a question to a lesson is editing that lesson.
+    if (lessonId) await dbService.assertCanEditLesson(lessonId, session.role, session.userId);
 
     const question = await dbService.createQuestion(
       {
@@ -1282,7 +1340,7 @@ app.post("/api/questions", async (req: Request, res: Response) => {
     return res.status(201).json({ data: question });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to create question";
-    return res.status(500).json({ error: message });
+    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1320,6 +1378,7 @@ app.patch("/api/questions/:id", async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
+    if (!(await requireOwnedQuestion(res, session, id))) return;
     const updated = await dbService.updateQuestion(id, req.body, session.userId);
     return res.json({ data: updated });
   } catch (error: unknown) {
@@ -1336,6 +1395,7 @@ app.put("/api/questions/:id", async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
+    if (!(await requireOwnedQuestion(res, session, id))) return;
     const updated = await dbService.updateQuestion(id, req.body, session.userId);
     return res.json({ data: updated });
   } catch (error: unknown) {
@@ -1353,6 +1413,7 @@ app.delete("/api/questions/:id", async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
+    if (!(await requireOwnedQuestion(res, session, id))) return;
     await dbService.deleteQuestion(id);
     return res.json({ success: true });
   } catch (error: unknown) {
@@ -1376,6 +1437,7 @@ app.post("/api/questions/:id/status", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid question status." });
     }
 
+    if (!(await requireOwnedQuestion(res, session, id))) return;
     const updated = await dbService.updateQuestionStatus(id, status, session.userId);
     return res.json({ data: updated });
   } catch (error: unknown) {
@@ -1422,6 +1484,7 @@ app.post("/api/practice-sets", async (req: Request, res: Response) => {
     if (!title) {
       return res.status(400).json({ error: "Practice set title is required." });
     }
+    if (lessonId) await dbService.assertCanEditLesson(lessonId, session.role, session.userId);
 
     const ps = await dbService.createPracticeSet(
       {
@@ -1438,7 +1501,7 @@ app.post("/api/practice-sets", async (req: Request, res: Response) => {
     return res.status(201).json({ data: ps });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to create practice set";
-    return res.status(500).json({ error: message });
+    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1480,6 +1543,7 @@ app.post("/api/practice-sets/:id/questions", async (req: Request, res: Response)
       return res.status(400).json({ error: "questionId is required" });
     }
 
+    if (!(await requireOwnedPracticeSet(res, session, id))) return;
     await dbService.addQuestionToPracticeSet(id, questionId, order);
     const updated = await dbService.getPracticeSetById(id);
     return res.json({ data: updated });
@@ -1498,6 +1562,7 @@ app.delete("/api/practice-sets/:id/questions/:questionId", async (req: Request, 
     }
 
     const { id, questionId } = req.params;
+    if (!(await requireOwnedPracticeSet(res, session, id))) return;
     await dbService.removeQuestionFromPracticeSet(id, questionId);
     return res.json({ success: true });
   } catch (error: unknown) {

@@ -49,6 +49,19 @@ async function main() {
     });
     return { status: res.status, json: (await res.json().catch(() => ({}))) as any };
   };
+  // A student can legitimately find the answers by trying the choices: answer every question until it is correct.
+  const answerAllQuestions = async (tok: string, lessonId: string) => {
+    const view = (await api("GET", `/api/lessons/${lessonId}`, tok)).json.data;
+    for (const b of view?.contentBlocks ?? []) {
+      if (b.type !== "CHECKPOINT" && b.type !== "QUESTION") continue;
+      let opts: string[] = [];
+      try { opts = JSON.parse(b.metadata ?? "{}").options ?? []; } catch { /* none */ }
+      for (const o of opts) {
+        const r = await api("POST", `/api/student/lessons/${lessonId}/checkpoint`, tok, { blockId: b.id, answer: o });
+        if (r.json?.grading?.isCorrect || r.status === 422) break;
+      }
+    }
+  };
   const login = async (e: string, p: string) => (await api("POST", "/api/auth/login", undefined, { email: e, password: p })).json.token as string;
 
   try {
@@ -133,6 +146,7 @@ async function main() {
     let guard = 0;
     while (node(await path(s1.token), A).state === "LOCKED" && guard++ < 40) {
       const cur = (await path(s1.token)).learningPath.find((x: any) => x.state !== "COMPLETED");
+      await answerAllQuestions(s1.token, cur.lessonId);
       const r = await api("POST", "/api/student/progress", s1.token, { lessonId: cur.lessonId, action: "COMPLETE" });
       if (r.status !== 200) { assert(false, `could not complete ${cur.lessonId}: ${r.status}`); break; }
     }
