@@ -27,6 +27,11 @@ const FORBIDDEN_LEAK_PATTERNS = [
   /internal\s*instructions/i,
   /passwordHash/i,
   /DATABASE_URL/i,
+  /postgres(?:ql)?:\/\/\S+/i,
+  /\bAIza[0-9A-Za-z_\-]{20,}/,
+  /\bsk-[A-Za-z0-9_\-]{20,}/,
+  /AUTH_SECRET/i,
+  /BEGIN (?:RSA |EC )?PRIVATE KEY/,
 ];
 
 export function validateTutorOutput(rawText: string, context: AITutorContext): StructuredTutorResponse {
@@ -165,11 +170,27 @@ export function enforceGrounding(
   return { ...response, message, guidingQuestion, citedSourceIds: cited };
 }
 
-function sanitizeMessage(text: string): string {
-  // Strip control characters, keep standard printable text and common markdown/math
-  return text
-    .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F]/g, "")
-    .slice(0, 2000); // Cost/DoS safeguard: limit single message length
+/**
+ * What may reach a student's screen from the model: plain text and LaTeX only. Markup, links and images are removed
+ * (a tutor has no reason to send them, and a link or tracking image in a tutor message is how a tricked model would
+ * pull a child off the platform or leak the conversation).
+ */
+export function sanitizeMessage(text: string): string {
+  let t = text
+    .replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u200B-\u200F\u2060\uFEFF]/g, "")
+    // elements whose content is code or hidden: drop with their content
+    .replace(/<\s*(script|style|iframe|object|embed|svg|template|noscript)\b[\s\S]*?<\s*\/\s*\1\s*>/gi, " ")
+    // any other known tag (opening, closing or self-closing); "a<b and c>d" in maths is not a known tag
+    .replace(/<\/?\s*(?:script|style|iframe|object|embed|svg|template|noscript|img|link|meta|form|input|button|html|head|body|div|span|br|hr|table|thead|tbody|tr|td|th|ul|ol|li|h[1-6]|video|audio|source|math|em|strong|font|center|marquee|base|frame|frameset|applet)\b[^>]*>/gi, " ")
+    .replace(/<\/?\s*(?:a|b|i|u|p)(?:\s+[a-z\-]+\s*=[^>]*)?\s*\/?>/gi, " ")
+    // markdown images and links: keep the words, drop the target
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\((?:[^)]*)\)/g, "$1")
+    // bare addresses
+    .replace(/\b(?:https?|ftp|file|data|javascript|vbscript):[^\s)]*/gi, " ")
+    .replace(/\bwww\.[^\s)]+/gi, " ")
+    .replace(/[ \t]{2,}/g, " ");
+  return t.trim().slice(0, 2000); // Cost/DoS safeguard: limit single message length
 }
 
 export function generateFallbackTutorResponse(context: AITutorContext): StructuredTutorResponse {

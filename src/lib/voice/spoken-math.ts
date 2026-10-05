@@ -56,6 +56,8 @@ function tokenize(input: string): string[] {
     .replace(/\b(lab(?:ing|in|im))[\s-]+/g, "$1")
     .replace(/(?<=[a-z])-(?=[a-z])/g, " ")
     .replace(/[,;:!?]+/g, " ")
+    // a full stop ends a sentence ("is five."), a decimal point does not ("3.5")
+    .replace(/\.(?=\s|$)/g, " ")
     .replace(/\b(uh|um|er|erm|ah|hmm|okay so)\b/g, " ")
     .split(/\s+/)
     .filter(Boolean);
@@ -159,7 +161,7 @@ function repairHomophones(tokens: string[], notes: string[]): { tokens: string[]
   return { tokens: out, uncertain };
 }
 
-export function normalizeSpokenMath(transcript: string): NormalizedSpeech {
+export function normalizeSpokenMath(transcript: string, opts: { convertLoneNumbers?: boolean } = {}): NormalizedSpeech {
   const original = typeof transcript === "string" ? transcript : "";
   const notes: string[] = [];
   const base = tokenize(original);
@@ -202,7 +204,7 @@ export function normalizeSpokenMath(transcript: string): NormalizedSpeech {
     if (t.kind === "word") { out.push(t.w); continue; }
     if (t.kind === "num") {
       // a lone "one"/"isa" is far more often a pronoun than the number 1 ("this one"): only convert it in a maths context
-      if (t.single && !mathNeighbour(i - 1) && !mathNeighbour(i + 1) && toks.length > 1) { out.push(t.v === 1 ? tokens[findWord(tokens, "one", "isa")] ?? "one" : String(t.v)); continue; }
+      if (t.single && !opts.convertLoneNumbers && !mathNeighbour(i - 1) && !mathNeighbour(i + 1) && toks.length > 1) { out.push(t.v === 1 ? tokens[findWord(tokens, "one", "isa")] ?? "one" : String(t.v)); continue; }
       out.push(String(t.v)); changed = true; continue;
     }
     const prev = toks[i - 1];

@@ -2,6 +2,7 @@
  * Phase 23: Conversation state: persisted, versioned, and updated by pure functions.
  */
 
+import { quoted, oneLine } from "../untrusted";
 import { problemKey } from "./problems";
 import type {
   AnswerEvaluation,
@@ -106,7 +107,7 @@ export function observeStudentTurn(
     if (active.source !== "TUTOR") s.baseProblem = active.problem;
   }
 
-  if (signal.text) s.recentStudentStatements = [...s.recentStudentStatements, signal.text.slice(0, 200)].slice(-MAX_STATEMENTS);
+  if (signal.text) s.recentStudentStatements = [...s.recentStudentStatements, oneLine(signal.text, 200)].slice(-MAX_STATEMENTS);
 
   const confusionLike = signal.intent === "CONFUSED" || signal.intent === "DONT_KNOW" || (signal.confused && signal.intent !== "ANSWER_ATTEMPT");
   s.consecutiveConfusion = confusionLike ? s.consecutiveConfusion + 1 : signal.intent === "ANSWER_ATTEMPT" || signal.intent === "REASONING" ? 0 : s.consecutiveConfusion;
@@ -222,8 +223,8 @@ export function summarizeState(state: ConversationState): string {
   if (state.pendingTransfer) lines.push(`A new ${state.pendingTransfer.kind.toLowerCase()} problem is waiting for the student's answer: ${state.pendingTransfer.problem.display}.`);
   if (state.strategyHistory.length) lines.push(`Tutor moves so far: ${state.strategyHistory.map((h) => h.strategy).join(" -> ")}.`);
   if (state.hintsGiven.length) lines.push(`Hints/scaffolds already given: ${state.hintsGiven.map((h) => h.strategy).join(", ")}.`);
-  if (state.lastTutorQuestion) lines.push(`Your last question to the student: "${state.lastTutorQuestion}".`);
-  if (state.recentStudentStatements.length) lines.push(`The student's recent messages: ${state.recentStudentStatements.slice(-3).map((t) => `"${t}"`).join(" | ")}.`);
+  if (state.lastTutorQuestion) lines.push(`Your last question to the student: ${quoted(state.lastTutorQuestion, 300)}.`);
+  if (state.recentStudentStatements.length) lines.push(`The student's recent messages: ${state.recentStudentStatements.slice(-3).map((t) => quoted(t, 200)).join(" | ")}.`);
   const dx = Object.entries(state.diagnoses).filter(([, n]) => (n ?? 0) > 0);
   if (dx.length) lines.push(`Mistake patterns seen: ${dx.map(([k, n]) => `${k} x${n}`).join(", ")}.`);
   if (state.consecutiveConfusion > 0) lines.push(`The student has said they are confused/stuck ${state.consecutiveConfusion} time(s) in a row.`);

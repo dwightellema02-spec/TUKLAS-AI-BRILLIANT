@@ -18,7 +18,8 @@ import { evaluateAttempt, resolveExpectedAnswerText } from "./conversation/evalu
 import { parseAnyProblem, findNumberInText } from "./conversation/arith";
 import { observeStudentTurn, parseState, recordTutorTurn, serializeState, summarizeEvaluation, summarizeState } from "./conversation/state";
 import { planResponse } from "./conversation/planner";
-import { checkTutorOutput, type Violation } from "./conversation/guards";
+import { checkTutorOutput, mentionsAnswerValue, type Violation } from "./conversation/guards";
+import { sharesLongRun } from "./untrusted";
 import { realizePlan } from "./conversation/realizer";
 import type { ConversationState, ParsedProblem, ResponsePlan } from "./conversation/types";
 
@@ -327,6 +328,12 @@ export class AITutorService {
       }
       const structured = validateTutorOutput(raw.text, context);
       const violations = checkTutorOutput({ message: structured.message, guidingQuestion: structured.guidingQuestion }, turn.plan, turn.state);
+      const shownText = `${structured.message} ${structured.guidingQuestion ?? ""} ${structured.encouragement ?? ""} ${structured.nextStep ?? ""}`;
+      // Screens that apply to model text only (the local realizer is built from the plan, not from free generation)
+      if (!/^local/i.test(raw.provider)) {
+        if (sharesLongRun(shownText, systemPrompt)) violations.push("PROMPT_LEAK");
+        if (!violations.includes("ANSWER_DISCLOSED") && mentionsAnswerValue(shownText, turn.plan)) violations.push("ANSWER_VALUE_MENTIONED");
+      }
       return { raw, structured, violations };
     };
 
