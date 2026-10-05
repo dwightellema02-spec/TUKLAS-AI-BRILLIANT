@@ -221,37 +221,12 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
                   Connected ({dbStatus?.provider === "neon-postgresql" ? "PostgreSQL / Prisma" : "Prisma / Sandbox Store"})
                 </p>
                 <p className="text-xs text-purple-700 mt-1">
-                  Prisma ORM schema initialized with 8 relational models
+                  Accounts and classes are stored in this database when one is configured
                 </p>
               </div>
             </div>
           </div>
 
-          {/* Database Entity Health Overview */}
-          <div className="border-t border-slate-100 pt-6">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-2">
-              <Layers className="w-4 h-4 text-purple-600" />
-              <span>Prisma Schema Models Verified (Phase 2):</span>
-            </h2>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              {[
-                { name: "User", count: "3 Default Roles" },
-                { name: "Subject", count: "Mathematics (MATH)" },
-                { name: "Grade", count: "Grade 7" },
-                { name: "Term", count: "Term 1" },
-                { name: "Unit", count: "Numbers & Algebra" },
-                { name: "Lesson", count: "Understanding Integers" },
-                { name: "Competency", count: "M7NS-Ia-1" },
-                { name: "Skill & Prereq", count: "3 Skills (DAG)" },
-              ].map((m) => (
-                <div key={m.name} className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                  <span className="font-semibold text-slate-900 block">{m.name}</span>
-                  <span className="text-[11px] text-slate-500">{m.count}</span>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
       <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />

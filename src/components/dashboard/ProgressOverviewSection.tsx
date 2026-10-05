@@ -97,7 +97,7 @@ export function ProgressOverviewSection({
               Multi-source signals
             </span>
             <span>•</span>
-            <span className="text-slate-600 font-medium">Phase 10 Evaluated</span>
+            <span className="text-slate-600 font-medium">Evidence-based</span>
           </div>
         </div>
       </div>
