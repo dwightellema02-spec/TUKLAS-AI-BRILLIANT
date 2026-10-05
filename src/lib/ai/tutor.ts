@@ -21,6 +21,7 @@ import { planResponse } from "./conversation/planner";
 import { checkTutorOutput, mentionsAnswerValue, type Violation } from "./conversation/guards";
 import { sharesLongRun } from "./untrusted";
 import { realizePlan } from "./conversation/realizer";
+import { coachFor } from "./conversation/coaching";
 import type { ConversationState, ParsedProblem, ResponsePlan } from "./conversation/types";
 
 interface RateLimitRecord {
@@ -270,7 +271,10 @@ export class AITutorService {
     );
 
     const state = observeStudentTurn(prevState, signal, evaluation, { problem: activeProblem, source });
+    // Topic coaching (polygons, percentages, rates...) for a lesson question the integer engine cannot parse.
+    const coach = q && !activeProblem ? coachFor({ prompt: q.prompt, skillTitle: context.skill?.title, expectedAnswer: q.expectedAnswer, type: q.type }) : undefined;
     const plan = planResponse({
+      coach,
       state,
       signal,
       evaluation,
@@ -280,6 +284,7 @@ export class AITutorService {
       topicText: [context.curriculum.lessonTitle, context.skill?.title, q?.prompt].filter(Boolean).join(" "),
     });
 
+    if (plan.coach && q?.expectedAnswer !== undefined && Number.isFinite(Number(String(q.expectedAnswer).replace(/,/g, "")))) plan.coachAvoid = Number(String(q.expectedAnswer).replace(/,/g, ""));
     // Non-arithmetic question (e.g. multiple choice about a concept): still protect the expected answer text.
     if (!activeProblem && q && evaluation.kind !== "CORRECT") {
       const text = resolveExpectedAnswerText({ type: q.type, choices: q.choices, expectedAnswer: q.expectedAnswer });

@@ -5,6 +5,7 @@
  */
 import { GRADE7_TERM1_UNITS, GRADE7_TERM1_COMPETENCIES, GRADE7_TERM1_SKILLS, GRADE7_TERM1_LESSONS, GRADE7_TERM1_QUESTIONS as Q } from "../src/lib/curriculum/grade7-term1";
 import { parseChoiceBlock } from "../src/lib/lesson/block-grading";
+import { solveNumeric } from "./lib/solve-prompt";
 
 let passed = 0, failed = 0;
 const assert = (c: boolean, m: string) => { if (c) { passed++; if (process.env.VERBOSE) console.log(`  ✅ ${m}`); } else { failed++; console.error(`  ❌ FAILED: ${m}`); } };
@@ -45,61 +46,11 @@ assert(positions.size >= 3, "The correct choice is not always in the same positi
 
 section("3. Numeric answers recomputed from the prompt");
 let checked = 0;
-const eq = (q: any, expected: number) => { checked++; assert(near(q.answer, expected), `${q.key}: expected ${expected}, stored ${q.answer}`); };
 for (const q of Q) {
   if (q.type !== "NUMERIC_INPUT") continue;
-  const p = q.prompt, n = nums(p);
-  let m: RegExpMatchArray | null;
-  if ((m = p.match(/regular (\w+) from a circle/))) {
-    const sides: Record<string, number> = { pentagon: 5, hexagon: 6, octagon: 8, decagon: 10, nonagon: 9 };
-    eq(q, 360 / sides[m[1]]);
-  } else if (/12-sided polygon from a circle/.test(p)) eq(q, 30);
-  else if (/complementary\. One measures/.test(p)) eq(q, 90 - n[0]);
-  else if (/supplementary\. One measures/.test(p)) eq(q, 180 - n[0]);
-  else if (/vertically opposite/.test(p)) eq(q, n[0]);
-  else if (/linear pair/.test(p)) eq(q, 180 - n[0]);
-  else if (/interior angle is \d+°\. What is the adjacent exterior/.test(p)) eq(q, 180 - n[0]);
-  else if (/exterior angle is \d+°\. What is the adjacent interior/.test(p)) eq(q, 180 - n[0]);
-  else if (/sum of the interior angles of a polygon with \d+ sides/.test(p)) eq(q, (n[0] - 2) * 180);
-  else if (/EACH interior angle of a regular polygon with \d+ sides/.test(p)) eq(q, ((n[0] - 2) * 180) / n[0]);
-  else if (/EACH exterior angle of a regular polygon with \d+ sides/.test(p)) eq(q, 360 / n[0]);
-  else if (/Each exterior angle of a regular polygon is \d+°\. How many sides/.test(p)) eq(q, 360 / n[0]);
-  else if (/interior angles of a polygon add up to \d+°\. How many sides/.test(p)) eq(q, n[0] / 180 + 2);
-  else if (/Three interior angles of a quadrilateral/.test(p)) eq(q, 360 - n[0] - n[1] - n[2]);
-  else if (/Four interior angles of a pentagon/.test(p)) eq(q, 540 - n[0] - n[1] - n[2] - n[3]);
-  else if (/exterior angles of any convex polygon add up/.test(p)) eq(q, 360);
-  else if (/(rises|drops) from [\d,]+ to [\d,]+\. What is the percentage|dropped from|sold \d+ meals/.test(p) && /percentage (increase|decrease)/.test(p)) {
-    const [a, b] = n; eq(q, (Math.abs(b - a) / a) * 100);
-  } else if (/is increased by \d+%\. What is the new price/.test(p)) eq(q, n[0] * (1 + n[1] / 100));
-  else if (/is decreased by \d+%\. What is the new quantity/.test(p)) eq(q, n[0] * (1 - n[1] / 100));
-  else if (/How much is the discount/.test(p)) eq(q, (n[0] * n[1]) / 100);
-  else if (/What is the sale price/.test(p)) eq(q, n[0] * (1 - n[1] / 100));
-  else if (/originally priced.*is sold for/.test(p)) eq(q, ((n[0] - n[1]) / n[0]) * 100);
-  else if (/earns a \d+% commission/.test(p)) eq(q, (n[0] * n[1]) / 100);
-  else if (/commission on sales of/.test(p)) eq(q, (n[0] / n[1]) * 100);
-  else if (/How much is the tax/.test(p)) eq(q, (n[0] * n[1]) / 100);
-  else if (/sales tax\. How much do you pay in all/.test(p)) eq(q, n[0] * (1 + n[1] / 100));
-  else if (/Simple interest: principal/.test(p)) eq(q, (n[0] * n[1] * n[2]) / 100);
-  else if (/simple interest per year for \d+ years\. How much money will you have/.test(p)) eq(q, n[0] + (n[0] * n[1] * n[2]) / 100);
-  else if (/earns ₱[\d,]+ simple interest at/.test(p)) eq(q, n[1] / ((n[0] * n[2]) / 100));
-  else if (/daily allowance of ₱200\. She plans/.test(p)) eq(q, n[0] - n[1] - n[2] - n[3]);
-  else if (/save 20% of her/.test(p) || /spend 45% of/.test(p)) eq(q, (n[0] * n[1]) / 100 === q.answer ? q.answer : (n[1] * n[0]) / 100);
-  else if (/Income ₱\d+, expenses/.test(p)) eq(q, n[0] - n[1] - n[2] - n[3]);
-  else if (/cost ₱[\d,]+\. What is the unit rate/.test(p)) eq(q, n[1] / n[0]);
-  else if (/unit rate|rate in liters per minute/.test(p)) eq(q, n[0] / n[1]);
-  else if (/What is its speed/.test(p)) eq(q, n[0] / n[1]);
-  else if (/travels at \d+ km\/h for/.test(p)) eq(q, n[0] * n[1]);
-  else if (/How long does it take to travel/.test(p)) eq(q, n[0] / n[1]);
-  else if (/At this rate, how many pages/.test(p)) eq(q, (n[0] / n[1]) * n[2]);
-  else if (/pay for 10 days/.test(p) || /At this rate, how much is the pay/.test(p)) eq(q, (n[0] / n[1]) * n[2]);
-  else if (/circle of radius \d+ cm/.test(p)) eq(q, n[1]);
-  else if (/ratio 1 : 3/.test(p)) eq(q, 45);
-  else if (/x and 2x/.test(p)) eq(q, 30);
-  else if (/∠ABC = 90°/.test(p)) eq(q, 90 - n[1]);
-  else if ((m = p.match(/How many (?:sides|interior angles) does an? (\w+) have/))) eq(q, { triangle: 3, quadrilateral: 4, pentagon: 5, hexagon: 6, heptagon: 7, octagon: 8, nonagon: 9, decagon: 10 }[m[1]]!);
-  else if (/regular \w+ has a perimeter of/.test(p)) eq(q, n[0] / ({ pentagon: 5, hexagon: 6, octagon: 8, decagon: 10 } as any)[p.match(/regular (\w+)/)![1]]);
-  else if (/How many (interior angles|sides)/.test(p) || /vertices/.test(p)) eq(q, n[0]);
-  else assert(false, `${q.key}: no independent check written for "${p}"`);
+  const expected = solveNumeric(q.prompt);
+  if (expected === undefined) { assert(false, `${q.key}: no independent check written for "${q.prompt}"`); continue; }
+  checked++; assert(near(q.answer, expected), `${q.key}: expected ${expected}, stored ${q.answer}`);
 }
 assert(checked >= 100, `At least 100 numeric answers were recomputed independently (${checked})`);
 

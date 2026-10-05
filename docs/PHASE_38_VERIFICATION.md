@@ -34,7 +34,7 @@ The PostgreSQL run found the lesson-ordering bug above (a student could not leav
 * **Only Weeks 1–6.** Weeks 7–10 (rational numbers, roots) and Terms 2–3 are not loaded. After Week 6 a student reaches the integers lesson (Term 2) next.
 * Lessons are strictly sequential (existing platform behaviour): a student cannot open Week 4 until Week 3 is completed. Phase 39 adds a teacher control to open lessons early.
 * The learning-path header shows the term of the first lesson ("Term 1") even when the path continues into Term 2.
-* **The built-in tutor's coaching is still integer-centred.** Its right/wrong verdict on a practice question comes from the question's stored answer key and is correct on every seeded numeric practice question (tested both ways). But its hints are generic ("let's break it into small steps") and carry no polygon, percent or rate content; real topic-aware coaching is not built.
+* **The built-in tutor's coaching is still integer-centred.** Its right/wrong verdict on a practice question comes from the question's stored answer key and is correct on every seeded numeric practice question (tested both ways). But its hints are generic ("let's break it into small steps") and carry no polygon, percent or rate content; real topic-aware coaching for these topics was added in Phase 40.
 * The in-memory sandbox (no database) keeps its own small demo curriculum; this content is for the PostgreSQL deployment.
 * Nothing here was used by real students. Docker image build and live Gemini remain unverified (see earlier phases).
 

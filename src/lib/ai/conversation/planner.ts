@@ -14,6 +14,7 @@
 import { quoted, oneLine } from "../untrusted";
 import { answerText, generateRelatedProblem, kindOf, makeProblem, problemKey, structureFacts, workedSteps } from "./problems";
 import { phaseAfter, recentStrategies } from "./state";
+import { slipFor, type Coach } from "./coaching";
 import type {
   AnswerEvaluation,
   ConversationState,
@@ -33,6 +34,8 @@ export interface PlanInput {
   hasSources: boolean;
   /** Lesson/skill text, used to decide whether integer-arithmetic examples are appropriate. */
   topicText?: string;
+  /** Phase 40: coaching for this question's topic (used when there is no parsed integer problem). */
+  coach?: Coach;
 }
 
 function pickFresh(candidates: TutorStrategy[], state: ConversationState): TutorStrategy {
@@ -57,6 +60,8 @@ const CONFUSION_LADDER: TutorStrategy[] = [
 ];
 const HINT_LADDER: TutorStrategy[] = ["ASK_WHAT_THEY_THINK", "ACTIVATE_PRIOR", "VISUAL_NUMBER_LINE", "DECOMPOSE_STEPS", "WORKED_ANALOGOUS"];
 
+/** Strategies a topic coach can deliver without a parsed integer problem. */
+const COACH_OK: TutorStrategy[] = ["VISUAL_NUMBER_LINE", "DECOMPOSE_STEPS", "WORKED_ANALOGOUS", "TARGET_MISCONCEPTION"];
 const NEEDS_PROBLEM: TutorStrategy[] = ["VISUAL_NUMBER_LINE", "DECOMPOSE_STEPS", "WORKED_ANALOGOUS", "TARGET_MISCONCEPTION", "TRANSFER_PROBLEM", "SIMPLER_PROBLEM", "HARDER_PROBLEM"];
 
 function baseProblemForTopic(topic?: string): ParsedProblem | undefined {
@@ -146,7 +151,8 @@ export function planResponse(input: PlanInput): ResponsePlan {
     }
   } else if (intent === "ANSWER_ATTEMPT" && evaluation.kind === "INCORRECT") {
     diagnosis = evaluation.diagnosis;
-    const known = diagnosis !== undefined && diagnosis !== "UNKNOWN_INCORRECT";
+    const slipHit = input.coach && !workingProblem ? slipFor(input.coach, Number(String(evaluation.attempted ?? "").replace(/[^\d.\-]/g, ""))) : undefined;
+    const known = (diagnosis !== undefined && diagnosis !== "UNKNOWN_INCORRECT") || !!slipHit;
     const sameDiagnosisAgain = known && state.previousDiagnosis === diagnosis;
     const newKindOfMistake = known && state.wrongOnProblem >= 2 && state.previousDiagnosis !== diagnosis;
     if (inTransfer && state.pendingTransfer!.attempts >= 2 && state.pendingTransfer!.kind !== "SIMPLER") {
@@ -235,7 +241,7 @@ export function planResponse(input: PlanInput): ResponsePlan {
   } else if (intent === "REQUEST_HINT") {
     const ordinal = state.hintsOnProblem; // hints already given on this problem
     const ladder = HINT_LADDER.slice(Math.min(ordinal, HINT_LADDER.length - 1));
-    strategy = !workingProblem && !topicBase ? "REVIEW_KEY_IDEAS" : pickFresh(ladder, state);
+    strategy = !workingProblem && !topicBase && !input.coach ? "REVIEW_KEY_IDEAS" : pickFresh(ladder, state);
     if (ordinal >= HINT_LADDER.length + 1) {
       strategy = "SUGGEST_TEACHER";
     }
@@ -276,7 +282,7 @@ export function planResponse(input: PlanInput): ResponsePlan {
   // ---- Feasibility: strategies that need a concrete problem ---------------------------------
   // Examples and transfer problems derive from the ORIGINAL problem, not from a transfer problem posed earlier.
   const baseForExamples = state.baseProblem ?? workingProblem ?? topicBase;
-  if (NEEDS_PROBLEM.includes(strategy) && !baseForExamples) {
+  if (NEEDS_PROBLEM.includes(strategy) && !baseForExamples && !(input.coach && COACH_OK.includes(strategy))) {
     const fallback: TutorStrategy = hasSources ? "REVIEW_KEY_IDEAS" : "ACTIVATE_PRIOR";
     rationale += ` | no concrete problem available, using ${fallback}`;
     strategy = fallback;
@@ -287,7 +293,7 @@ export function planResponse(input: PlanInput): ResponsePlan {
   const repeatable: TutorStrategy[] = ["TRANSFER_PROBLEM", "CONFIRM_AND_PROBE", "REDIRECT_OFF_TOPIC", "OPEN_PROBLEM", "CELEBRATE_AND_NEXT"];
   const newDiagnosisContent = strategy === "TARGET_MISCONCEPTION" && diagnosis !== undefined && diagnosis !== state.previousDiagnosis;
   if (strategy === last && struggling && !repeatable.includes(strategy) && !newDiagnosisContent) {
-    const alt = pickFresh(CONFUSION_LADDER.filter((c) => c !== strategy && (!NEEDS_PROBLEM.includes(c) || !!baseForExamples)), state);
+    const alt = pickFresh(CONFUSION_LADDER.filter((c) => c !== strategy && (!NEEDS_PROBLEM.includes(c) || !!baseForExamples || (!!input.coach && COACH_OK.includes(c)))), state);
     rationale += ` | would repeat ${strategy}; switched to ${alt}`;
     strategy = alt;
   }
@@ -357,6 +363,7 @@ export function planResponse(input: PlanInput): ResponsePlan {
     studentQuote: quote(signal),
     hintOrdinal,
     diagnosis,
+    ...(input.coach && !workingProblem ? { coach: input.coach } : {}),
   };
   plan.directive = buildDirective(plan, state, hasSources);
   return plan;

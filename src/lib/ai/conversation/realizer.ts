@@ -10,6 +10,7 @@
 import type { GroundingSource } from "../../documents/types";
 import { fmt } from "./arith";
 import { guessSafe } from "./realizer-util";
+import { exampleFor, slipFor } from "./coaching";
 import { hashString, kindOf, mathText, structureFacts } from "./problems";
 import { checkTutorOutput, type Violation } from "./guards";
 import type { ConversationState, ParsedProblem, ResponsePlan, TutorStrategy } from "./types";
@@ -239,12 +240,67 @@ function realizeDraft(plan: ResponsePlan, ctx: RealizeContext, seed: number): Dr
   return ctx.state.language === "TL" ? tagalogLayer(plan, ctx, seed, draft) : draft;
 }
 
+/** Coaching moves built from the question's topic pack (see coaching.ts). Returns undefined for moves the generic code handles. */
+function realizeCoached(plan: ResponsePlan, ctx: RealizeContext, lead: (text: string) => string): Draft | undefined {
+  const c = plan.coach!;
+  const state = ctx.state;
+  const stepFor = (strategy: TutorStrategy) => {
+    const done = state.hintsGiven.filter((h) => h.strategy === strategy).length;
+    return Math.min(done, c.steps.length - 1);
+  };
+  switch (plan.strategy) {
+    case "ACTIVATE_PRIOR":
+    case "REVIEW_KEY_IDEAS": {
+      const first = lead(c.idea.message);
+      return state.recentTutorMessages.includes(first) ? { message: lead(c.check.message), question: c.check.question } : { message: first, question: c.idea.question };
+    }
+    case "DECOMPOSE_STEPS": {
+      const idx = stepFor("DECOMPOSE_STEPS");
+      const prefix = plan.intent === "REASONING" ? "Let's build on that one small step at a time." : "Let's take it one small step at a time.";
+      return { message: lead(prefix), question: `Step ${idx + 1}: ${c.steps[idx]}` };
+    }
+    case "VISUAL_NUMBER_LINE":
+      return { message: lead(`Try making a quick sketch or a small table of what you know. ${c.context.message}`), question: c.context.question };
+    case "REAL_CONTEXT":
+      return { message: lead(c.context.message), question: c.context.question };
+    case "WORKED_ANALOGOUS": {
+      const attempted = Number(String(plan.evaluation.attempted ?? "").replace(/[^\d.\-]/g, ""));
+      const ex = exampleFor(c, [plan.coachAvoid ?? Number.NaN, plan.evaluation.attempted === undefined ? Number.NaN : attempted]);
+      if (!ex) {
+        const idx = stepFor("DECOMPOSE_STEPS");
+        return { message: lead("Let's take it one small step at a time."), question: `Step ${idx + 1}: ${c.steps[idx]}` };
+      }
+      return {
+        message: lead(`Here's a similar problem with different numbers, worked out: ${ex.problem} ${ex.steps.map((s, i) => `${i + 1}. ${s}`).join(" ")}`),
+        question: "What is the same and what is different in your problem?",
+      };
+    }
+    case "TARGET_MISCONCEPTION": {
+      const attempted = Number(String(plan.evaluation.attempted ?? "").replace(/[^\d.\-]/g, ""));
+      const hit = slipFor(c, plan.evaluation.attempted === undefined ? undefined : attempted);
+      return hit ? { message: lead(hit.message), question: hit.question } : { message: lead(c.check.message), question: c.check.question };
+    }
+    case "EMPATHIZE_AND_SHRINK":
+      return { message: lead("It's okay to feel stuck here; this topic is tricky for many people, and you're still trying. Let's make it really small."), question: `Just this one thing: ${c.steps[0].charAt(0).toLowerCase()}${c.steps[0].slice(1)}` };
+    case "REDIRECT_TO_THINKING":
+      return { message: lead("I know it's tempting to just ask for the answer. I'd rather help you find it, so you can do the next one on your own."), question: c.steps[0] };
+    default:
+      return undefined;
+  }
+}
+
 function realizeDraftEN(plan: ResponsePlan, ctx: RealizeContext, seed: number): Draft {
   const p = plan.activeProblem;
   const ack = ackFor(plan, ctx, seed);
   const lead = (text: string) => [ack, text].filter(Boolean).join(" ");
   const state = ctx.state;
   const top = ctx.sources[0];
+
+  // Phase 40: a question the integer engine cannot parse (polygons, percentages, rates...) is coached from its topic pack.
+  if (plan.coach && !p && !(plan.strategy === "REVIEW_KEY_IDEAS" && top)) {
+    const coached = realizeCoached(plan, ctx, lead);
+    if (coached) return coached;
+  }
 
   switch (plan.strategy) {
     case "OPEN_PROBLEM":
