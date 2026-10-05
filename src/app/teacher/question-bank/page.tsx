@@ -36,6 +36,7 @@ export default function TeacherQuestionBankPage({
   const [typeFilter, setTypeFilter] = useState<string>("ALL");
   const [difficultyFilter, setDifficultyFilter] = useState<string>("ALL");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [noSkillOnly, setNoSkillOnly] = useState(false);
 
   const handleNav = (path: string) => {
     if (onNavigate) onNavigate(path);
@@ -50,6 +51,7 @@ export default function TeacherQuestionBankPage({
       if (typeFilter !== "ALL") params.append("type", typeFilter);
       if (difficultyFilter !== "ALL") params.append("difficulty", difficultyFilter);
       if (statusFilter !== "ALL") params.append("status", statusFilter);
+      if (noSkillOnly) params.append("noSkill", "true");
 
       const res = await fetch(`/api/questions?${params.toString()}`);
       if (res.ok) {
@@ -65,7 +67,7 @@ export default function TeacherQuestionBankPage({
 
   useEffect(() => {
     loadQuestions();
-  }, [typeFilter, difficultyFilter, statusFilter]);
+  }, [typeFilter, difficultyFilter, statusFilter, noSkillOnly]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -184,6 +186,11 @@ export default function TeacherQuestionBankPage({
             <option value="ARCHIVED">Archived</option>
           </select>
 
+          <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+            <input type="checkbox" data-testid="no-skill-filter" checked={noSkillOnly} onChange={(e) => setNoSkillOnly(e.target.checked)} />
+            Only questions without a skill
+          </label>
+
           <span className="ml-auto text-xs text-slate-500">
             {questions.length} Question{questions.length === 1 ? "" : "s"}
           </span>
@@ -247,9 +254,13 @@ export default function TeacherQuestionBankPage({
                       {q.status}
                     </Badge>
 
-                    {q.skill && (
+                    {q.skill ? (
                       <span className="text-[11px] text-slate-500 font-medium">
                         Skill: {q.skill.title}
+                      </span>
+                    ) : (
+                      <span data-testid="no-skill-badge" title="Answers to this question cannot count towards mastery or recommendations" className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+                        No skill
                       </span>
                     )}
                   </div>

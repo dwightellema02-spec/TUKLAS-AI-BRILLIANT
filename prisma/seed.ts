@@ -241,6 +241,16 @@ export async function seedDatabase() {
     });
   }
 
+  // 8b. Link the lesson to its skills (as the sandbox curriculum does). Without these links nothing the student does inside the
+  // lesson can be tied to a skill, so mastery, difficult-skill analysis and recommendations have no evidence to work with.
+  for (const sk of [skill1, skill2, skill3]) {
+    await prisma.lessonSkill.upsert({
+      where: { lessonId_skillId: { lessonId: lesson.id, skillId: sk.id } },
+      update: {},
+      create: { lessonId: lesson.id, skillId: sk.id },
+    });
+  }
+
   // 9. Create Student Progress Record
   if (studentUser) await prisma.studentProgress.upsert({
     where: {

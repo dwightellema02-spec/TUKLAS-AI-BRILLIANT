@@ -6,7 +6,7 @@ import { MathText } from "@/components/ui/MathText";
 import { ClipboardCheck, Loader2, Plus } from "lucide-react";
 
 interface Asm { id: string; title: string; description?: string; type: string; status: string; itemCount: number; totalPoints: number; timeLimitMinutes?: number; passingScorePercent: number; assignedClassIds?: string[]; createdAt: string }
-interface Q { id: string; prompt: string; type: string; status?: string; difficulty?: string }
+interface Q { id: string; prompt: string; type: string; status?: string; difficulty?: string; skillId?: string | null }
 interface Cls { id: string; name: string }
 
 const TYPES: Array<[string, string]> = [["PRE_TEST", "Pre-test (once only, answers hidden)"], ["POST_TEST", "Post-test (once only, answers hidden)"], ["FORMATIVE", "Quiz (can retake)"], ["SUMMATIVE", "Test (can retake)"], ["DIAGNOSTIC", "Diagnostic (can retake)"], ["PRACTICE", "Practice (can retake)"]];
@@ -146,7 +146,7 @@ export default function TeacherAssessmentsPage({ onNavigate }: { onNavigate?: (p
                 {shown.map((q) => (
                   <li key={q.id} className="flex items-start gap-3 p-3 text-sm">
                     <input type="checkbox" aria-label={`Use question: ${q.prompt}`} checked={q.id in picked} onChange={(e) => setPicked((p) => { const n = { ...p }; if (e.target.checked) n[q.id] = 1; else delete n[q.id]; return n; })} className="mt-1" />
-                    <span className="flex-1"><MathText content={q.prompt} /><span className="block text-[10px] text-slate-400">{q.type.replace("_", " ")}</span></span>
+                    <span className="flex-1"><MathText content={q.prompt} /><span className="block text-[10px] text-slate-400">{q.type.replace("_", " ")}{!q.skillId && <span data-testid="picker-no-skill" className="ml-2 text-amber-700 font-bold" title="Results on this question cannot count towards skill mastery">no skill</span>}</span></span>
                     {q.id in picked && <label className="text-[10px] text-slate-500">pts <input aria-label="Points" value={picked[q.id]} inputMode="decimal" onChange={(e) => setPicked((p) => ({ ...p, [q.id]: Number(e.target.value) || 0 }))} className="w-12 border border-slate-200 rounded px-1 py-0.5 text-xs" /></label>}
                   </li>
                 ))}

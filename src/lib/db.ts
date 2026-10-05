@@ -3700,11 +3700,14 @@ export const dbService = {
     type?: QuestionType;
     search?: string;
     source?: QuestionSource;
+    /** Only questions that are not linked to any skill. */
+    noSkill?: boolean;
   }) {
     try {
       if (hasValidDatabaseUrl) {
         const where: any = {};
         if (filters?.skillId) where.skillId = filters.skillId;
+        if (filters?.noSkill) where.skillId = null;
         if (filters?.lessonId) where.lessonId = filters.lessonId;
         if (filters?.difficulty) where.difficulty = filters.difficulty;
         if (filters?.status) where.status = filters.status;
@@ -3731,6 +3734,7 @@ export const dbService = {
 
     let list = [...fallbackStore.questions];
     if (filters?.skillId) list = list.filter((q) => q.skillId === filters.skillId);
+    if (filters?.noSkill) list = list.filter((q) => !q.skillId);
     if (filters?.lessonId) list = list.filter((q) => q.lessonId === filters.lessonId);
     if (filters?.difficulty) list = list.filter((q) => q.difficulty === filters.difficulty);
     if (filters?.status) list = list.filter((q) => q.status === filters.status);

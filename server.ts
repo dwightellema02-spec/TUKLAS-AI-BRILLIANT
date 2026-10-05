@@ -1396,7 +1396,7 @@ app.get("/api/questions", async (req: Request, res: Response) => {
     if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const isStaff = session && (session.role === "TEACHER" || session.role === "ADMIN");
 
-    const { skillId, lessonId, difficulty, status, type, search, source } = req.query;
+    const { skillId, lessonId, difficulty, status, type, search, source, noSkill } = req.query;
 
     // Students can ONLY view published questions
     const effectiveStatus = isStaff ? (status as any) : "PUBLISHED";
@@ -1409,6 +1409,7 @@ app.get("/api/questions", async (req: Request, res: Response) => {
       type: type as any,
       search: search as string,
       source: source as any,
+      noSkill: isStaff && noSkill === "true",
     });
 
     // If student, redact answers
@@ -1422,6 +1423,26 @@ app.get("/api/questions", async (req: Request, res: Response) => {
     return res.status(500).json({ error: message });
   }
 });
+
+/**
+ * A question's skill decides whether its answers count towards mastery, difficult-skill analysis and recommendations.
+ * An unknown skill id is refused (it would otherwise fail later as a database error); a question attached to a lesson but
+ * given no skill inherits the lesson's first skill; a question with no skill at all is allowed but flagged in the question bank.
+ */
+async function resolveQuestionSkill(skillId: unknown, lessonId: unknown): Promise<{ skillId: string | null; inherited: boolean }> {
+  if (skillId !== undefined && skillId !== null && skillId !== "") {
+    if (typeof skillId !== "string") throw Object.assign(new Error("skillId must be text."), { status: 400 });
+    if (!(await dbService.getSkillById(skillId))) throw Object.assign(new Error("That skill does not exist."), { status: 400 });
+    return { skillId, inherited: false };
+  }
+  if (typeof lessonId === "string" && lessonId) {
+    const lesson: any = await dbService.getLessonById(lessonId);
+    const inherited = lesson?.skills?.[0]?.skillId ?? lesson?.skills?.[0]?.skill?.id ?? lesson?.skillIds?.[0] ?? null;
+    if (inherited) return { skillId: inherited, inherited: true };
+  }
+  return { skillId: null, inherited: false };
+}
+const skillErrorStatus = (e: unknown) => (e && typeof e === "object" && (e as any).status === 400 ? 400 : null);
 
 // Create question (Teacher/Admin only)
 app.post("/api/questions", async (req: Request, res: Response) => {
@@ -1454,10 +1475,11 @@ app.post("/api/questions", async (req: Request, res: Response) => {
     // Attaching a question to a lesson is editing that lesson.
     if (lessonId) await dbService.assertCanEditLesson(lessonId, session.role, session.userId);
 
+    const skill = await resolveQuestionSkill(skillId, lessonId);
     const question = await dbService.createQuestion(
       {
         lessonId,
-        skillId,
+        skillId: skill.skillId ?? undefined,
         type,
         prompt,
         explanation,
@@ -1477,7 +1499,7 @@ app.post("/api/questions", async (req: Request, res: Response) => {
     return res.status(201).json({ data: question });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to create question";
-    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
+    return res.status(skillErrorStatus(error) ?? ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1517,11 +1539,13 @@ app.patch("/api/questions/:id", async (req: Request, res: Response) => {
 
     const { id } = req.params;
     if (!(await requireOwnedQuestion(res, session, id))) return;
+    // a skill that is being set must exist; clearing it (null) is allowed; leaving it out changes nothing
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, "skillId") && req.body.skillId) await resolveQuestionSkill(req.body.skillId, undefined);
     const updated = await dbService.updateQuestion(id, req.body, session.userId);
     return res.json({ data: updated });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to update question";
-    return res.status(500).json({ error: message });
+    return res.status(skillErrorStatus(error) ?? 500).json({ error: message });
   }
 });
 
@@ -1534,11 +1558,13 @@ app.put("/api/questions/:id", async (req: Request, res: Response) => {
 
     const { id } = req.params;
     if (!(await requireOwnedQuestion(res, session, id))) return;
+    // a skill that is being set must exist; clearing it (null) is allowed; leaving it out changes nothing
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, "skillId") && req.body.skillId) await resolveQuestionSkill(req.body.skillId, undefined);
     const updated = await dbService.updateQuestion(id, req.body, session.userId);
     return res.json({ data: updated });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to update question";
-    return res.status(500).json({ error: message });
+    return res.status(skillErrorStatus(error) ?? 500).json({ error: message });
   }
 });
 
