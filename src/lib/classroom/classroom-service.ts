@@ -282,6 +282,7 @@ export const ClassroomService = {
   },
 
   async setAssignmentStatus(actor: Actor, assignmentId: string, status: unknown): Promise<AssignmentRecord> {
+    if (!isStaff(actor)) throw new ClassroomError("Forbidden: Teacher or Administrator access required.", 403); // before any validation
     if (status !== "PUBLISHED" && status !== "ARCHIVED") throw new ClassroomError("Status must be PUBLISHED or ARCHIVED", 400);
     const a = await ClassroomRepo.getAssignment(assignmentId);
     if (!a) throw new ClassroomError("Assignment not found", 404);

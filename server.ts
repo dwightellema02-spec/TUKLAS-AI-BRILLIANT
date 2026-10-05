@@ -65,13 +65,75 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(), geolocation=()");
   if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store"); // API answers can contain personal data
-  if (isProd && !ALLOW_EMBEDDING) {
-    res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  if (isProd) {
+    if (!ALLOW_EMBEDDING) res.setHeader("X-Frame-Options", "DENY");
+    // Scripts only from this site (no inline or eval), so an injected <script> cannot run. Styles allow inline because the
+    // app sets some element styles; images may come from any https site (teacher-supplied pictures, video thumbnails);
+    // videos are embedded from YouTube only. CSP_REPORT_ONLY=true reports violations without blocking.
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: https:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+      "media-src 'self' https:",
+      "frame-src https://www.youtube-nocookie.com https://www.youtube.com",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      ALLOW_EMBEDDING ? "frame-ancestors *" : "frame-ancestors 'none'",
+    ].join("; ");
+    res.setHeader(process.env.CSP_REPORT_ONLY === "true" ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy", csp);
   }
   if (isProd && (req.secure || req.headers["x-forwarded-proto"] === "https")) {
     res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
   }
+  next();
+});
+
+// ---- Rate limits (in-memory, per process) ----
+const rateBuckets = new Map<string, number[]>();
+function rateCheck(key: string, limit: number, windowMs: number): { ok: boolean; retryAfter: number } {
+  const now = Date.now();
+  const hits = (rateBuckets.get(key) ?? []).filter((t) => now - t < windowMs);
+  if (hits.length >= limit) {
+    rateBuckets.set(key, hits);
+    return { ok: false, retryAfter: Math.max(1, Math.ceil((hits[0] + windowMs - now) / 1000)) };
+  }
+  hits.push(now);
+  rateBuckets.set(key, hits);
+  if (rateBuckets.size > 20000) for (const [k, v] of rateBuckets) if (!v.length || now - v[v.length - 1] > windowMs) rateBuckets.delete(k);
+  return { ok: true, retryAfter: 0 };
+}
+/** Returns false (after sending 429) when the key is over its limit. */
+function allowRate(res: Response, key: string, limit: number, windowMs: number): boolean {
+  const r = rateCheck(key, limit, windowMs);
+  if (!r.ok) {
+    res.setHeader("Retry-After", String(r.retryAfter));
+    res.status(429).json({ error: "Too many requests. Please wait a moment and try again." });
+  }
+  return r.ok;
+}
+// A coarse per-address ceiling against scraping and floods. Enabled in production (override with API_RATE_LIMIT_PER_MINUTE; 0 turns it off).
+const API_LIMIT = Number(process.env.API_RATE_LIMIT_PER_MINUTE ?? (isProd ? 1200 : 0));
+app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+  if (!API_LIMIT || req.path === "/health") return next();
+  if (!allowRate(res, `ip:${req.ip ?? "unknown"}`, API_LIMIT, 60_000)) return;
+  return next();
+});
+
+// Internal details (database errors, file paths, stack traces) must not reach the browser: replace them, keep the log.
+const INTERNAL_ERROR = /prisma|invalid `|unique constraint|foreign key|econn|enotfound|etimedout|sqlstate|\bat [\w.<>]+ \(|\/home\/|node_modules|postgres(ql)?:\/\//i;
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const original = res.json.bind(res);
+  res.json = ((body: any) => {
+    if (res.statusCode >= 500 && body && typeof body.error === "string" && INTERNAL_ERROR.test(body.error)) {
+      console.error(`INTERNAL ERROR ${req.method} ${req.path}: ${body.error.slice(0, 500)}`);
+      body = { ...body, error: "Something went wrong on our side. Please try again later." };
+    }
+    return original(body);
+  }) as typeof res.json;
   next();
 });
 
@@ -362,15 +424,14 @@ app.get("/api/lessons", async (req: Request, res: Response) => {
 
 app.get("/api/lessons/:id", async (req: Request, res: Response) => {
   try {
+    const session = getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    }
     const { id } = req.params;
     const lesson = await dbService.getLessonById(id);
     if (!lesson) {
       return res.status(404).json({ error: "Lesson not found" });
-    }
-
-    const session = getSessionFromRequest(req);
-    if (!session) {
-      return res.status(401).json({ error: "Unauthorized: Please sign in." });
     }
     const staff = session.role === "TEACHER" || session.role === "ADMIN";
     // Non-staff roles can only view PUBLISHED lessons
@@ -518,6 +579,9 @@ app.delete("/api/lessons/:id", async (req: Request, res: Response) => {
 
 app.get("/api/youtube/search", async (req: Request, res: Response) => {
   try {
+    const staff = requireStaff(req, res);
+    if (!staff) return;
+    if (!allowRate(res, `yt:${staff.userId}`, 30, 60_000)) return;
     const { query, grade, term, limit } = req.query;
     const response = await YouTubeService.searchVideos({
       query: query as string,
@@ -534,6 +598,9 @@ app.get("/api/youtube/search", async (req: Request, res: Response) => {
 
 app.post("/api/youtube/validate", async (req: Request, res: Response) => {
   try {
+    const staff = requireStaff(req, res);
+    if (!staff) return;
+    if (!allowRate(res, `yt:${staff.userId}`, 30, 60_000)) return;
     const { url } = req.body;
     const result = await YouTubeService.validateAndPreview(url);
     if (!result.isValid) {
@@ -824,6 +891,8 @@ app.post("/api/lessons/:id/resources/:resourceId/generate-questions", async (req
       return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
     }
     const lesson = await dbService.assertCanEditLesson(req.params.id, session.role, session.userId);
+    // Each call can cost money with an external model.
+    if (!allowRate(res, `genq:${session.userId}`, 6, 10 * 60_000)) return;
     const resource = lesson.resources?.find((r: any) => r.id === req.params.resourceId);
     if (!resource) return res.status(404).json({ error: "Resource not found on this lesson." });
     if (resource.extractionStatus !== "EXTRACTED" && resource.extractionStatus !== "TRUNCATED") {
@@ -1305,8 +1374,9 @@ app.post("/api/lessons/:id/reorder-blocks", async (req: Request, res: Response) 
   }
 });
 
-app.get("/api/skills", async (_req: Request, res: Response) => {
+app.get("/api/skills", async (req: Request, res: Response) => {
   try {
+    if (!getSessionFromRequest(req)) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const skills = await dbService.getSkills();
     return res.json({ data: skills });
   } catch (error: unknown) {
@@ -1323,6 +1393,7 @@ app.get("/api/skills", async (_req: Request, res: Response) => {
 app.get("/api/questions", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const isStaff = session && (session.role === "TEACHER" || session.role === "ADMIN");
 
     const { skillId, lessonId, difficulty, status, type, search, source } = req.query;
@@ -1343,9 +1414,9 @@ app.get("/api/questions", async (req: Request, res: Response) => {
     // If student, redact answers
     const payload = isStaff
       ? questions
-      : questions.map((q) => dbService.getQuestionById(q.id, true));
+      : await Promise.all(questions.map((q) => dbService.getQuestionById(q.id, true)));
 
-    return res.json({ data: await Promise.resolve(payload) });
+    return res.json({ data: payload });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to fetch questions";
     return res.status(500).json({ error: message });
@@ -1414,6 +1485,7 @@ app.post("/api/questions", async (req: Request, res: Response) => {
 app.get("/api/questions/:id", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const isStaff = session && (session.role === "TEACHER" || session.role === "ADMIN");
 
     const { id } = req.params;
@@ -1520,6 +1592,7 @@ app.post("/api/questions/:id/status", async (req: Request, res: Response) => {
 app.get("/api/practice-sets", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const isStaff = session && (session.role === "TEACHER" || session.role === "ADMIN");
 
     const { lessonId, skillId, status } = req.query;
@@ -1575,6 +1648,7 @@ app.post("/api/practice-sets", async (req: Request, res: Response) => {
 app.get("/api/practice-sets/:id", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const isStaff = session && (session.role === "TEACHER" || session.role === "ADMIN");
 
     const { id } = req.params;
@@ -1897,8 +1971,9 @@ app.get("/api/ai/conversations/:id", async (req: Request, res: Response) => {
 });
 
 // Get AI Tutor Teacher Settings
-app.get("/api/ai/settings", async (_req: Request, res: Response) => {
+app.get("/api/ai/settings", async (req: Request, res: Response) => {
   try {
+    if (!getSessionFromRequest(req)) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const settings = await dbService.getTeacherAISettings();
     return res.json({ data: settings });
   } catch (error: unknown) {
@@ -1960,6 +2035,11 @@ app.get("/api/student/insights/:id", async (req: Request, res: Response) => {
     const insight = await dbService.getMistakeAnalysisById(id, session.userId, session.role);
     if (!insight) {
       return res.status(404).json({ error: "Insight not found or access denied." });
+    }
+    // A teacher may open an insight only for a student in one of their own active classes (administrators: any).
+    if (session.role === "TEACHER" && (insight as any).studentId !== session.userId) {
+      const ok = await TeacherService.isTeacherAuthorizedForStudent(session.userId, (insight as any).studentId, session.role);
+      if (!ok) return res.status(404).json({ error: "Insight not found or access denied." });
     }
 
     return res.json({ data: insight });

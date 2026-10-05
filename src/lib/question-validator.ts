@@ -380,54 +380,49 @@ export class QuestionValidator {
   }
 
   /**
-   * Helper to redact sensitive answers before sending questions to students
+   * What a student may receive for a question BEFORE answering. This is an allowlist: a field that is not listed here
+   * (including any answer-bearing field added in future) is never sent. The answer, explanation and feedback texts
+   * come back from the server only after an answer is submitted.
    */
+  private static readonly STUDENT_QUESTION_FIELDS = ["id", "lessonId", "skillId", "type", "prompt", "difficulty", "status", "allowRetry", "maxAttempts"];
+
   public static redactQuestionForStudent(question: any): any {
     if (!question) return question;
-    const cloned = { ...question };
     let qData: any = {};
-    if (typeof cloned.questionData === "string") {
+    if (typeof question.questionData === "string") {
       try {
-        qData = JSON.parse(cloned.questionData);
+        const parsed = JSON.parse(question.questionData);
+        qData = parsed && typeof parsed === "object" ? parsed : {};
       } catch {
         qData = {};
       }
-    } else if (cloned.questionData) {
-      qData = { ...cloned.questionData };
+    } else if (question.questionData && typeof question.questionData === "object") {
+      qData = question.questionData;
     }
 
-    // Strip answer keys from qData
-    const sanitizedData = { ...qData };
-    delete sanitizedData.correctAnswer;
-    delete sanitizedData.acceptableAnswers;
-
-    // For matching, provide left and shuffled rights without mapping
-    if (Array.isArray(sanitizedData.matchingPairs)) {
-      sanitizedData.leftItems = sanitizedData.matchingPairs.map((p: any) => p.left);
-      sanitizedData.rightOptions = [...sanitizedData.matchingPairs.map((p: any) => p.right)].sort(
-        () => Math.random() - 0.5
-      );
-      delete sanitizedData.matchingPairs;
+    const safe: Record<string, unknown> = {};
+    // Multiple choice: the options as id + text only (never a "correct" marker)
+    if (Array.isArray(qData.choices)) {
+      safe.choices = qData.choices.map((c: any) => ({ id: c?.id, text: c?.text }));
+    }
+    // Matching: the left items and the right options in random order, without the pairing
+    if (Array.isArray(qData.matchingPairs)) {
+      safe.leftItems = qData.matchingPairs.map((p: any) => p?.left);
+      safe.rightOptions = [...qData.matchingPairs.map((p: any) => p?.right)].sort(() => Math.random() - 0.5);
+    }
+    // Ordering: the items in random order
+    if (Array.isArray(qData.orderingItems)) {
+      safe.itemsToOrder = [...qData.orderingItems].sort(() => Math.random() - 0.5);
+    }
+    for (const key of ["unit", "placeholder", "instructions"]) {
+      if (typeof qData[key] === "string") safe[key] = qData[key];
     }
 
-    // For ordering, provide initial shuffled items
-    if (Array.isArray(sanitizedData.orderingItems)) {
-      sanitizedData.itemsToOrder = [...sanitizedData.orderingItems].sort(
-        () => Math.random() - 0.5
-      );
-      delete sanitizedData.orderingItems;
+    const out: Record<string, unknown> = {};
+    for (const field of QuestionValidator.STUDENT_QUESTION_FIELDS) {
+      if (question[field] !== undefined) out[field] = question[field];
     }
-
-    // Hide answers from choices
-    if (Array.isArray(sanitizedData.choices)) {
-      sanitizedData.choices = sanitizedData.choices.map((c: any) => ({
-        id: c.id,
-        text: c.text,
-      }));
-    }
-
-    cloned.questionData = JSON.stringify(sanitizedData);
-    delete cloned.explanation;
-    return cloned;
+    out.questionData = JSON.stringify(safe);
+    return out;
   }
 }
