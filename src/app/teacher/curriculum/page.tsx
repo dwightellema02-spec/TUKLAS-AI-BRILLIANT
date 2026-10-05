@@ -53,8 +53,10 @@ export default function TeacherCurriculumPage({ onNavigate }: TeacherCurriculumP
 
   const currentSubject = curriculum[0];
   const currentGrade = currentSubject?.grades?.[0];
-  const currentTerm = currentGrade?.terms?.[0];
-  const units = currentTerm?.units || [];
+  // every term of the grade, not only the first: a unit is shown with the term it belongs to
+  const terms: any[] = currentGrade?.terms || [];
+  const currentTerm = terms[0];
+  const units: any[] = terms.flatMap((t: any) => (t.units || []).map((u: any) => ({ ...u, termName: t.name })));
   const selectedUnit = units.find((u: any) => u.id === selectedUnitId) || units[0];
 
   return (
@@ -113,7 +115,7 @@ export default function TeacherCurriculumPage({ onNavigate }: TeacherCurriculumP
           </Badge>
           <ChevronRight className="w-4 h-4 text-slate-300" />
           <Badge variant="info" className="text-xs py-1">
-            Term: {currentTerm?.name || "Term 1"}
+            {terms.length > 1 ? "Terms" : "Term"}: {terms.map((t: any) => t.name).join(", ") || "Term 1"}
           </Badge>
         </div>
 
@@ -122,7 +124,7 @@ export default function TeacherCurriculumPage({ onNavigate }: TeacherCurriculumP
           {/* Left Column: Units List */}
           <div className="space-y-3">
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              Curriculum Units (Term 1)
+              Curriculum Units
             </h2>
 
             {loading ? (
@@ -142,7 +144,7 @@ export default function TeacherCurriculumPage({ onNavigate }: TeacherCurriculumP
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700">
-                        Unit {unit.sequenceOrder}
+                        {unit.termName} · Unit {unit.sequenceOrder}
                       </span>
                       <span className="text-[11px] text-slate-400">
                         {unit.lessons?.length || 0} Lessons

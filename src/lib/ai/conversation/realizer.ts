@@ -112,6 +112,13 @@ function ackFor(plan: ResponsePlan, ctx: RealizeContext, seed: number): string {
 
 const lessonName = (ctx: RealizeContext) => ctx.skillTitle || ctx.lessonTitle || "this lesson";
 
+/**
+ * The built-in fallbacks below were written for integer arithmetic (number lines, signs, absolute value). They may only be used when the
+ * conversation really is about integers: a parsed integer problem, or an integer lesson/skill. On any other topic (polygons, percentages,
+ * rates...) they would teach the wrong thing, so the neutral wording is used instead.
+ */
+const integerTopic = (ctx: RealizeContext, p?: ParsedProblem) => !!p || /integer|negative|absolute|opposite|number line/i.test(`${ctx.skillTitle ?? ""} ${ctx.lessonTitle ?? ""}`);
+
 function decomposeQuestions(p: ParsedProblem): string[] {
   const k = kindOf(p);
   if (k === "ABS") {
@@ -210,7 +217,7 @@ function firstStepQuestion(p?: ParsedProblem): string {
 }
 
 function smallestStep(p?: ParsedProblem): string {
-  if (!p) return "Just this one thing: can you name any negative number?";
+  if (!p) return "Just this one thing: what numbers or facts does the problem give you?";
   switch (kindOf(p)) {
     case "EQUATION": return `Just this one thing: is ${p.variable ?? "x"} being added to or subtracted from something?`;
     case "COMPARE": return `Just this one thing: on a number line, does ${wrap(p.a)} sit to the left or to the right of 0?`;
@@ -269,6 +276,12 @@ function realizeDraftEN(plan: ResponsePlan, ctx: RealizeContext, seed: number): 
         const pq = priorQuestion(p);
         return { message: lead(pq.message), question: pq.question };
       }
+      if (!integerTopic(ctx, p)) {
+        return {
+          message: lead(`Let's go back to the basics of ${lessonName(ctx)}.`),
+          question: pickVariant(["What does the problem tell you, and what is it asking you to find?", "Which idea from the lesson do you think applies here, and why?"], seed, (q) => state.lastTutorQuestion === q),
+        };
+      }
       const variants: Draft[] = [
         { message: lead("Let's go back to a basic idea. A negative number is a number to the left of zero on the number line, and the absolute value of a number is its distance from zero."), question: p ? `What is the absolute value of ${wrap(p.a)}, and what does that tell us about where it sits?` : "In your own words, what does the absolute value of a number tell us?" },
         { message: lead("Before we calculate, let's check one building block: the sign of a number tells us its direction from zero, and its size tells us how far."), question: p ? `For ${wrap(p.b)}, what is its direction and what is its size?` : "Can you give me a negative number and say what makes it negative?" },
@@ -308,6 +321,7 @@ function realizeDraftEN(plan: ResponsePlan, ctx: RealizeContext, seed: number): 
     }
     case "REAL_CONTEXT": {
       const st = p ? story(p) : undefined;
+      if (!st && !integerTopic(ctx, p)) return { message: lead("Try connecting this to everyday life, such as money, travel or measuring something."), question: "Can you think of a real situation where you would use this idea?" };
       if (!st) return { message: lead("Think of temperatures: above zero is warm, below zero is freezing, and combining them is about which one is bigger."), question: "If it is 5 degrees below zero and warms up by 3 degrees, is it still below zero?" };
       return { message: lead(st.text), question: st.question };
     }
@@ -376,6 +390,7 @@ function realizeDraftEN(plan: ResponsePlan, ctx: RealizeContext, seed: number): 
         const excerpt = bestSentences(top.text, plan.studentQuote ?? "", 2, 320);
         return { message: lead(`Here is the key idea from ${top.origin === "TEACHER_NOTE" ? "your teacher's note" : `"${top.title}"`} (${top.sectionLabel}): "${excerpt}"`), question: "In your own words, what is the main idea, and where might you use it?", citedSourceIds: [top.sourceId] };
       }
+      if (!integerTopic(ctx, p)) return { message: lead(`Let's recap ${lessonName(ctx)}.`), question: "In your own words, what is the main idea, and which part feels least clear to you?" };
       return { message: lead(`Let's recap ${lessonName(ctx)}: numbers have a size and a sign, and the sign tells us direction from zero.`), question: "Which part of that feels least clear to you?" };
     }
     case "REDIRECT_TO_THINKING":

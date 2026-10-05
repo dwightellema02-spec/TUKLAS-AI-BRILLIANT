@@ -55,7 +55,7 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
         if (cRes.ok) {
           const cData = await cRes.json();
           setCurriculum(cData.data || []);
-          const firstUnit = cData.data?.[0]?.grades?.[0]?.terms?.[0]?.units?.[0];
+          const firstUnit = (cData.data?.[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? [])[0];
           if (firstUnit) setSelectedUnitId(firstUnit.id);
         }
 
@@ -124,7 +124,7 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
     }
   };
 
-  const units = curriculum[0]?.grades?.[0]?.terms?.[0]?.units || [];
+  const units = (curriculum[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? []);
 
   return (
     <div className="py-8 sm:py-12 bg-slate-50 min-h-[calc(100vh-140px)]">

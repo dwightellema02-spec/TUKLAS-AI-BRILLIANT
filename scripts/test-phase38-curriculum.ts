@@ -125,6 +125,10 @@ for (const l of GRADE7_TERM1_LESSONS) {
     assert(url.startsWith("data:image/svg+xml") && !!(b.metadata as any)?.alt, `${l.key}: image "${b.title}" is an inline SVG with alt text`);
     const svg = decodeURIComponent(url.split(",")[1] ?? "");
     assert(/<svg[\s\S]*<\/svg>\s*$/.test(svg) && !/<script|onload=|javascript:/i.test(svg), `${l.key}: SVG is well-formed and has no script`);
+    // strict XML: text nodes must not contain a raw "<" or a bare "&" (an unescaped "<" made one diagram a broken image in the browser)
+    const texts = [...svg.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g)].map((m) => m[1]);
+    assert(texts.length > 0 && texts.every((x) => !/[<>]/.test(x) && !/&(?!amp;|lt;|gt;|quot;|#\d+;)/.test(x)), `${l.key}: SVG text is XML-escaped`);
+    assert(((svg.match(/<(?!\/|!)[a-z]/gi) ?? []).length) === ((svg.match(/<\/[a-z]+>/g) ?? []).length + (svg.match(/\/>/g) ?? []).length), `${l.key}: every SVG element is closed`);
   }
   const all = l.blocks.map((b) => b.content).join("\n");
   assert(((all.match(/\$\$/g) ?? []).length % 2) === 0, `${l.key}: display math delimiters balanced`);

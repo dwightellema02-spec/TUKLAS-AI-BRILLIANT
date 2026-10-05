@@ -123,9 +123,31 @@ async function main() {
       assert(done.status === 200, `  ${l.key}: practice completes`);
     }
     assert(allCorrect && totalAnswered > 60, `Every question, answered with the intended answer, is graded correct by the server (${totalAnswered})`);
+    // the built-in tutor must not teach integer facts on polygon / percent / rate questions (it did: "numbers have a size and a sign...")
+    const INTEGER_TALK = /number line|negative number|absolute value|temperature|direction from zero|size and a sign|below zero/i;
+    let leaks = 0, tutorReplies = 0;
+    for (const l of GRADE7_TERM1_LESSONS) {
+      const set = sets.find((s) => s.title === `Practice: ${l.title}`);
+      const st = (await api("POST", "/api/practice/start", S, { practiceSetId: set.id })).json.data;
+      const q = (st.questions[0].question ?? st.questions[0]);
+      let conv: string | undefined;
+      for (const [lvl, text] of [[1, "I need a hint"], [2, "I still don't get it"], [3, "Just tell me the answer"], [1, "Can you explain this lesson again?"], [1, "Give me a real-life example"], [1, "I feel stuck"], [1, "Is my answer right?"]] as Array<[number, string]>) {
+        const r = await api("POST", "/api/ai/tutor", S, { conversationId: conv, practiceSessionId: st.id, questionId: q.id ?? q.questionId, studentQuery: text, studentAnswer: text === "Is my answer right?" ? "3" : undefined, helpLevel: lvl });
+        if (r.status === 429) break;
+        const d = r.json.data ?? {}; conv = d.conversationId ?? conv;
+        const msg = JSON.stringify(d.message ?? d.response ?? d);
+        tutorReplies++;
+        if (INTEGER_TALK.test(msg)) { leaks++; console.error(`   integer talk on ${l.key} after "${text}": ${msg.slice(0, 200)}`); }
+      }
+    }
+    assert(tutorReplies >= 12 && leaks === 0, `The built-in tutor never teaches integer facts on Term 1 topics (${tutorReplies} replies, ${leaks} off-topic)`);
     const prog = await db.studentProgress.count();
     assert(prog >= 1, `Practice produced skill progress rows (${prog})`);
     assert((await api("GET", "/api/curriculum", admin)).status === 200, "Curriculum endpoint works for staff");
+    const br = spawnSync("node", ["scripts/test-phase38-browser.mjs"], { env: { ...env, BASE_URL: base, ADMIN_EMAIL: adminEmail, ADMIN_PASSWORD: adminPassword }, encoding: "utf-8", maxBuffer: 20 * 1024 * 1024 });
+    process.stdout.write((br.stdout || "").split("\n").filter((l) => /^(PASS|FAIL)|ALL BROWSER|CHECK\(S\)/.test(l)).map((l) => "  " + l).join("\n") + "\n");
+    if (br.status !== 0) console.error((br.stderr || "").slice(-400));
+    assert(br.status === 0, "Browser check: lessons render (diagrams, math, phone width), learning path and teacher screens show the whole course");
   } finally {
     if (server?.pid) { try { process.kill(-server.pid, "SIGKILL"); } catch { /* */ } }
     await db.$disconnect();

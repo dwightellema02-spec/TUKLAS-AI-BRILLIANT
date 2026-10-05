@@ -58,9 +58,9 @@ export default function TeacherUnitCurriculumPage({
         setCurriculum(cJson.data || []);
 
         // Find current unit
-        const foundUnit = cJson.data?.[0]?.grades?.[0]?.terms?.[0]?.units?.find(
+        const foundUnit = (cJson.data?.[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? []).find(
           (u: any) => u.id === unitId
-        ) || cJson.data?.[0]?.grades?.[0]?.terms?.[0]?.units?.[0];
+        ) || (cJson.data?.[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? [])[0];
 
         if (foundUnit && foundUnit.lessons) {
           // Sort by sequenceOrder
@@ -181,8 +181,8 @@ export default function TeacherUnitCurriculumPage({
   };
 
   const currentUnit =
-    curriculum?.[0]?.grades?.[0]?.terms?.[0]?.units?.find((u: any) => u.id === unitId) ||
-    curriculum?.[0]?.grades?.[0]?.terms?.[0]?.units?.[0];
+    (curriculum?.[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? []).find((u: any) => u.id === unitId) ||
+    (curriculum?.[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? [])[0];
 
   return (
     <div className="py-8 sm:py-12 bg-slate-50 min-h-[calc(100vh-140px)]">

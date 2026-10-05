@@ -46,6 +46,7 @@
     "test:phase36:pg": "tsx scripts/test-phase36-prisma.ts",
     "test:phase37": "AI_PROVIDER=local tsx scripts/test-phase37-skills.ts",
     "test:phase38": "tsx scripts/test-phase38-curriculum.ts",
+    "test:phase38:browser": "node scripts/test-phase38-browser.mjs",
     "test:phase38:pg": "tsx scripts/test-phase38-prisma.ts",
     "test:phase37:pg": "tsx scripts/test-phase37-prisma.ts"
   },

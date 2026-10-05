@@ -34,6 +34,21 @@ The PostgreSQL run found the lesson-ordering bug above (a student could not leav
 * **Only Weeks 1–6.** Weeks 7–10 (rational numbers, roots) and Terms 2–3 are not loaded. After Week 6 a student reaches the integers lesson (Term 2) next.
 * Lessons are strictly sequential (existing platform behaviour): a student cannot open Week 4 until Week 3 is completed, even if the class is ahead. There is no teacher override yet.
 * The learning-path header shows the term of the first lesson ("Term 1") even when the path continues into Term 2.
-* **The AI tutor's deterministic answer-checker only understands integer arithmetic.** For polygon-angle, percent and rate problems the tutor still guides, but it cannot independently verify a student's numeric answer in these topics. Practice and checkpoint grading (server-side) are unaffected.
+* **The built-in tutor's coaching is still integer-centred.** Its right/wrong verdict on a practice question comes from the question's stored answer key and is correct on every seeded numeric practice question (tested both ways). But its hints are generic ("let's break it into small steps") and carry no polygon, percent or rate content; real topic-aware coaching is not built.
 * The in-memory sandbox (no database) keeps its own small demo curriculum; this content is for the PostgreSQL deployment.
 * Nothing here was used by real students. Docker image build and live Gemini remain unverified (see earlier phases).
+
+## Debugging pass (after the first Phase 38 commit)
+Opening the lessons in a real browser (student on a 390px phone, teacher on a laptop) and probing the tutor found defects the first round of tests did not:
+
+| Defect | Fix | Guard |
+|---|---|---|
+| The convex / non-convex diagram was a **broken image** (an unescaped `<` in its SVG text made the picture invalid); two other diagrams had clipped labels; the polygon names were ~6px on a phone | Text is XML-escaped; long labels wrap; polygons laid out 3×2 with larger labels | Content test now checks SVG text is escaped and elements closed; browser test loads every image |
+| React "`<div>` cannot be a descendant of `<p>`" warning on every image caption (and two assessment-result lines) | `<p>` → `<div>` | Browser test fails on any page error / React warning (mutation-checked: putting the bug back fails it) |
+| The **Term 2 integers unit was invisible to teachers**: the curriculum explorer, the unit page and the new-lesson form only read the first term (the unit page silently showed Term 1's first unit instead); terms/units had no defined order | All three read every term; the API orders terms and units | Browser test |
+| Learning-path header named only the first unit ("Polygons … 1 of 7 lessons") and numbered the integers lesson "Lesson 1" | Header names the course ("Term 1 and Term 2"); lessons are numbered by place in the course | Browser test |
+| The built-in tutor answered "I feel stuck" / recap / real-life requests on polygon, percent and rate questions with **integer facts** ("the sign of a number tells us its direction from zero") | Integer-specific fallbacks are used only for integer problems or lessons; neutral wording otherwise | PostgreSQL test sends 7 help requests per lesson and fails on integer talk (mutation-checked: fails without the fix, 3 of 6 lessons) |
+
+Also checked and fine: all 14 Week 1 sections render (21 formulas, no KaTeX errors, no sideways scroll at 390px); checkpoints show feedback and are graded server-side; lesson sessions persist; the learning path unlocks Week 2 after Week 1 and states why later lessons are locked; the tutor's verdict is right on all 53 numeric practice questions, for a correct and a wrong answer.
+
+Not fixed (decision needed): lessons are strictly sequential with no teacher override.

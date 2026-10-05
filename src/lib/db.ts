@@ -1829,8 +1829,10 @@ export const dbService = {
             grades: {
               include: {
                 terms: {
+                  orderBy: { termNumber: "asc" },
                   include: {
                     units: {
+                      orderBy: { sequenceOrder: "asc" },
                       include: {
                         lessons: {
                           orderBy: { sequenceOrder: "asc" },
@@ -2183,13 +2185,20 @@ export const dbService = {
     const skillRows = await prisma.skill.findMany({ include: { prerequisites: { select: { prerequisiteSkillId: true } } } });
     const unit = rows[0]?.unit ?? (await prisma.unit.findFirst({ orderBy: { sequenceOrder: "asc" }, include: { term: { include: { grade: { include: { subject: true } } } } } }));
 
+    // the path can span several units and terms: name the whole course then, not just the unit of the first lesson
+    const unitIds = new Set(rows.map((r) => r.unitId));
+    const termNames = [...new Map(rows.map((r) => [r.unit.term.termNumber, r.unit.term.name] as const)).entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1]);
+    const multi = unitIds.size > 1;
     return {
       subject: unit?.term.grade.subject.name ?? "",
       grade: unit?.term.grade.name ?? "",
-      term: unit?.term.name ?? "",
-      unit: { id: unit?.id ?? "", title: unit?.title ?? "", description: unit?.description ?? null },
-      lessons: rows.map((l): PathLesson => ({
-        id: l.id, title: l.title, description: l.description, sequenceOrder: l.sequenceOrder,
+      term: multi ? termNames.join(" and ") : unit?.term.name ?? "",
+      unit: multi
+        ? { id: unit?.id ?? "", title: `${unit?.term.grade.subject.name ?? ""} ${unit?.term.grade.name ?? ""}`.trim(), description: `${unitIds.size} units, in course order.` }
+        : { id: unit?.id ?? "", title: unit?.title ?? "", description: unit?.description ?? null },
+      lessons: rows.map((l, i): PathLesson => ({
+        // numbered by place in the course, not within its unit (the integers lesson is not "Lesson 1")
+        id: l.id, title: l.title, description: l.description, sequenceOrder: i + 1,
         estimatedMinutes: l.estimatedMinutes, status: l.status, prerequisiteLessonId: l.prerequisiteLessonId,
         skillIds: l.skills.map((x) => x.skillId), contentBlockCount: l._count.contentBlocks, resourceCount: l._count.resources,
       })),

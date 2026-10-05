@@ -201,9 +201,9 @@ export default function StudentAssessmentPage({ assessmentId, onNavigate }: { as
         <ol className="mt-5 space-y-3">
           {r.responses.map((x, i) => (
             <li key={x.id} className="border border-slate-100 rounded-xl p-3 text-sm">
-              <p className="flex items-start gap-2">{x.isCorrect ? <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" /> : <XCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />}<span><b>{i + 1}.</b> <MathText content={x.prompt} /></span></p>
+              <div className="flex items-start gap-2">{x.isCorrect ? <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" /> : <XCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />}<span><b>{i + 1}.</b> <MathText content={x.prompt} /></span></div>
               <p className="text-xs text-slate-600 mt-1 ml-6">Your answer: {x.studentAnswer || "(blank)"}{!x.isCorrect && x.correctAnswer ? ` · Correct: ${x.correctAnswer}` : ""}</p>
-              {x.feedbackGiven && <p className="text-xs text-slate-500 mt-1 ml-6"><MathText content={x.feedbackGiven} /></p>}
+              {x.feedbackGiven && <div className="text-xs text-slate-500 mt-1 ml-6"><MathText content={x.feedbackGiven} /></div>}
             </li>
           ))}
         </ol>
