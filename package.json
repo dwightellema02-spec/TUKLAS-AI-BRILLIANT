@@ -30,7 +30,9 @@
     "test:phase28": "AI_PROVIDER=local tsx scripts/test-phase28-ownership.ts",
     "test:phase28:pg": "tsx scripts/test-phase28-prisma.ts",
     "test:phase29": "AI_PROVIDER=local tsx scripts/test-phase29-research.ts",
-    "test:phase29:pg": "tsx scripts/test-phase29-prisma.ts"
+    "test:phase29:pg": "tsx scripts/test-phase29-prisma.ts",
+    "test:phase30": "AI_PROVIDER=local tsx scripts/test-phase30-sessions.ts",
+    "test:phase30:pg": "tsx scripts/test-phase30-prisma.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts",

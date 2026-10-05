@@ -38,14 +38,9 @@ export async function authFetch(input: RequestInfo | URL, init?: RequestInit): P
     modifiedInit.credentials = "include";
   }
   if (typeof window !== "undefined") {
-    const token = localStorage.getItem("tuklas_session_token");
-    if (token) {
-      const headers = new Headers(modifiedInit.headers || {});
-      if (!headers.has("Authorization")) {
-        headers.set("Authorization", `Bearer ${token}`);
-      }
-      modifiedInit.headers = headers;
-    }
+    // The session lives in an HttpOnly cookie. A token is deliberately NOT kept in localStorage, where any injected
+    // script could read it. (Remove a leftover from older versions.)
+    try { localStorage.removeItem("tuklas_session_token"); } catch { /* storage unavailable */ }
   }
   return fetch(input, modifiedInit);
 }
@@ -104,10 +99,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { success: false, error: data.error || "Login failed" };
       }
 
-      if (data.token && typeof window !== "undefined") {
-        localStorage.setItem("tuklas_session_token", data.token);
-      }
-
       setUser(data.user);
       return { success: true, user: data.user };
     } catch (err: unknown) {
@@ -131,10 +122,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const data = await res.json();
       if (!res.ok) {
         return { success: false, error: data.error || "Registration failed" };
-      }
-
-      if (data.token && typeof window !== "undefined") {
-        localStorage.setItem("tuklas_session_token", data.token);
       }
 
       setUser(data.user);

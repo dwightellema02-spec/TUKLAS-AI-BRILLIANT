@@ -266,6 +266,8 @@ export interface SeedDataStore {
     passwordHash: string;
     role: UserRole;
     gradeLevel?: number;
+    sessionVersion?: number;
+    disabledAt?: Date | string | null;
     createdAt: Date;
     updatedAt: Date;
   }>;
@@ -1780,6 +1782,8 @@ if (useInMemoryAccounts) loadPersistedUsers();
 // UNIFIED DATA REPOSITORY API (Prisma with Safe Fallback)
 // -------------------------------------------------------------
 
+const memoryAuditLog: Array<{ id: string; actorId: string | null; action: string; targetType: string | null; targetId: string | null; detail: string | null; ip: string | null; createdAt: Date }> = [];
+
 export const dbService = {
   /**
    * Check live database connection status safely
@@ -2843,7 +2847,7 @@ export const dbService = {
   async listUsers(opts: { role?: UserRole; limit?: number; offset?: number } = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
     const offset = Math.max(opts.offset ?? 0, 0);
-    const strip = (u: any) => ({ id: u.id, email: u.email, name: u.name, role: u.role, gradeLevel: u.gradeLevel ?? null, createdAt: u.createdAt });
+    const strip = (u: any) => ({ id: u.id, email: u.email, name: u.name, role: u.role, gradeLevel: u.gradeLevel ?? null, disabled: !!u.disabledAt, createdAt: u.createdAt });
     if (!useInMemoryAccounts) {
       const [rows, total] = await Promise.all([
         prisma.user.findMany({ where: opts.role ? { role: opts.role } : {}, orderBy: { createdAt: "desc" }, skip: offset, take: limit }),
@@ -2855,17 +2859,103 @@ export const dbService = {
     return { users: all.slice(offset, offset + limit).map(strip), total: all.length };
   },
 
+  /** Changes the password AND revokes every session issued before (sessionVersion + 1). */
   async updateUserPassword(userId: string, passwordHash: string) {
     if (!useInMemoryAccounts) {
-      const res = await prisma.user.updateMany({ where: { id: userId }, data: { passwordHash } });
+      const res = await prisma.user.updateMany({ where: { id: userId }, data: { passwordHash, sessionVersion: { increment: 1 } } });
       return res.count === 1;
     }
     const u = fallbackStore.users.find((x) => x.id === userId);
     if (!u) return false;
     u.passwordHash = passwordHash;
+    u.sessionVersion = (u.sessionVersion ?? 0) + 1;
     u.updatedAt = new Date();
     savePersistedUsers();
     return true;
+  },
+
+  /** What a session token must still match to be honoured: the account exists, is enabled, and the version is current. */
+  async getAuthState(userId: string) {
+    const u: any = !useInMemoryAccounts
+      ? await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, name: true, role: true, sessionVersion: true, disabledAt: true } })
+      : fallbackStore.users.find((x) => x.id === userId);
+    if (!u) return null;
+    return { id: u.id as string, email: u.email as string, name: u.name as string, role: u.role as UserRole, sessionVersion: (u.sessionVersion ?? 0) as number, disabled: !!u.disabledAt };
+  },
+
+  /** Revokes every session token issued so far for this user. */
+  async revokeSessions(userId: string) {
+    if (!useInMemoryAccounts) {
+      return (await prisma.user.updateMany({ where: { id: userId }, data: { sessionVersion: { increment: 1 } } })).count === 1;
+    }
+    const u = fallbackStore.users.find((x) => x.id === userId);
+    if (!u) return false;
+    u.sessionVersion = (u.sessionVersion ?? 0) + 1;
+    savePersistedUsers();
+    return true;
+  },
+
+  /** Disabling also revokes existing sessions; enabling does not bring them back. */
+  async setUserDisabled(userId: string, disabled: boolean) {
+    if (!useInMemoryAccounts) {
+      return (await prisma.user.updateMany({ where: { id: userId }, data: { disabledAt: disabled ? new Date() : null, sessionVersion: { increment: 1 } } })).count === 1;
+    }
+    const u = fallbackStore.users.find((x) => x.id === userId);
+    if (!u) return false;
+    u.disabledAt = disabled ? new Date() : null;
+    u.sessionVersion = (u.sessionVersion ?? 0) + 1;
+    u.updatedAt = new Date();
+    savePersistedUsers();
+    return true;
+  },
+
+  async setUserRole(userId: string, role: UserRole) {
+    if (!useInMemoryAccounts) {
+      return (await prisma.user.updateMany({ where: { id: userId }, data: { role, sessionVersion: { increment: 1 } } })).count === 1;
+    }
+    const u = fallbackStore.users.find((x) => x.id === userId);
+    if (!u) return false;
+    u.role = role;
+    u.sessionVersion = (u.sessionVersion ?? 0) + 1;
+    u.updatedAt = new Date();
+    savePersistedUsers();
+    return true;
+  },
+
+  async countActiveAdmins() {
+    if (!useInMemoryAccounts) return prisma.user.count({ where: { role: "ADMIN", disabledAt: null } });
+    return fallbackStore.users.filter((u) => u.role === "ADMIN" && !u.disabledAt).length;
+  },
+
+  /** Append-only record of security-relevant actions. Never put secrets in `detail`. */
+  async recordAudit(entry: { actorId?: string | null; action: string; targetType?: string; targetId?: string; detail?: Record<string, unknown>; ip?: string }) {
+    const row = {
+      id: `aud_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      actorId: entry.actorId ?? null, action: entry.action, targetType: entry.targetType ?? null, targetId: entry.targetId ?? null,
+      detail: entry.detail ? JSON.stringify(entry.detail).slice(0, 1000) : null, ip: entry.ip ?? null, createdAt: new Date(),
+    };
+    console.info(`AUDIT ${row.action} actor=${row.actorId ?? "-"} target=${row.targetType ?? "-"}:${row.targetId ?? "-"}`);
+    if (hasValidDatabaseUrl) {
+      await (prisma as any).auditLog.create({ data: { actorId: row.actorId, action: row.action, targetType: row.targetType, targetId: row.targetId, detail: row.detail, ip: row.ip } });
+      return;
+    }
+    memoryAuditLog.push(row);
+    if (memoryAuditLog.length > 2000) memoryAuditLog.shift();
+  },
+
+  async listAudit(opts: { limit?: number; offset?: number; action?: string } = {}) {
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    if (hasValidDatabaseUrl) {
+      const where = opts.action ? { action: { startsWith: opts.action } } : {};
+      const [rows, total] = await Promise.all([
+        (prisma as any).auditLog.findMany({ where, orderBy: { createdAt: "desc" }, skip: offset, take: limit }),
+        (prisma as any).auditLog.count({ where }),
+      ]);
+      return { entries: rows, total };
+    }
+    const all = memoryAuditLog.filter((e) => !opts.action || e.action.startsWith(opts.action)).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return { entries: all.slice(offset, offset + limit), total: all.length };
   },
 
 

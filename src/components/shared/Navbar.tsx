@@ -119,9 +119,14 @@ export function Navbar({ currentPath = "/", onNavigate }: NavbarProps) {
                 <div className="flex items-center gap-2.5 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-1.5">
                   <div className="flex items-center gap-1.5">
                     {getRoleIcon()}
-                    <span className="text-xs font-semibold text-slate-800 max-w-[120px] truncate">
+                    <a
+                      href="/account"
+                      onClick={(e) => handleLinkClick(e, "/account")}
+                      title="My account"
+                      className="text-xs font-semibold text-slate-800 max-w-[120px] truncate hover:underline"
+                    >
                       {user.name}
-                    </span>
+                    </a>
                   </div>
                   <Badge variant="secondary" className="text-[10px] py-0">
                     {user.role}
@@ -180,7 +185,7 @@ export function Navbar({ currentPath = "/", onNavigate }: NavbarProps) {
             {user ? (
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
                 <div>
-                  <p className="text-xs font-semibold text-slate-900">{user.name}</p>
+                  <a href="/account" onClick={(e) => handleLinkClick(e, "/account")} className="text-xs font-semibold text-slate-900 hover:underline">{user.name}</a>
                   <p className="text-[11px] text-slate-500">{user.email}</p>
                 </div>
                 <div className="flex items-center gap-2">

@@ -27,7 +27,8 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [adminData, setAdminData] = useState<any>(null);
 
-  const [accounts, setAccounts] = useState<Array<{ id: string; name: string; email: string; role: string }>>([]);
+  const [accounts, setAccounts] = useState<Array<{ id: string; name: string; email: string; role: string; disabled?: boolean }>>([]);
+  const [audit, setAudit] = useState<Array<{ id: string; action: string; actorId: string | null; targetId: string | null; createdAt: string }>>([]);
   const [acctForm, setAcctForm] = useState({ name: "", email: "", password: "", role: "TEACHER" });
   const [acctMsg, setAcctMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -47,6 +48,28 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
     }
   };
 
+  const loadAudit = async () => {
+    try {
+      const res = await authFetch("/api/admin/audit?limit=15");
+      if (res.ok) setAudit(((await res.json()).data?.entries as any[]) || []);
+    } catch {
+      /* leave empty */
+    }
+  };
+
+  const accountAction = async (id: string, action: "disable" | "enable" | "revoke-sessions" | "reset-password", body?: object) => {
+    setAcctMsg(null);
+    const res = await authFetch(`/api/admin/users/${id}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    });
+    const json = await res.json().catch(() => ({}));
+    setAcctMsg({ ok: res.ok, text: res.ok ? json.note || "Done." : json.error || "That action failed" });
+    loadAccounts();
+    loadAudit();
+  };
+
   const createAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     setAcctMsg(null);
@@ -63,6 +86,7 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
     setAcctMsg({ ok: true, text: `Created ${acctForm.role.toLowerCase()} account for ${acctForm.email}. Share the password with them privately.` });
     setAcctForm({ name: "", email: "", password: "", role: acctForm.role });
     loadAccounts();
+    loadAudit();
   };
 
   const handleBack = () => {
@@ -85,6 +109,7 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
     if (user?.role === "ADMIN") {
       loadAdminData();
       loadAccounts();
+      loadAudit();
     }
   }, [user]);
 
@@ -175,7 +200,26 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
           {acctMsg && <p role="status" className={`text-xs mb-3 ${acctMsg.ok ? "text-emerald-700" : "text-red-600"}`}>{acctMsg.text}</p>}
           <ul className="text-xs divide-y divide-slate-100">
             {accounts.map((a) => (
-              <li key={a.id} className="py-2 flex justify-between"><span><b>{a.name}</b> · {a.email}</span><Badge variant="default">{a.role}</Badge></li>
+              <li key={a.id} data-testid={`account-${a.email}`} className="py-2 flex flex-wrap items-center justify-between gap-2">
+                <span className={a.disabled ? "text-slate-400 line-through" : ""}><b>{a.name}</b> · {a.email}</span>
+                <span className="flex items-center gap-2">
+                  <Badge variant="default">{a.role}{a.disabled ? " · disabled" : ""}</Badge>
+                  {a.id !== user?.id && (
+                    <>
+                      <button type="button" onClick={() => accountAction(a.id, a.disabled ? "enable" : "disable")} className="text-[11px] text-slate-600 hover:text-purple-700 underline">{a.disabled ? "Enable" : "Disable"}</button>
+                      <button type="button" onClick={() => accountAction(a.id, "revoke-sessions")} className="text-[11px] text-slate-600 hover:text-purple-700 underline">Sign out devices</button>
+                      <button type="button" onClick={() => { const pw = window.prompt(`Temporary password for ${a.email} (8+ characters, a letter and a digit)`); if (pw) accountAction(a.id, "reset-password", { temporaryPassword: pw }); }} className="text-[11px] text-slate-600 hover:text-purple-700 underline">Reset password</button>
+                    </>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mt-5 mb-2">Recent security activity</h3>
+          <ul data-testid="audit-list" className="text-[11px] text-slate-600 space-y-1">
+            {audit.length === 0 && <li>Nothing recorded yet.</li>}
+            {audit.map((e) => (
+              <li key={e.id}><span className="font-mono">{e.action}</span> · {new Date(e.createdAt).toLocaleString()}</li>
             ))}
           </ul>
         </div>

@@ -58,27 +58,107 @@ if (isProd && !hasValidDatabaseUrl) {
 
 app.use(express.json());
 
-// Helper to extract session from Cookie or Bearer header
-function getSessionFromRequest(req: Request): SessionPayload | null {
-  const cookieHeader = req.headers.cookie;
-  let token: string | undefined;
+// ---- Security headers ----
+const ALLOW_EMBEDDING = process.env.ALLOW_EMBEDDING === "true";
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), geolocation=()");
+  if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store"); // API answers can contain personal data
+  if (isProd && !ALLOW_EMBEDDING) {
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  }
+  if (isProd && (req.secure || req.headers["x-forwarded-proto"] === "https")) {
+    res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+  }
+  next();
+});
 
+// ---- CSRF defence for cookie-authenticated requests ----
+// Layer 1: the session cookie is SameSite=Lax (see cookieOptions). Layer 2 (this): state-changing /api requests that
+// a browser marks as cross-site, or whose Origin is not this site (or ALLOWED_ORIGINS), are refused. Requests that
+// carry an Authorization header are exempt: a forged cross-site form or fetch cannot set that header.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
+app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+  if (req.headers.authorization?.startsWith("Bearer ")) return next();
+  const origin = req.headers.origin as string | undefined;
+  const fetchSite = req.headers["sec-fetch-site"] as string | undefined;
+  const host = String((process.env.TRUST_PROXY === "true" && req.headers["x-forwarded-host"]) || req.headers.host || "");
+  let allowed = true;
+  if (origin !== undefined) {
+    try { allowed = new URL(origin).host === host || ALLOWED_ORIGINS.includes(origin); } catch { allowed = false; }
+  } else if (fetchSite === "cross-site") {
+    allowed = false;
+  }
+  if (!allowed) {
+    console.warn(`CSRF BLOCKED ${req.method} ${req.path} origin=${origin ?? "-"} site=${fetchSite ?? "-"}`);
+    return res.status(403).json({ error: "Cross-site request blocked." });
+  }
+  return next();
+});
+
+// Helper to extract session from Cookie or Bearer header
+// ---- Sessions ----
+// The signed token only proves who issued it. On EVERY API request the account is looked up and the token is honoured
+// only if the account still exists, is enabled, and the token's session version is current. The role/name/email used
+// by the routes are the account's CURRENT ones, so a role change or a revocation takes effect immediately.
+const SESSION_KEY = "__tuklasSession";
+
+function readSessionToken(req: Request): string | undefined {
+  const cookieHeader = req.headers.cookie;
   if (cookieHeader) {
     const cookies = Object.fromEntries(
       cookieHeader.split(";").map((c) => {
         const [k, ...v] = c.trim().split("=");
-        return [k, decodeURIComponent(v.join("="))];
+        try { return [k, decodeURIComponent(v.join("="))]; } catch { return [k, ""]; }
       })
     );
-    token = cookies["tuklas_session"];
+    if (cookies["tuklas_session"]) return cookies["tuklas_session"];
   }
+  if (req.headers.authorization?.startsWith("Bearer ")) return req.headers.authorization.split("Bearer ")[1];
+  return undefined;
+}
 
-  if (!token && req.headers.authorization?.startsWith("Bearer ")) {
-    token = req.headers.authorization.split("Bearer ")[1];
+app.use(async (req: Request, _res: Response, next: NextFunction) => {
+  (req as any)[SESSION_KEY] = null;
+  try {
+    const token = readSessionToken(req);
+    const payload = token ? verifySessionToken(token) : null;
+    if (payload) {
+      const state = await dbService.getAuthState(payload.userId);
+      if (state && !state.disabled && state.sessionVersion === (payload.sv ?? 0)) {
+        (req as any)[SESSION_KEY] = { ...payload, role: state.role, email: state.email, name: state.name } as SessionPayload;
+      }
+    }
+  } catch (e) {
+    if (hasValidDatabaseUrl) console.error("Session check failed (treated as signed out):", e instanceof Error ? e.message : e);
   }
+  next();
+});
 
-  if (!token) return null;
-  return verifySessionToken(token);
+function getSessionFromRequest(req: Request): SessionPayload | null {
+  return ((req as any)[SESSION_KEY] as SessionPayload | null) ?? null;
+}
+
+// Cookie policy: HttpOnly always; Secure on https/production; SameSite=Lax unless COOKIE_SAMESITE says otherwise
+// (set it to "none" only if the app must work inside a cross-site iframe; the Origin check below still applies).
+function cookieOptions(req: Request) {
+  const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
+  const configured = (process.env.COOKIE_SAMESITE || "lax").toLowerCase();
+  const sameSite = (["lax", "strict", "none"].includes(configured) ? configured : "lax") as "lax" | "strict" | "none";
+  return { httpOnly: true, secure: isHttps || isProd || sameSite === "none", sameSite, path: "/" };
+}
+
+function issueSession(req: Request, res: Response, user: { id: string; email: string; name: string; role: any; sessionVersion?: number }): string {
+  const token = createSessionToken({ id: user.id, email: user.email, name: user.name, role: user.role, sessionVersion: user.sessionVersion ?? 0 });
+  res.cookie("tuklas_session", token, { ...cookieOptions(req), maxAge: 1000 * 60 * 60 * 24 * 7 });
+  return token;
+}
+
+function clearSessionCookie(req: Request, res: Response) {
+  res.clearCookie("tuklas_session", cookieOptions(req));
 }
 
 // -------------------------------------------------------------
@@ -114,22 +194,9 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
     });
     console.log("AUTH REGISTER DATABASE INSERT SUCCESS - userId:", user.id);
 
-    const token = createSessionToken({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-    });
+    const token = issueSession(req, res, user as any);
     console.log("AUTH SESSION CREATED");
 
-    const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
-    res.cookie("tuklas_session", token, {
-      httpOnly: true,
-      secure: isHttps || isProd,
-      sameSite: isHttps || isProd ? "none" : "lax",
-      path: "/",
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-    });
 
     return res.status(201).json({
       success: true,
@@ -179,25 +246,18 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
       console.log("AUTH LOGIN REJECTED: Incorrect password");
       return res.status(401).json({ success: false, error: "Invalid email or password" });
     }
+    if ((user as any).disabledAt) {
+      // Same answer as a wrong password: do not reveal which accounts exist or are disabled.
+      recordLoginFailure(throttleKeys);
+      await dbService.recordAudit({ actorId: user.id, action: "auth.login.blocked_disabled", targetType: "user", targetId: user.id, ip: req.ip });
+      return res.status(401).json({ success: false, error: "Invalid email or password" });
+    }
     clearLoginFailures([throttleKeys[0]]);
     console.log("AUTH LOGIN PASSWORD CHECK SUCCESS");
 
-    const token = createSessionToken({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-    });
+    const token = issueSession(req, res, user as any);
     console.log("AUTH SESSION CREATED");
 
-    const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
-    res.cookie("tuklas_session", token, {
-      httpOnly: true,
-      secure: isHttps || isProd,
-      sameSite: isHttps || isProd ? "none" : "lax",
-      path: "/",
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-    });
 
     return res.json({
       success: true,
@@ -216,44 +276,29 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/auth/logout", (_req: Request, res: Response) => {
-  const isHttps = _req.secure || _req.headers["x-forwarded-proto"] === "https";
-  res.clearCookie("tuklas_session", {
-    path: "/",
-    secure: isHttps || isProd,
-    sameSite: isHttps || isProd ? "none" : "lax",
-  });
+app.post("/api/auth/logout", (req: Request, res: Response) => {
+  clearSessionCookie(req, res);
   return res.json({ success: true, message: "Logged out successfully" });
+});
+
+// Revokes every session of the signed-in user (all devices, including a stolen token); the user signs in again.
+app.post("/api/auth/logout-all", async (req: Request, res: Response) => {
+  const session = getSessionFromRequest(req);
+  if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+  await dbService.revokeSessions(session.userId);
+  await dbService.recordAudit({ actorId: session.userId, action: "auth.sessions.revoke_all", targetType: "user", targetId: session.userId, ip: req.ip });
+  clearSessionCookie(req, res);
+  return res.json({ success: true, message: "Signed out everywhere. Sign in again to continue." });
 });
 
 app.get("/api/auth/me", async (req: Request, res: Response) => {
   const session = getSessionFromRequest(req);
   if (!session) {
+    clearSessionCookie(req, res);
     return res.status(401).json({ success: false, user: null, error: "No active session" });
   }
-  console.log("AUTH SESSION VERIFIED");
-
-  // Verify against database that user still exists
-  const user = await dbService.findUserById(session.userId);
-  if (!user) {
-    const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
-    res.clearCookie("tuklas_session", {
-      path: "/",
-      secure: isHttps || isProd,
-      sameSite: isHttps || isProd ? "none" : "lax",
-    });
-    return res.status(401).json({ success: false, user: null, error: "User record not found" });
-  }
-
-  return res.json({
-    success: true,
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-    },
-  });
+  // The session middleware already checked the account (exists, enabled, current session version).
+  return res.json({ success: true, user: { id: session.userId, email: session.email, name: session.name, role: session.role } });
 });
 
 // -------------------------------------------------------------
@@ -435,6 +480,7 @@ app.post("/api/lessons/:id/status", async (req: Request, res: Response) => {
       return res.status(400).json({ error: result.error });
     }
 
+    await dbService.recordAudit({ actorId: session.userId, action: "lesson.status", targetType: "lesson", targetId: id, detail: { to: targetStatus }, ip: req.ip });
     return res.json({ data: result.lesson });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to transition lesson status";
@@ -1182,6 +1228,7 @@ app.post("/api/lessons/:id/blocks", async (req: Request, res: Response) => {
       metadata,
     });
 
+    await dbService.recordAudit({ actorId: session.userId, action: "block.create", targetType: "block", targetId: (block as any)?.id, detail: { lessonId: id, type } , ip: req.ip });
     return res.status(201).json({ data: block });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to add block";
@@ -1207,6 +1254,8 @@ app.put("/api/lessons/:id/blocks/:blockId", async (req: Request, res: Response) 
       metadata,
     });
 
+    // Answer keys live in block metadata: record that they changed (never the content itself).
+    await dbService.recordAudit({ actorId: session.userId, action: "block.update", targetType: "block", targetId: blockId, detail: { lessonId: id, fields: Object.keys({ type, title, content, metadata }).filter((k) => ({ type, title, content, metadata } as any)[k] !== undefined) }, ip: req.ip });
     return res.json({ data: block });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to update block";
@@ -1224,6 +1273,7 @@ app.delete("/api/lessons/:id/blocks/:blockId", async (req: Request, res: Respons
     const { id, blockId } = req.params;
     await dbService.assertCanEditLesson(id, session.role, session.userId);
     await dbService.deleteContentBlock(id, blockId);
+    await dbService.recordAudit({ actorId: session.userId, action: "block.delete", targetType: "block", targetId: blockId, detail: { lessonId: id }, ip: req.ip });
 
     return res.json({ success: true });
   } catch (error: unknown) {
@@ -2674,12 +2724,104 @@ app.post("/api/admin/users", async (req: Request, res: Response) => {
       gradeLevel: typeof gradeLevel === "number" ? gradeLevel : role === "STUDENT" ? 7 : undefined,
     });
     // Audit trail (no secrets): who created which account with which role.
-    console.info(`AUDIT admin_create_user actor=${session.userId} target=${user.id} role=${role}`);
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.create", targetType: "user", targetId: user.id, detail: { role }, ip: req.ip });
     return res.status(201).json({ data: { id: user.id, email: user.email, name: user.name, role: user.role } });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to create user";
     return res.status(400).json({ error: message });
   }
+});
+
+// ---- Account controls (administrators only) ----
+const requireAdmin = (req: Request, res: Response): SessionPayload | null => {
+  const session = getSessionFromRequest(req);
+  if (!session || session.role !== "ADMIN") {
+    res.status(403).json({ error: "Forbidden: Administrator role required" });
+    return null;
+  }
+  return session;
+};
+
+async function adminTarget(req: Request, res: Response, session: SessionPayload, opts: { allowSelf?: boolean } = {}) {
+  const target = await dbService.getAuthState(req.params.userId);
+  if (!target) { res.status(404).json({ error: "User not found" }); return null; }
+  if (!opts.allowSelf && target.id === session.userId) {
+    res.status(409).json({ error: "You cannot do this to your own account. Ask another administrator." });
+    return null;
+  }
+  return target;
+}
+
+app.post("/api/admin/users/:userId/disable", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const target = await adminTarget(req, res, session); if (!target) return;
+    if (target.role === "ADMIN" && !target.disabled && (await dbService.countActiveAdmins()) <= 1) {
+      return res.status(409).json({ error: "This is the last active administrator and cannot be disabled." });
+    }
+    await dbService.setUserDisabled(target.id, true);
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.disable", targetType: "user", targetId: target.id, ip: req.ip });
+    return res.json({ success: true });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.post("/api/admin/users/:userId/enable", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const target = await adminTarget(req, res, session, { allowSelf: true }); if (!target) return;
+    await dbService.setUserDisabled(target.id, false); // old sessions stay revoked
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.enable", targetType: "user", targetId: target.id, ip: req.ip });
+    return res.json({ success: true });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.post("/api/admin/users/:userId/revoke-sessions", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const target = await adminTarget(req, res, session, { allowSelf: true }); if (!target) return;
+    await dbService.revokeSessions(target.id);
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.revoke_sessions", targetType: "user", targetId: target.id, ip: req.ip });
+    return res.json({ success: true });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.post("/api/admin/users/:userId/role", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const role = req.body?.role;
+    if (typeof role !== "string" || !["STUDENT", "TEACHER", "ADMIN"].includes(role)) return res.status(400).json({ error: "Role must be STUDENT, TEACHER or ADMIN" });
+    const target = await adminTarget(req, res, session); if (!target) return;
+    if (target.role === "ADMIN" && role !== "ADMIN" && !target.disabled && (await dbService.countActiveAdmins()) <= 1) {
+      return res.status(409).json({ error: "This is the last active administrator and cannot be demoted." });
+    }
+    await dbService.setUserRole(target.id, role as UserRole); // also revokes the user's sessions
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.role", targetType: "user", targetId: target.id, detail: { from: target.role, to: role }, ip: req.ip });
+    return res.json({ success: true });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.post("/api/admin/users/:userId/reset-password", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const target = await adminTarget(req, res, session); if (!target) return;
+    let temp: string;
+    try { temp = validateNewPassword(req.body?.temporaryPassword); } catch (e) { return res.status(400).json({ error: e instanceof Error ? e.message : "Invalid password" }); }
+    await dbService.updateUserPassword(target.id, await hashPassword(temp)); // revokes all their sessions
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.reset_password", targetType: "user", targetId: target.id, ip: req.ip });
+    return res.json({ success: true, note: "Give the temporary password to the user privately and ask them to change it after signing in." });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.get("/api/admin/audit", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const result = await dbService.listAudit({
+      limit: req.query.limit ? Number(req.query.limit) : 50,
+      offset: req.query.offset ? Number(req.query.offset) : 0,
+      action: typeof req.query.action === "string" ? req.query.action : undefined,
+    });
+    return res.json({ data: result });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
 });
 
 app.get("/api/admin/users", async (req: Request, res: Response) => {
@@ -2724,10 +2866,13 @@ app.post("/api/auth/change-password", async (req: Request, res: Response) => {
     }
     if (currentPassword === validatedNew) return res.status(400).json({ error: "The new password must be different" });
 
-    await dbService.updateUserPassword(user.id, await hashPassword(validatedNew));
+    await dbService.updateUserPassword(user.id, await hashPassword(validatedNew)); // also revokes every older session
     clearLoginFailures([keys[0]]);
-    console.info(`AUDIT password_changed user=${user.id}`);
-    return res.json({ success: true, note: "Existing sessions stay valid until they expire; sign out on other devices." });
+    await dbService.recordAudit({ actorId: user.id, action: "auth.password.change", targetType: "user", targetId: user.id, ip: req.ip });
+    // Keep THIS device signed in with a fresh token; every other device must sign in again.
+    const fresh = await dbService.getAuthState(user.id);
+    const token = issueSession(req, res, { id: user.id, email: user.email, name: user.name, role: user.role, sessionVersion: fresh?.sessionVersion ?? 0 });
+    return res.json({ success: true, token, note: "Password changed. All your other devices have been signed out." });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to change password";
     return res.status(400).json({ error: message });

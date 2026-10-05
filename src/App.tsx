@@ -31,6 +31,7 @@ import TeacherClassDetailPage from "@/app/teacher/classes/[classId]/page";
 import TeacherStudentInsightsPage from "@/app/teacher/students/[studentId]/insights/page";
 import TeacherResearchPage from "@/app/teacher/research/page";
 import AdminPage from "@/app/admin/page";
+import AccountPage from "@/app/account/page";
 import NotFound from "@/app/not-found";
 
 export default function App() {
@@ -83,6 +84,7 @@ export default function App() {
     if (normalized === "/teacher/research") return <TeacherResearchPage onNavigate={navigate} />;
     if (normalized === "/teacher/ai-settings") return <TeacherAISettingsPage onNavigate={navigate} />;
     if (normalized === "/admin") return <AdminPage onNavigate={navigate} />;
+    if (normalized === "/account") return <AccountPage onNavigate={navigate} />;
 
     // Dynamic Route: /student/practice/:practiceSetId
     const studentPracticeMatch = normalized.match(/^\/student\/practice\/([^\/]+)$/);

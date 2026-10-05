@@ -142,6 +142,10 @@ model User {
   passwordHash String
   role         UserRole @default(STUDENT)
   gradeLevel   Int? // Optional grade (e.g. 7 for Grade 7 student)
+  /// Bumped to revoke every session token issued before (password change, "sign out everywhere", admin action).
+  sessionVersion Int       @default(0)
+  /// When set the account cannot sign in and existing sessions stop working.
+  disabledAt     DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -1115,4 +1119,23 @@ model ResearchMetricRecord {
   @@index([skillId])
   @@index([lessonId])
   @@index([calculatedAt])
+}
+
+// -------------------------------------------------------------
+// PHASE 30: AUDIT LOG (who did what to which account / answer key)
+// -------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String? // null for system events or failed sign-ins
+  action     String // e.g. "admin.user.disable", "auth.password.change"
+  targetType String? // "user" | "lesson" | "block" ...
+  targetId   String?
+  detail     String? // small JSON string, never secrets
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@index([action])
 }
