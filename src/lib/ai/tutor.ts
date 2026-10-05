@@ -14,7 +14,7 @@ import type {
 } from "./types";
 import { classifyStudentMessage } from "./conversation/signals";
 import { evaluateAttempt, resolveExpectedAnswerText } from "./conversation/evaluate";
-import { parseBinaryProblem, findNumberInText } from "./conversation/arith";
+import { parseAnyProblem, findNumberInText } from "./conversation/arith";
 import { observeStudentTurn, parseState, recordTutorTurn, serializeState, summarizeEvaluation, summarizeState } from "./conversation/state";
 import { planResponse } from "./conversation/planner";
 import { checkTutorOutput, type Violation } from "./conversation/guards";
@@ -228,6 +228,7 @@ export class AITutorService {
   ): { state: ConversationState; plan: ResponsePlan; signal: ReturnType<typeof classifyStudentMessage> } {
     const q = context.question;
     const signal = classifyStudentMessage(params.studentQuery, {
+      expectTruth: q?.type === "TRUE_FALSE" || prevState.pendingTransfer?.problem.op === ">" || prevState.pendingTransfer?.problem.op === "<" || prevState.baseProblem?.op === ">" || prevState.baseProblem?.op === "<",
       // An answer is expected whenever there is a lesson question, a pending tutor problem, or a student-typed problem.
       hasQuestion: !!q || !!prevState.pendingTransfer || (!!prevState.baseProblem && prevState.activeProblemSource === "STUDENT"),
       structuredAnswer: params.studentAnswer,
@@ -355,9 +356,14 @@ function problemFromQuestion(
   expectedAnswer: string | undefined,
   choices?: Array<{ id: string; text: string }>
 ): ParsedProblem | undefined {
-  const parsed = parseBinaryProblem(prompt);
+  const parsed = parseAnyProblem(prompt);
   if (!parsed) return undefined;
   if (expectedAnswer === undefined || expectedAnswer === "") return parsed;
+  if (parsed.op === ">" || parsed.op === "<") {
+    const e = String(expectedAnswer).trim().toLowerCase();
+    if (e === "true" || e === "false") return (e === "true") === (parsed.expected === 1) ? parsed : undefined;
+    return parsed;
+  }
   const byId = choices?.find((c) => c.id === expectedAnswer);
   const expectedNum = findNumberInText(byId ? byId.text : expectedAnswer);
   // If the record's answer disagrees with the expression we parsed (the prompt may contain other numbers), do not guess.

@@ -3,6 +3,8 @@
  *   npm i --no-save playwright-core
  *   AI_PROVIDER=local PORT=3000 npx tsx server.ts &      # throwaway dev server
  *   node scripts/test-phase23-browser.mjs
+
+ * Run against a FRESH server: the tutor continues a student's live conversation (by design), so a previous session skews it.
  * Env: BASE_URL, CHROMIUM_PATH, SCREENSHOT_PATH (optional).
  */
 import { chromium } from "playwright-core";

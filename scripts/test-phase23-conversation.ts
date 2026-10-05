@@ -432,7 +432,7 @@ async function main() {
     const ri = (lo: number, hi: number) => lo + Math.floor(rand() * (hi - lo + 1));
     const strategies = ["OPEN_LESSON", "OPEN_PROBLEM", "ASK_WHAT_THEY_THINK", "ACTIVATE_PRIOR", "VISUAL_NUMBER_LINE", "DECOMPOSE_STEPS", "WORKED_ANALOGOUS", "REAL_CONTEXT", "TARGET_MISCONCEPTION", "ASK_FOR_REASONING", "CONFIRM_AND_PROBE", "TRANSFER_PROBLEM", "SIMPLER_PROBLEM", "HARDER_PROBLEM", "REVIEW_KEY_IDEAS", "REDIRECT_TO_THINKING", "EMPATHIZE_AND_SHRINK", "NUDGE_TO_RESPOND", "SUGGEST_TEACHER", "REDIRECT_OFF_TOPIC", "CELEBRATE_AND_NEXT"] as const;
     const diagnoses = ["SIGN_ERROR", "IGNORED_SIGNS", "ADDED_MAGNITUDES", "WRONG_OPERATION", "CALCULATION_SLIP", "UNKNOWN_INCORRECT"] as const;
-    let combos = 0, clean = 0, oneQ = 0, noDisclose = 0, noEmpty = 0, mathRight = 0;
+    let combos = 0, clean = 0, oneQ = 0, noDisclose = 0, noEmpty = 0, mathRight = 0, safeSwaps = 0;
     for (let i = 0; i < 120; i++) {
       const op = (["+", "-", "*", "/"] as Op[])[ri(0, 3)];
       let b = (rand() < 0.5 ? -1 : 1) * ri(2, 9);
@@ -463,6 +463,7 @@ async function main() {
           combos++;
           const r = realizePlan(plan, { state, lessonTitle: "Adding Integers", skillTitle: "Integers", sources: [] });
           const text = `${r.message} ${r.guidingQuestion}`;
+          if (r.usedSafeFallback) safeSwaps++;
           const v = checkTutorOutput({ message: r.message, guidingQuestion: r.guidingQuestion }, plan, { ...state, recentTutorMessages: [] });
           if (v.length === 0) clean++;
           if ((text.match(/\?/g) || []).length === 1) oneQ++;
@@ -476,6 +477,7 @@ async function main() {
       }
     }
     assert(clean === combos, `Realizer output passes ALL guards in every case (${clean}/${combos})`);
+    assert(safeSwaps === 0, `Rich responses are never silently replaced by the generic safe reply (${safeSwaps} swaps)`);
     assert(oneQ === combos, `Exactly one question in every response (${oneQ}/${combos})`);
     assert(noDisclose === combos, `Never discloses the protected answer (${noDisclose}/${combos})`);
     assert(noEmpty === combos, "Never empty");

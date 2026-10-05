@@ -4,6 +4,7 @@
  */
 
 import { fmt, findNumberInText } from "./arith";
+import { kindOf } from "./problems";
 import type { AnswerEvaluation, MistakeDiagnosis, Operator, ParsedProblem, StudentSignal } from "./types";
 
 export interface EvaluableQuestion {
@@ -31,6 +32,32 @@ function applyOp(a: number, op: Operator, b: number): number | undefined {
 
 function diagnose(problem: ParsedProblem, attempt: number): MistakeDiagnosis {
   const { a, b, op, expected } = problem;
+  const kind = kindOf(problem);
+
+  if (kind === "ABS") {
+    if (attempt === a && a < 0) return "ABS_KEPT_SIGN"; // |-14| answered -14
+    if (attempt === -expected) return "ABS_KEPT_SIGN";
+    return Math.abs(attempt - expected) <= 2 ? "CALCULATION_SLIP" : "UNKNOWN_INCORRECT";
+  }
+  if (kind === "OPPOSITE") {
+    if (attempt === a) return "OPPOSITE_SAME_NUMBER";
+    if (attempt === Math.abs(a) && a < 0 && expected !== attempt) return "SIGN_ERROR";
+    return Math.abs(attempt - expected) <= 2 ? "CALCULATION_SLIP" : "UNKNOWN_INCORRECT";
+  }
+  if (kind === "EQUATION") {
+    // Did the same operation instead of undoing it: x + a = b answered b + a; x - a = b answered b - a.
+    const sameOp = op === "x+" ? b + a : b - a;
+    if (attempt === sameOp && attempt !== expected) return "EQ_WRONG_INVERSE";
+    if (expected !== 0 && attempt === -expected) return "SIGN_ERROR";
+    return Math.abs(attempt - expected) <= 2 ? "CALCULATION_SLIP" : "UNKNOWN_INCORRECT";
+  }
+  if (kind === "COMPARE") {
+    // Judging negatives by size: picking the number with the larger absolute value as "greater".
+    const other = attempt === a ? b : a;
+    if ((attempt === a || attempt === b) && a < 0 && b < 0 && Math.abs(attempt) > Math.abs(other) && (op === "max" || op === ">")) return "COMPARED_MAGNITUDE";
+    return "UNKNOWN_INCORRECT";
+  }
+
   if (expected !== 0 && attempt === -expected) return "SIGN_ERROR";
 
   const absA = Math.abs(a);
@@ -56,6 +83,10 @@ const OBSERVATIONS: Record<MistakeDiagnosis, string> = {
   ADDED_MAGNITUDES: "The student added the sizes (absolute values) even though the signs differ.",
   WRONG_OPERATION: "The student's number matches a different operation than the one asked.",
   CALCULATION_SLIP: "The student is close; this looks like a small arithmetic slip.",
+  ABS_KEPT_SIGN: "The student kept the negative sign; an absolute value (a distance) is never negative.",
+  OPPOSITE_SAME_NUMBER: "The student gave the number itself instead of its opposite.",
+  EQ_WRONG_INVERSE: "The student repeated the operation instead of undoing it on both sides.",
+  COMPARED_MAGNITUDE: "The student judged negative numbers by size instead of by position on the number line.",
   UNKNOWN_INCORRECT: "The answer is incorrect and does not match a common error pattern.",
 };
 
@@ -65,7 +96,26 @@ export function evaluateAttempt(
   question?: EvaluableQuestion
 ): AnswerEvaluation {
   if (signal.intent !== "ANSWER_ATTEMPT" || !signal.attempt) return { kind: "NONE" };
-  const { number, choiceLetter, raw } = signal.attempt;
+  const { number, choiceLetter, raw, truth } = signal.attempt;
+
+  // True/false answers, against a parsed comparison statement or the question record
+  if (truth !== undefined) {
+    let expectedTruth: boolean | undefined;
+    if (problem && (problem.op === ">" || problem.op === "<")) expectedTruth = problem.expected === 1;
+    else if (question?.type === "TRUE_FALSE" && question.expectedAnswer !== undefined) {
+      const e = String(question.expectedAnswer).trim().toLowerCase();
+      expectedTruth = e === "true" ? true : e === "false" ? false : undefined;
+    }
+    if (expectedTruth === undefined) return { kind: "NONE", attempted: truth ? "true" : "false" };
+    if (truth === expectedTruth) return { kind: "CORRECT", attempted: truth ? "true" : "false" };
+    const bothNeg = problem && problem.a < 0 && problem.b < 0;
+    return {
+      kind: "INCORRECT",
+      attempted: truth ? "true" : "false",
+      diagnosis: bothNeg ? "COMPARED_MAGNITUDE" : "UNKNOWN_INCORRECT",
+      safeObservation: bothNeg ? OBSERVATIONS.COMPARED_MAGNITUDE : "The true/false judgement is not correct.",
+    };
+  }
 
   // 1. Multiple choice by letter or by choice text
   if (question?.choices && question.choices.length > 0) {

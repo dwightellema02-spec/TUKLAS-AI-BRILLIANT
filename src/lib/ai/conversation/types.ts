@@ -29,6 +29,8 @@ export interface StudentSignal {
   intent: StudentIntent;
   /** Raw text, trimmed. Empty when the student pressed a hint button. */
   text: string;
+  /** "TL" when the student wrote Filipino/Taglish. */
+  language: "EN" | "TL";
   hedged: boolean; // "maybe", "i think", "?" on an answer
   frustrated: boolean;
   confused: boolean;
@@ -39,17 +41,29 @@ export interface StudentSignal {
     raw: string;
     number?: number;
     choiceLetter?: string;
+    /** true/false answers ("true", "mali", "tama"). */
+    truth?: boolean;
   };
   /** A problem the student typed themselves. */
   ownProblem?: ParsedProblem;
 }
 
-export type Operator = "+" | "-" | "*" | "/";
+/**
+ * "+ - * /" are two-number integer expressions. The other values encode further problem kinds:
+ * "abs" |a|, "opp" opposite of a, "x+" x + a = b, "x-" x - a = b, "max"/"min" which of a, b is greater/less,
+ * ">" / "<" a true/false comparison statement "a > b".
+ */
+export type Operator = "+" | "-" | "*" | "/" | "abs" | "opp" | "x+" | "x-" | "max" | "min" | ">" | "<";
+export type ProblemKindTag = "BINARY" | "ABS" | "OPPOSITE" | "EQUATION" | "COMPARE";
 
 export interface ParsedProblem {
+  /** Defaults to BINARY when absent. */
+  kind?: ProblemKindTag;
   a: number;
   b: number;
   op: Operator;
+  /** Variable letter for equations (display only). */
+  variable?: string;
   /** Display form with parenthesised negatives, e.g. "(-8) + 13". */
   display: string;
   expected: number;
@@ -60,6 +74,10 @@ export type MistakeDiagnosis =
   | "IGNORED_SIGNS" // computed with absolute values
   | "ADDED_MAGNITUDES" // added absolute values when signs differ
   | "WRONG_OPERATION"
+  | "ABS_KEPT_SIGN" // |-a| given as -a: absolute value is never negative
+  | "OPPOSITE_SAME_NUMBER" // gave the number itself as its opposite
+  | "EQ_WRONG_INVERSE" // did the same operation instead of undoing it
+  | "COMPARED_MAGNITUDE" // judged negatives by size instead of position on the number line
   | "CALCULATION_SLIP" // off by a small amount
   | "UNKNOWN_INCORRECT";
 
@@ -141,6 +159,8 @@ export interface ConversationState {
   needsTeacherAttention: boolean;
   /** Short log of what the student said, for "what did the student just say" memory. */
   recentStudentStatements: string[];
+  /** Sticky: the student has written Filipino/Taglish, so empathy/feedback is phrased in Taglish. */
+  language: "EN" | "TL";
   /** Problem keys already posed or solved, so new problems are always new. */
   usedProblems: string[];
   hintsOnProblem: number;

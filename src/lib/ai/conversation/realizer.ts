@@ -10,7 +10,7 @@
 import type { GroundingSource } from "../../documents/types";
 import { fmt } from "./arith";
 import { guessSafe } from "./realizer-util";
-import { hashString, structureFacts } from "./problems";
+import { hashString, kindOf, mathText, structureFacts } from "./problems";
 import { checkTutorOutput, type Violation } from "./guards";
 import type { ConversationState, ParsedProblem, ResponsePlan, TutorStrategy } from "./types";
 
@@ -29,6 +29,8 @@ export interface RealizedResponse {
   encouragement: string;
   nextStep?: string;
   citedSourceIds: string[];
+  /** True when every rich variant failed a guard and the generic safe reply was used (should be rare). */
+  usedSafeFallback?: boolean;
 }
 
 const TYPE_FOR: Record<TutorStrategy, RealizedResponse["responseType"]> = {
@@ -70,7 +72,7 @@ const pickVariant = <T,>(variants: T[], seed: number, avoid: (v: T) => boolean):
 };
 
 const wrap = (n: number) => (n < 0 ? `(${n})` : String(n));
-const dollar = (p: ParsedProblem) => `$${p.display.replace("×", "\\times").replace("÷", "\\div").replace("−", "-")}$`;
+const dollar = (p: ParsedProblem) => mathText(p);
 
 function ackFor(plan: ResponsePlan, ctx: RealizeContext, seed: number): string {
   const s = ctx.state;
@@ -78,6 +80,7 @@ function ackFor(plan: ResponsePlan, ctx: RealizeContext, seed: number): string {
   // Strategies whose own wording already carries the acknowledgement.
   if (plan.strategy === "SUGGEST_TEACHER" || plan.strategy === "EMPATHIZE_AND_SHRINK" || plan.strategy === "REDIRECT_OFF_TOPIC" || plan.strategy === "NUDGE_TO_RESPOND") return "";
   const notUsedRecently = (v: string) => !s.recentTutorMessages.some((m) => m.includes(v.slice(0, 24)));
+  if (s.language === "TL") return ackTagalog(plan, ctx, seed, notUsedRecently);
 
   if (plan.evaluation.kind === "INCORRECT" && att !== undefined) {
     return pickVariant(
@@ -110,6 +113,35 @@ function ackFor(plan: ResponsePlan, ctx: RealizeContext, seed: number): string {
 const lessonName = (ctx: RealizeContext) => ctx.skillTitle || ctx.lessonTitle || "this lesson";
 
 function decomposeQuestions(p: ParsedProblem): string[] {
+  const k = kindOf(p);
+  if (k === "ABS") {
+    return [
+      `Step 1: where is ${p.a} on the number line, and how many steps away from 0 is it?`,
+      `Step 2: can a distance ever be negative?`,
+      `Step 3: so what is |${p.a}|?`,
+    ];
+  }
+  if (k === "OPPOSITE") {
+    return [
+      `Step 1: on the number line, which side of 0 is ${p.a} on, and how far from 0 is it?`,
+      `Step 2: the opposite is the same distance on the other side of 0. Which side is that?`,
+      `Step 3: so which number is it?`,
+    ];
+  }
+  if (k === "EQUATION") {
+    const v = p.variable ?? "x";
+    return [
+      `Step 1: what operation is being done to ${v} in ${p.display}?`,
+      `Step 2: which operation undoes it?`,
+      `Step 3: do that to both sides. What is on the right side now?`,
+    ];
+  }
+  if (k === "COMPARE") {
+    return [
+      `Step 1: picture ${wrap(p.a)} and ${wrap(p.b)} on a number line. Which one is farther to the right?`,
+      p.op === ">" || p.op === "<" ? `Step 2: the number farther right is greater. Does that match the statement ${p.display}?` : `Step 2: the number farther right is greater. So which number is ${p.op === "min" ? "less" : "greater"}?`,
+    ];
+  }
   const f = structureFacts(p);
   if (p.op === "+") {
     return [
@@ -135,6 +167,11 @@ function decomposeQuestions(p: ParsedProblem): string[] {
 }
 
 function story(p: ParsedProblem): { text: string; question: string } | undefined {
+  const k = kindOf(p);
+  if (k === "ABS") return { text: `Imagine a diver at ${p.a} meters. The depth of the dive is how far the diver is from the surface.`, question: `Is "how far" ever a negative amount, and so what is |${p.a}|?` };
+  if (k === "OPPOSITE") return { text: `Gaining ₱${Math.abs(p.a)} and losing ₱${Math.abs(p.a)} undo each other, so they are opposites.`, question: `If ${p.a} describes one of them, what would describe the other?` };
+  if (k === "EQUATION") return { text: `Imagine you started with some money, then ${p.op === "x+" ? "received" : "spent"} ₱${Math.abs(p.a)}, and ended with ₱${p.b}.`, question: `How could you work backwards to find what you started with?` };
+  if (k === "COMPARE") return { text: `Think about temperatures: ${Math.min(p.a, p.b)}° and ${Math.max(p.a, p.b)}° are two readings, and warmer means greater.`, question: `Which of the two readings is warmer?` };
   const asAdd = p.op === "-" ? { a: p.a, b: -p.b } : p.op === "+" ? { a: p.a, b: p.b } : undefined;
   if (asAdd) {
     const { a, b } = asAdd;
@@ -160,7 +197,42 @@ function bestSentences(text: string, query: string, count: number, maxChars: num
   return chosen.map((c) => c.sentence).join(" ").slice(0, maxChars);
 }
 
+/** One small first question that fits the problem kind. */
+function firstStepQuestion(p?: ParsedProblem): string {
+  if (!p) return "What is the first thing you notice about the problem?";
+  switch (kindOf(p)) {
+    case "ABS": return `What does the absolute value of a number measure?`;
+    case "OPPOSITE": return `Which side of zero is ${p.a} on?`;
+    case "EQUATION": return `What operation is being done to ${p.variable ?? "x"} in ${p.display}?`;
+    case "COMPARE": return `On a number line, which of ${wrap(p.a)} and ${wrap(p.b)} is farther to the right?`;
+    default: return `To start, are the signs of ${wrap(p.a)} and ${wrap(p.b)} the same or different?`;
+  }
+}
+
+function smallestStep(p?: ParsedProblem): string {
+  if (!p) return "Just this one thing: can you name any negative number?";
+  switch (kindOf(p)) {
+    case "EQUATION": return `Just this one thing: is ${p.variable ?? "x"} being added to or subtracted from something?`;
+    case "COMPARE": return `Just this one thing: on a number line, does ${wrap(p.a)} sit to the left or to the right of 0?`;
+    default: return `Just this one thing: is ${p.a} a positive or a negative number?`;
+  }
+}
+
+function priorQuestion(p?: ParsedProblem): { message: string; question: string } {
+  const k = p ? kindOf(p) : "BINARY";
+  if (k === "ABS") return { message: "Let's go back to a basic idea: the absolute value of a number is its distance from zero on the number line.", question: "In your own words, what does that distance tell us about the number?" };
+  if (k === "OPPOSITE") return { message: "Let's go back to a basic idea: two numbers are opposites when they are the same distance from zero but on different sides.", question: "Can you name a pair of opposite numbers and say what makes them opposites?" };
+  if (k === "EQUATION") return { message: "Let's go back to a basic idea: to get a variable alone you undo what was done to it, like undoing a step.", question: "If I add 3 to a number, what would undo that?" };
+  if (k === "COMPARE") return { message: "Let's go back to a basic idea: on a number line, numbers get bigger as you move to the right.", question: "Is -3 to the left or the right of -7?" };
+  return { message: "Let's go back to a basic idea. A negative number is a number to the left of zero on the number line, and the absolute value of a number is its distance from zero.", question: p ? `What is the absolute value of ${wrap(p.a)}, and what does that tell us about where it sits?` : "In your own words, what does the absolute value of a number tell us?" };
+}
+
 function realizeDraft(plan: ResponsePlan, ctx: RealizeContext, seed: number): Draft {
+  const draft = realizeDraftEN(plan, ctx, seed);
+  return ctx.state.language === "TL" ? tagalogLayer(plan, ctx, seed, draft) : draft;
+}
+
+function realizeDraftEN(plan: ResponsePlan, ctx: RealizeContext, seed: number): Draft {
   const p = plan.activeProblem;
   const ack = ackFor(plan, ctx, seed);
   const lead = (text: string) => [ack, text].filter(Boolean).join(" ");
@@ -193,6 +265,10 @@ function realizeDraft(plan: ResponsePlan, ctx: RealizeContext, seed: number): Dr
         ),
       };
     case "ACTIVATE_PRIOR": {
+      if (p && kindOf(p) !== "BINARY") {
+        const pq = priorQuestion(p);
+        return { message: lead(pq.message), question: pq.question };
+      }
       const variants: Draft[] = [
         { message: lead("Let's go back to a basic idea. A negative number is a number to the left of zero on the number line, and the absolute value of a number is its distance from zero."), question: p ? `What is the absolute value of ${wrap(p.a)}, and what does that tell us about where it sits?` : "In your own words, what does the absolute value of a number tell us?" },
         { message: lead("Before we calculate, let's check one building block: the sign of a number tells us its direction from zero, and its size tells us how far."), question: p ? `For ${wrap(p.b)}, what is its direction and what is its size?` : "Can you give me a negative number and say what makes it negative?" },
@@ -200,6 +276,11 @@ function realizeDraft(plan: ResponsePlan, ctx: RealizeContext, seed: number): Dr
       return pickVariant(variants, seed, (v) => state.recentTutorMessages.includes(v.message));
     }
     case "VISUAL_NUMBER_LINE": {
+      const vk = p ? kindOf(p) : undefined;
+      if (p && vk === "ABS") return { message: lead(`Picture a number line and put your finger on ${p.a}. Now count the steps it takes to get back to 0.`), question: "How many steps is that, and can counting steps ever give a negative number?" };
+      if (p && vk === "OPPOSITE") return { message: lead(`Picture a number line with a mirror standing at 0. Put one finger on ${p.a}.`), question: `Where would the mirror image of ${p.a} land?` };
+      if (p && vk === "EQUATION") return { message: lead(`Picture a balance scale: ${p.display} means the two sides weigh the same, and whatever we do to one side we must do to the other.`), question: `What could you do to both sides so that ${p.variable ?? "x"} is left alone?` };
+      if (p && vk === "COMPARE") return { message: lead(`Picture a number line where numbers get bigger as you move to the right. Put your fingers on ${wrap(p.a)} and ${wrap(p.b)}.`), question: "Which of the two is farther to the right?" };
       if (!p || p.op === "*" || p.op === "/") return realizeDraft({ ...plan, strategy: "DECOMPOSE_STEPS" }, ctx, seed);
       const moveRight = p.op === "+" ? p.b >= 0 : p.b < 0;
       const verb = p.op === "+" ? "Adding" : "Subtracting";
@@ -232,9 +313,19 @@ function realizeDraft(plan: ResponsePlan, ctx: RealizeContext, seed: number): Dr
     }
     case "TARGET_MISCONCEPTION": {
       if (!p) return { message: lead("Let's check the idea behind this."), question: "Can you explain in your own words how the signs affect the result?" };
-      const f = structureFacts(p);
+      const binaryP = kindOf(p) === "BINARY";
+      const f = binaryP ? structureFacts(p) : undefined;
       switch (plan.diagnosis) {
+        case "ABS_KEPT_SIGN":
+          return { message: lead(`Remember that absolute value measures a distance from zero.`), question: `Can a distance ever be negative, and so what should |${p.a}| be?` };
+        case "OPPOSITE_SAME_NUMBER":
+          return { message: lead(`The opposite should land on the other side of zero.`), question: `Which side of zero is ${p.a} on, and where would its mirror image be?` };
+        case "EQ_WRONG_INVERSE":
+          return { message: lead(`It looks like the same operation was done again instead of being undone.`), question: `Starting from ${p.b}, which operation takes you back to ${p.variable ?? "x"} on its own?` };
+        case "COMPARED_MAGNITUDE":
+          return { message: lead(`Be careful with negative numbers: a bigger size does not mean a greater value.`), question: `On a number line, which of ${wrap(p.a)} and ${wrap(p.b)} is farther to the right?` };
         case "SIGN_ERROR":
+          if (!binaryP) return { message: lead(`You have the right size in mind, so let's look at the sign.`), question: `Should the result be positive or negative here, and how do you know?` };
           return { message: lead(`You have the right size in mind, so let's look at the sign.`), question: `Which of ${wrap(p.a)} and ${wrap(p.b)} is farther from zero, and is that number positive or negative?` };
         case "ADDED_MAGNITUDES":
           return { message: lead(`When one number is positive and the other is negative, they pull against each other, like money you earn and money you owe.`), question: `Do you think the two sizes should add together, or partly cancel each other out?` };
@@ -243,6 +334,7 @@ function realizeDraft(plan: ResponsePlan, ctx: RealizeContext, seed: number): Dr
         case "WRONG_OPERATION":
           return { message: lead(`Let's re-read the problem together: ${dollar(p)}.`), question: `Which operation is it asking for, and what does that operation do to the two numbers?` };
         case "CALCULATION_SLIP":
+          if (!f) return { message: lead(`You're close. This might just be a small arithmetic slip.`), question: `Try the arithmetic once more, slowly; what do you get?` };
           return { message: lead(`You're close. This might just be a small arithmetic slip.`), question: f.sameSigns ? `Re-check just the adding of the sizes ${f.absA} and ${f.absB}; what do you get?` : `Re-check just the subtracting of the sizes ${f.largerAbs} and ${f.smallerAbs}; what do you get?` };
         default:
           return { message: lead(`Let's look at how the numbers in ${dollar(p)} interact.`), question: `Can you walk me through what you did first?` };
@@ -289,12 +381,12 @@ function realizeDraft(plan: ResponsePlan, ctx: RealizeContext, seed: number): Dr
     case "REDIRECT_TO_THINKING":
       return {
         message: lead("I know it's tempting to just ask for the answer. I'd rather help you find it, so you can do the next one on your own."),
-        question: p ? `To start, are the signs of ${wrap(p.a)} and ${wrap(p.b)} the same or different?` : "What is the first thing you notice about the problem?",
+        question: firstStepQuestion(p),
       };
     case "EMPATHIZE_AND_SHRINK":
       return {
         message: lead("It's okay to feel stuck here; this topic is tricky for many people, and you're still trying. Let's make it really small."),
-        question: p ? `Just this one thing: is ${p.a} a positive or a negative number?` : "Just this one thing: can you name any negative number?",
+        question: smallestStep(p),
       };
     case "NUDGE_TO_RESPOND":
       return {
@@ -304,7 +396,7 @@ function realizeDraft(plan: ResponsePlan, ctx: RealizeContext, seed: number): Dr
     case "SUGGEST_TEACHER":
       return {
         message: lead("This is a tricky spot, and that's completely okay. It's a good idea to ask your teacher or a classmate about it too, and I'll leave a note for your teacher so they know where you need support."),
-        question: p ? `Want to try one smaller step with me first: is ${p.a} positive or negative?` : "Would you like to try one smaller step with me first?",
+        question: p ? `Want to try one smaller step with me first? ${smallestStep(p).replace("Just this one thing: ", "")}`.replace("first? ", "first: ") : "Would you like to try one smaller step with me first?",
       };
     case "REDIRECT_OFF_TOPIC":
       return { message: "I can only help with your math lesson, so let's keep our focus there.", question: p ? `Shall we get back to ${dollar(p)}?` : `Shall we get back to ${lessonName(ctx)}?` };
@@ -331,10 +423,8 @@ export function realizePlan(plan: ResponsePlan, ctx: RealizeContext): RealizedRe
   }
   const draft = best!.draft;
   // Last-resort safe response if a violation persists (e.g. an operand coincides with the answer).
-  const final =
-    best!.violations.includes("ANSWER_DISCLOSED") || best!.violations.includes("EMPTY")
-      ? guessSafe(plan, ctx.state)
-      : draft;
+  const usedSafeFallback = best!.violations.includes("ANSWER_DISCLOSED") || best!.violations.includes("EMPTY");
+  const final = usedSafeFallback ? guessSafe(plan, ctx.state) : draft;
 
   return {
     responseType: TYPE_FOR[plan.strategy],
@@ -344,6 +434,7 @@ export function realizePlan(plan: ResponsePlan, ctx: RealizeContext): RealizedRe
     encouragement: encouragementFor(plan),
     nextStep: undefined,
     citedSourceIds: (final as Draft).citedSourceIds ?? [],
+    usedSafeFallback,
   };
 }
 
@@ -359,3 +450,91 @@ function encouragementFor(plan: ResponsePlan): string {
 }
 
 export { fmt };
+
+
+// ---------------------------------------------------------------------------------------------
+// Filipino / Taglish layer
+//
+// Empathy, feedback and framing are phrased in Filipino; mathematical steps stay in English, which is
+// how mathematics is commonly taught and discussed in Philippine classrooms (code-switching).
+// These strings are a best-effort first version and NEED native-speaker/teacher review.
+// ---------------------------------------------------------------------------------------------
+
+function ackTagalog(plan: ResponsePlan, ctx: RealizeContext, seed: number, fresh: (v: string) => boolean): string {
+  const s = ctx.state;
+  const att = plan.evaluation.attempted;
+  if (plan.evaluation.kind === "INCORRECT" && att !== undefined) {
+    return pickVariant(
+      [`Salamat sa pagsubok ng ${att}.`, `Magaling na sinubukan mo ang ${att}.`, `Nakakatulong ang sagot mong ${att} para makita ko kung paano ka mag-isip.`],
+      seed,
+      (v) => !fresh(v)
+    );
+  }
+  if (plan.intent === "REASONING" && plan.studentQuote) {
+    return pickVariant([`Salamat sa pagpapaliwanag mo ("${plan.studentQuote.slice(0, 80)}").`, `Maganda na ipinaliwanag mo ang iniisip mo ("${plan.studentQuote.slice(0, 80)}").`], seed, (v) => !fresh(v));
+  }
+  if (plan.intent === "CONFUSED" || plan.intent === "DONT_KNOW") {
+    const byLevel: string[][] = [
+      ["Okay lang 'yan, marami talagang nahihirapan dito sa simula.", "Walang problema, dahan-dahan lang tayo."],
+      ["Hindi pa rin malinaw, at salamat sa pagsasabi. Ipapaliwanag ko sa ibang paraan.", "Salamat sa pagiging tapat na hindi pa malinaw. Susubukan ko ang ibang paraan."],
+      ["Mukhang hindi pa rin malinaw, kaya ibang paraan naman ang gagamitin ko.", "Hindi pa rin malinaw, ibig sabihin kailangang baguhin ang paliwanag ko, hindi ikaw."],
+      ["Ilang paraan na ang sinubukan natin. Liliitan ko pa lalo ang bawat hakbang.", "Susubukan natin ang isa pang paraan, at sana ito na ang makatulong."],
+    ];
+    return pickVariant(byLevel[Math.min(Math.max(s.consecutiveConfusion, 1), 4) - 1], seed, (v) => !fresh(v));
+  }
+  return "";
+}
+
+function tagalogLayer(plan: ResponsePlan, ctx: RealizeContext, seed: number, en: Draft): Draft {
+  const p = plan.activeProblem;
+  const att = plan.evaluation.attempted;
+  const ack = ackTagalog(plan, ctx, seed, (v) => !ctx.state.recentTutorMessages.some((m) => m.includes(v.slice(0, 24))));
+  const lead = (t: string) => [ack, t].filter(Boolean).join(" ");
+  const posed = plan.problemToPose ? dollar(plan.problemToPose) : "";
+  const pick = <T,>(arr: T[], used: (v: T) => boolean = () => false) => pickVariant(arr, seed, used);
+  const lastQ = ctx.state.lastTutorQuestion;
+
+  switch (plan.strategy) {
+    case "EMPATHIZE_AND_SHRINK":
+      return { message: lead("Okay lang 'yan, normal na mahirapan sa paksang ito, at sumusubok ka pa rin. Gawin nating napakaliit ang hakbang."), question: en.question };
+    case "SUGGEST_TEACHER":
+      return { message: "Medyo mahirap ang bahaging ito, at okay lang iyon. Magandang itanong din ito sa guro o sa kaklase mo, at mag-iiwan ako ng tala para sa guro mo.", question: en.question };
+    case "NUDGE_TO_RESPOND":
+      return { message: "Walang pagmamadali.", question: pick(["Ano ang unang naiisip mo, kahit hindi ka sigurado?", "Kung huhulaan mo ang unang hakbang, ano kaya ito?"], (q) => lastQ === q) };
+    case "CELEBRATE_AND_NEXT":
+      return { message: `Nalutas mo nang mag-isa ang bagong problema, kaya malinaw na naiintindihan mo ang "${lessonName(ctx)}". Magaling!`, question: "Gusto mo ba ng mas mahirap, isa pang kapareho, o handa ka na sa susunod?" };
+    case "CONFIRM_AND_PROBE":
+      return {
+        message: pick([`Tama, ${att !== undefined ? att + " " : ""}ang sagot! Magaling ang pag-iisip mo.`, `Tama${att !== undefined ? `: ${att}` : ""}! Salamat sa pagtiyaga mo.`], (m) => ctx.state.recentTutorMessages.includes(m)),
+        question: pick(["Paano mo nalaman na iyon ang sagot?", "Anong ideya o patakaran ang ginamit mo?", "Maipapaliwanag mo ba ang iniisip mo sa isa o dalawang pangungusap?"], (q) => lastQ === q),
+      };
+    case "REDIRECT_TO_THINKING":
+      return { message: lead("Naiintindihan kong gusto mo nang malaman ang sagot. Tutulungan kitang hanapin ito para kaya mo na sa susunod."), question: en.question };
+    case "ASK_FOR_REASONING":
+      return { message: lead("Hindi pa iyon ang sagot, pero gusto kong malaman kung paano mo nakuha."), question: pick(["Paano mo ito nakuha, ano ang una mong ginawa?", "Anong mga hakbang ang ginawa mo para makuha ito?"], (q) => lastQ === q) };
+    case "ASK_WHAT_THEY_THINK":
+      return { message: lead(p ? `Alamin natin kung nasaan ka na sa ${dollar(p)}.` : "Alamin natin kung nasaan ka na."), question: pick(["Ano na ang nasubukan mo, o ano sa tingin mo ang unang hakbang?", "Ano ang una mong gagawin, kahit hindi ka pa sigurado?"], (q) => lastQ === q) };
+    case "OPEN_PROBLEM":
+      return { message: lead(p ? `Gawin natin ito nang magkasama: ${dollar(p)}. Gagabayan kita, hindi ko ito lulutasin para sa iyo.` : "Gawin natin ito nang magkasama. Gagabayan kita, hindi ko ito lulutasin para sa iyo."), question: "Ano ang napapansin mo sa problema, at ano ang hinihingi nito?" };
+    case "TRANSFER_PROBLEM":
+      return { message: lead(`Subukan mo ang bago nang mag-isa, walang hint: ${posed}.`), question: "Ano ang sagot mo?" };
+    case "SIMPLER_PROBLEM":
+      return { message: lead(`Subukan muna natin ang mas madali bago bumalik sa una: ${posed}.`), question: "Ano ang sagot mo dito?" };
+    case "HARDER_PROBLEM":
+      return { message: lead(`Handa ka na sa mas mahirap na hamon. Subukan ito: ${posed}.`), question: "Ano ang sagot mo?" };
+    case "REDIRECT_OFF_TOPIC":
+      return { message: "Sa math lesson mo lang kita matutulungan, kaya bumalik tayo roon.", question: p ? `Balik na ba tayo sa ${dollar(p)}?` : `Balik na ba tayo sa ${lessonName(ctx)}?` };
+    default: {
+      // Math-heavy strategies keep their English content with a Filipino acknowledgement in front.
+      return { message: ack && !en.message.startsWith(ack) ? [ack, stripEnglishAck(en.message)].filter(Boolean).join(" ") : en.message, question: en.question, citedSourceIds: en.citedSourceIds };
+    }
+  }
+}
+
+/** Remove the leading English acknowledgement the EN draft added (so it is not doubled in Taglish). */
+function stripEnglishAck(message: string): string {
+  return message
+    .replace(/^(Thanks for trying [^.]*\.|I can see you gave [^.]*\.|Good that you committed to an answer, [^.]*\.|[^.]* is a real attempt, and that helps me see your thinking\.)\s*/i, "")
+    .replace(/^(That's okay, a lot of people find this tricky at first\.|No problem, let's slow down together\.|Still unclear, and thanks for telling me\. Let me explain it differently this time\.|Thanks for being honest that it's not clear yet\. Let me try another angle\.|I can tell this is still not clicking, and that's okay\. I'll take a completely different route\.|It's still fuzzy, and that tells me my explanation needs to change, not you\.|We've tried a few ways already\. Let's slow right down and go much smaller\.|Let's try yet another way, because one of them should click\.)\s*/i, "")
+    .replace(/^(I like that you explained your thinking \([^)]*\)\.|Thanks for sharing your reasoning \([^)]*\)\.)\s*/i, "");
+}

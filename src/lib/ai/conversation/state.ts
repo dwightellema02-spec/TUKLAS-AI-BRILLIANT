@@ -50,6 +50,7 @@ export function initialState(masteryStatus?: string): ConversationState {
     independentSuccesses: 0,
     needsTeacherAttention: false,
     recentStudentStatements: [],
+    language: "EN",
     usedProblems: [],
     hintsOnProblem: 0,
   };
@@ -86,6 +87,7 @@ export function observeStudentTurn(
   const s: ConversationState = JSON.parse(JSON.stringify(prev));
   s.turn += 1;
   s.lastStudentIntent = signal.intent;
+  if (signal.language === "TL") s.language = "TL"; // sticky for the conversation
 
   // Problem change resets per-problem counters (but not the whole conversation memory).
   const newKey = active.problem ? problemKey(active.problem) : s.problemKey;
@@ -228,6 +230,7 @@ export function summarizeState(state: ConversationState): string {
   if (state.wrongOnProblem > 0) lines.push(`Wrong attempts on the current problem: ${state.wrongOnProblem}.`);
   if (state.correctStreak > 0) lines.push(`Correct answers in a row: ${state.correctStreak}.`);
   if (state.frustration > 0) lines.push(`Frustration signals: ${state.frustration}/3.`);
+  if (state.language === "TL") lines.push("LANGUAGE: the student writes in Filipino/Taglish. Reply in simple, warm Taglish: Filipino for encouragement and explanation, English for mathematical terms and steps. Keep it natural and age-appropriate; do not be formal.");
   return lines.join("\n");
 }
 

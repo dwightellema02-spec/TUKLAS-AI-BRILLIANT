@@ -11,7 +11,7 @@
  *  - Be honest when the tutor cannot help enough: suggest the teacher.
  */
 
-import { generateRelatedProblem, makeProblem, problemKey, structureFacts, workedSteps } from "./problems";
+import { answerText, generateRelatedProblem, kindOf, makeProblem, problemKey, structureFacts, workedSteps } from "./problems";
 import { phaseAfter, recentStrategies } from "./state";
 import type {
   AnswerEvaluation,
@@ -60,7 +60,11 @@ const NEEDS_PROBLEM: TutorStrategy[] = ["VISUAL_NUMBER_LINE", "DECOMPOSE_STEPS",
 
 function baseProblemForTopic(topic?: string): ParsedProblem | undefined {
   const t = (topic ?? "").toLowerCase();
-  if (!/(integer|signed|positive|negative|add|subtract|multipl|divid|absolute|number line)/.test(t)) return undefined;
+  if (!/(integer|signed|positive|negative|add|subtract|multipl|divid|absolute|opposite|inverse|equation|solve|compar|greater|less|inequal|order|number line)/.test(t)) return undefined;
+  if (/absolute/.test(t)) return makeProblem(-9, "abs");
+  if (/opposite|inverse/.test(t)) return makeProblem(-7, "opp");
+  if (/equation|solve/.test(t)) return makeProblem(4, "x+", 11);
+  if (/compar|greater|less|inequal|order/.test(t)) return makeProblem(-6, "max", -2);
   if (/subtract/.test(t)) return makeProblem(4, "-", 9);
   if (/multipl/.test(t)) return makeProblem(-3, "*", 4);
   if (/divid/.test(t)) return makeProblem(-12, "/", 3);
@@ -73,10 +77,20 @@ function quote(signal: StudentSignal): string | undefined {
 }
 
 function misconceptionDirective(d: MistakeDiagnosis | undefined, p: ParsedProblem | undefined): string {
-  const f = p ? structureFacts(p) : undefined;
+  const binary = !!p && kindOf(p) === "BINARY";
   switch (d) {
     case "SIGN_ERROR":
-      return `The student's number has the right size but the wrong sign. Do NOT say which sign is right. Ask which of the two numbers is farther from zero${f ? ` (compare |${p!.a}| and |${p!.b}|)` : ""} and what sign that number has.`;
+      return binary
+        ? `The student's number has the right size but the wrong sign. Do NOT say which sign is right. Ask which of the two numbers is farther from zero (compare |${p!.a}| and |${p!.b}|) and what sign that number has.`
+        : `The student's number has the right size but the wrong sign. Do NOT say which sign is right. Ask them to think again about whether the result should be positive or negative, and why.`;
+    case "ABS_KEPT_SIGN":
+      return `The student kept the negative sign. Do NOT give the result. Remind them that absolute value measures distance from zero, and ask whether a distance can ever be negative.`;
+    case "OPPOSITE_SAME_NUMBER":
+      return `The student gave the number itself. Do NOT give the result. Ask which side of zero the number is on and where its mirror image across zero would be.`;
+    case "EQ_WRONG_INVERSE":
+      return `The student repeated the operation instead of undoing it. Do NOT give the result. Ask which operation takes them back to the variable alone, and to apply it to both sides.`;
+    case "COMPARED_MAGNITUDE":
+      return `The student judged negative numbers by size instead of position. Do NOT give the result. Remind them that numbers farther to the right on a number line are greater, and ask which of the two is farther right.`;
     case "ADDED_MAGNITUDES":
       return `The student added the sizes even though the signs differ. Do NOT give the rule outright. Ask what happens when a positive and a negative amount are combined (for example money earned versus money owed), then ask which one "wins".`;
     case "IGNORED_SIGNS":
@@ -281,7 +295,7 @@ export function planResponse(input: PlanInput): ResponsePlan {
   const used = state.usedProblems;
   if (strategy === "WORKED_ANALOGOUS" && baseForExamples) {
     // The worked example must not contain the (protected) answer of the student's problem anywhere in its text.
-    const protectedAbs = workingProblem ? String(Math.abs(workingProblem.expected)) : undefined;
+    const protectedAbs = workingProblem && workingProblem.op !== ">" && workingProblem.op !== "<" ? String(Math.abs(workingProblem.expected)) : undefined;
     for (let k = 0; k < 25; k++) {
       const ex = generateRelatedProblem(baseForExamples, "TRANSFER", state.turn * 7 + state.examplesGiven + k * 101, used);
       const steps = workedSteps(ex);
@@ -307,17 +321,19 @@ export function planResponse(input: PlanInput): ResponsePlan {
   const mustAskOneQuestion = true; // every move ends by handing the turn back to the student
   // The answer to protect is the one the student has not yet earned: a newly posed problem's, else the active problem's
   // (unless the student has just answered it correctly).
-  const protectedValue =
+  const protectedProblem =
     problemToPose && (strategy === "TRANSFER_PROBLEM" || strategy === "SIMPLER_PROBLEM" || strategy === "HARDER_PROBLEM")
-      ? problemToPose.expected
+      ? problemToPose
       : workingProblem && !(intent === "ANSWER_ATTEMPT" && evaluation.kind === "CORRECT")
-        ? workingProblem.expected
+        ? workingProblem
         : undefined;
-  const protectedAnswer = protectedValue !== undefined ? String(protectedValue) : undefined;
+  const protectedAnswer = protectedProblem ? answerText(protectedProblem) : undefined;
   const aliases: string[] = [];
-  if (protectedValue !== undefined) {
-    aliases.push(String(protectedValue));
-    if (protectedValue < 0) aliases.push(`negative ${Math.abs(protectedValue)}`, `minus ${Math.abs(protectedValue)}`);
+  if (protectedProblem) {
+    aliases.push(answerText(protectedProblem));
+    if (protectedProblem.expected < 0 && protectedProblem.op !== ">" && protectedProblem.op !== "<") {
+      aliases.push(`negative ${Math.abs(protectedProblem.expected)}`, `minus ${Math.abs(protectedProblem.expected)}`);
+    }
   }
 
   const plan: ResponsePlan = {
@@ -351,7 +367,7 @@ export function planResponse(input: PlanInput): ResponsePlan {
 
 export function buildDirective(plan: ResponsePlan, state: ConversationState, hasSources: boolean): string {
   const p = plan.activeProblem;
-  const f = p ? structureFacts(p) : undefined;
+  const f = p && kindOf(p) === "BINARY" ? structureFacts(p) : undefined;
   const lines: string[] = [];
   const q = plan.studentQuote ? `The student just said: "${plan.studentQuote}". Refer to it specifically.` : "";
 
@@ -369,10 +385,14 @@ export function buildDirective(plan: ResponsePlan, state: ConversationState, has
       lines.push("Recall ONE prerequisite idea (what a negative number means, absolute value as distance from zero, or direction on a number line) and ask a question about that idea, not about the final answer.");
       break;
     case "VISUAL_NUMBER_LINE":
-      lines.push(`Use a number line.${p ? ` Start at ${p.a}; the operation is ${p.op === "+" ? "adding" : p.op === "-" ? "subtracting" : p.op === "*" ? "multiplying" : "dividing"} ${p.b}.` : ""} Describe the picture in words and ask which direction to move and whether they end up left or right of zero. Do NOT state where they end up.`);
+      if (p && kindOf(p) === "ABS") lines.push(`Use a number line: describe putting a finger on ${p.a} and counting the steps back to 0. Ask how many steps that is and whether counting steps can give a negative number. Do NOT state the result.`);
+      else if (p && kindOf(p) === "OPPOSITE") lines.push(`Use a number line with a mirror at 0: ask where the mirror image of ${p.a} would land. Do NOT state the result.`);
+      else if (p && kindOf(p) === "EQUATION") lines.push(`Use a balance scale: ${p.display}; whatever is done to one side must be done to the other. Ask what could be done to both sides to leave the variable alone. Do NOT state the result.`);
+      else if (p && kindOf(p) === "COMPARE") lines.push(`Use a number line where numbers grow to the right. Ask which of ${p.a} and ${p.b} is farther right. Do NOT state the result.`);
+      else lines.push(`Use a number line.${p ? ` Start at ${p.a}; the operation is ${p.op === "+" ? "adding" : p.op === "-" ? "subtracting" : p.op === "*" ? "multiplying" : "dividing"} ${p.b}.` : ""} Describe the picture in words and ask which direction to move and whether they end up left or right of zero. Do NOT state where they end up.`);
       break;
     case "DECOMPOSE_STEPS":
-      lines.push(`Break the problem into small steps and state ONLY the first one${f ? ` (for example: are the signs the same or different, and which of |${p!.a}| and |${p!.b}| is larger)` : ""}. Ask the student to do just that step. ${q}`);
+      lines.push(`Break the problem into small steps and state ONLY the first one${f ? ` (for example: are the signs the same or different, and which of |${p!.a}| and |${p!.b}| is larger)` : p && kindOf(p) === "EQUATION" ? " (for example: what operation is being done to the variable, and what undoes it)" : p && kindOf(p) === "ABS" ? " (for example: how far is the number from zero on the number line)" : p && kindOf(p) === "OPPOSITE" ? " (for example: which side of zero is the number on)" : p && kindOf(p) === "COMPARE" ? " (for example: which number is farther to the right on a number line)" : ""}. Ask the student to do just that step. ${q}`);
       break;
     case "WORKED_ANALOGOUS":
       if (plan.example) {

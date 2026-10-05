@@ -18,7 +18,8 @@
     "test:phase22:pg": "tsx scripts/test-phase22-prisma.ts",
     "test:phase23": "AI_PROVIDER=local tsx scripts/test-phase23-conversation.ts",
     "test:phase23:pg": "tsx scripts/test-phase23-prisma.ts",
-    "eval:tutor": "tsx scripts/eval-tutor-conversations.ts"
+    "eval:tutor": "tsx scripts/eval-tutor-conversations.ts",
+    "test:phase24": "AI_PROVIDER=local tsx scripts/test-phase24-taglish-kinds.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

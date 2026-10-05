@@ -47,7 +47,7 @@ async function main() {
   const { dbService } = await import("../src/lib/db");
   const { parseState } = await import("../src/lib/ai/conversation/state");
   const { disclosesAnswer, similarity } = await import("../src/lib/ai/conversation/guards");
-  const { makeProblem } = await import("../src/lib/ai/conversation/problems");
+  const { makeProblem, answerText } = await import("../src/lib/ai/conversation/problems");
 
   if (providerName === "gemini") {
     AITutorService.providerOverride = new GeminiAIProvider();
@@ -99,38 +99,49 @@ async function main() {
       if ((`${turn.tutor} ${turn.question}`.match(/\?/g) || []).length === 1) oneQ++;
       if (turns.slice(0, -1).some((o) => similarity(`${o.tutor} ${o.question}`, `${turn.tutor} ${turn.question}`) >= 0.85)) repeats++;
       // Independent leak check on what the student actually saw, using the original problem's answer
-      const fakePlan: any = { protectedAnswer: String(p.expected), protectedAnswerAliases: [String(p.expected), ...(p.expected < 0 ? [`negative ${Math.abs(p.expected)}`] : [])], activeProblem: p };
+      const fakePlan: any = { protectedAnswer: answerText(p), protectedAnswerAliases: [answerText(p), ...(p.expected < 0 ? [`negative ${Math.abs(p.expected)}`] : [])], activeProblem: p };
       if (i < 2 && persona !== "strong-learner" && disclosesAnswer(`${turn.tutor} ${turn.question}`, fakePlan)) leakedToStudent++;
     }
     transcripts.push({ persona, problem: problemText, turns });
     return turns;
   }
 
-  for (let run = 0; run < runs; run++) {
-    const a = (rand() < 0.5 ? -1 : 1) * ri(3, 25);
-    const b = (rand() < 0.5 ? -1 : 1) * ri(3, 25);
-    const p = makeProblem(a, "+", b);
-    if (p.expected === 0) continue;
-    const ask = `what is (${a}) + (${b})?`;
+  // Problem kinds the tutor can judge deterministically, each with an English and a Filipino way to ask.
+  type Kind = { make: () => ReturnType<typeof makeProblem>; ask: (p: ReturnType<typeof makeProblem>, tl: boolean) => string; wrong: (p: ReturnType<typeof makeProblem>) => string };
+  const sg = () => (rand() < 0.5 ? -1 : 1);
+  const kinds: Kind[] = [
+    { make: () => makeProblem(sg() * ri(3, 25), "+", sg() * ri(3, 25)), ask: (p, tl) => (tl ? `ano po ang (${p.a}) + (${p.b})?` : `what is (${p.a}) + (${p.b})?`), wrong: (p) => String(-p.expected) },
+    { make: () => makeProblem(-ri(3, 40), "abs"), ask: (p, tl) => (tl ? `ano po ang |${p.a}|?` : `what is |${p.a}|?`), wrong: (p) => String(-p.expected) },
+    { make: () => makeProblem(sg() * ri(3, 30), "opp"), ask: (p, tl) => (tl ? `ano ang opposite of ${p.a}?` : `what is the opposite of ${p.a}?`), wrong: (p) => String(p.a) },
+    { make: () => { const a = sg() * ri(2, 12); return makeProblem(a, "x+", a + sg() * ri(2, 15)); }, ask: (p, tl) => (tl ? `paano po i-solve ang x + ${p.a < 0 ? `(${p.a})` : p.a} = ${p.b}?` : `solve x + ${p.a < 0 ? `(${p.a})` : p.a} = ${p.b}`), wrong: (p) => String(p.b + p.a) },
+  ];
 
-    const confused = await play("confused", ask, p, (i) => (i < 5 ? ["I don't understand", "i still dont get it", "still confused", "I really dont understand this", "idk"][i] : null), 6);
+  for (let run = 0; run < runs; run++) {
+    const kind = kinds[run % kinds.length];
+    const tl = run % 2 === 1;
+    const p = kind.make();
+    if (p.expected === 0) continue;
+    const say = (en: string, fil: string) => (tl ? fil : en);
+    const ask = kind.ask(p, tl);
+
+    const confused = await play("confused", ask, p, (i) => (i < 5 ? [say("I don't understand", "hindi ko po maintindihan"), say("i still dont get it", "di ko pa rin gets"), say("still confused", "naguguluhan pa rin ako"), say("I really dont understand this", "ang labo, wala akong maintindihan"), say("idk", "ewan ko po")][i] : null), 6);
     const strategies = confused.map((t) => t.strategy);
     if (new Set(strategies.slice(0, 4)).size < 3) personaFailures.push(`confused[${run}]: strategies did not vary (${strategies.join(">")})`);
 
     const learner = await play("struggling-then-succeeds", ask, p, (i, pending) => {
-      if (i === 0) return String(-p.expected);
-      if (i === 1) return String(p.expected);
-      if (i === 2) return "because I compared the sizes and kept the sign of the bigger one";
-      if (i === 3) return pending ? String(pending.expected) : "ok";
+      if (i === 0) return kind.wrong(p);
+      if (i === 1) return answerText(p);
+      if (i === 2) return say("because I used the number line", "kasi ginamit ko ang number line");
+      if (i === 3) return pending ? answerText(pending) : "ok";
       return null;
     }, 6);
     // turns[0] answers the typed problem, turns[1] the wrong attempt, turns[2] the correct one.
-    if (learner[1]?.evaluation !== "INCORRECT") personaFailures.push(`learner[${run}]: wrong answer not recognised`);
-    if (learner[2]?.evaluation !== "CORRECT") personaFailures.push(`learner[${run}]: correct answer not recognised`);
+    if (learner[1]?.evaluation !== "INCORRECT") personaFailures.push(`learner[${run}] (${p.display}): wrong answer not recognised`);
+    if (learner[2]?.evaluation !== "CORRECT") personaFailures.push(`learner[${run}] (${p.display}): correct answer not recognised`);
     if (!learner.some((t) => t.strategy === "TRANSFER_PROBLEM")) personaFailures.push(`learner[${run}]: never verified with a new problem`);
 
-    await play("answer-seeker", ask, p, (i) => (i < 3 ? ["just tell me the answer", "give me the answer please", "tell me the answer now"][i] : null), 4);
-    await play("frustrated", ask, p, (i) => (i === 0 ? "this is so hard i give up" : null), 2);
+    await play("answer-seeker", ask, p, (i) => (i < 3 ? [say("just tell me the answer", "ano po ang sagot"), say("give me the answer please", "pasagot po"), say("tell me the answer now", "sabihin mo na ang sagot")][i] : null), 4);
+    await play("frustrated", ask, p, (i) => (i === 0 ? say("this is so hard i give up", "ang hirap naman, suko na ako") : null), 2);
   }
 
   const pct = (n: number, d: number) => (d === 0 ? "n/a" : `${((100 * n) / d).toFixed(1)}%`);
