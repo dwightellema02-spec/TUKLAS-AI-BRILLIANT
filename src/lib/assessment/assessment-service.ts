@@ -656,6 +656,7 @@ export class AssessmentService {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getAssessmentForStudent db error:", e);
     }
 
@@ -816,6 +817,7 @@ export class AssessmentService {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("submitAssessmentAttempt findUnique db error:", e);
     }
 
@@ -1099,6 +1101,7 @@ export class AssessmentService {
         }));
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("listAssessments db fallback:", e);
     }
 

@@ -70,7 +70,7 @@ async function main() {
 
   console.log("\n--- C. What is actually in the database ---");
   const { prisma } = await import("../src/lib/db");
-  const classes = await prisma.classroom.findMany({ where: { name: { in: ["Grade 7 - Rizal", "Grade 7 - Bonifacio"] } }, include: { enrollments: true, assignments: true } });
+  const classes = await prisma.classroom.findMany({ where: { name: { in: ["Grade 7 - Rizal", "Grade 7 - Bonifacio"] } }, include: { enrollments: true, assignments: true }, orderBy: { createdAt: "desc" } });
   assert(classes.length >= 2 && classes.every((c) => !!c.joinCode && /^[A-HJ-KM-NP-Z2-9]{6}$/.test(c.joinCode!)), "Classrooms and unique join codes are rows in PostgreSQL");
   const rizal = classes.find((c) => c.name === "Grade 7 - Rizal")!;
   assert(rizal.enrollments.length >= 2 && rizal.enrollments.some((e) => e.source === "JOIN_CODE" || e.source === "TEACHER"), "Enrolments persisted with their source");

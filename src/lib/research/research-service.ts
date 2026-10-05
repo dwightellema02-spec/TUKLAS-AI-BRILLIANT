@@ -1,16 +1,17 @@
 /**
  * Tuklas AI - Core Research Analytics Orchestrator
- * Phase 14: Empirical Metrics, Pre/Post Comparisons, and Interventions
+ * Phase 14 metrics, rebuilt in Phase 29 on real, scoped data only: nothing here is invented. Where there is not
+ * enough evidence the result says so (empty lists, null values, INSUFFICIENT_*), and every query is limited to
+ * the students the caller is allowed to see.
  */
 
-import { prisma, hasValidDatabaseUrl, dbService, fallbackStore } from "../db";
-import { assessmentFallbackStore } from "../assessment/assessment-service";
 import { RESEARCH_CONFIG } from "./research-config";
 import { AccuracyCalculator } from "./accuracy";
 import { UnderstandingCalculator } from "./understanding";
 import { ApplicationCalculator } from "./application";
 import { ConsistencyCalculator } from "./consistency";
 import { ResearchComparisonService } from "./comparison";
+import { ResearchData, type ResearchScope, type AttemptRow } from "./research-data";
 import type {
   StudentResearchProfile,
   PrePostComparisonResult,
@@ -20,411 +21,258 @@ import type {
   TimeSeriesDataPoint,
 } from "./research-types";
 
+export type { ResearchScope } from "./research-data";
+
+const pct = (n: number) => Number((n * 100).toFixed(1));
+const ratio = (num: number, den: number) => (den > 0 ? Number((num / den).toFixed(4)) : 0);
+
 export class ResearchService {
   /**
-   * Calculate full deterministic research profile for a student
+   * Deterministic research profile for ONE student. The caller must already have authorised access to this student.
    */
   static async getStudentResearchProfile(
     studentId: string,
     filters?: { skillId?: string; lessonId?: string }
   ): Promise<StudentResearchProfile> {
-    // 1. Gather all student question attempts
-    let attempts: any[] = [];
-    let checkpoints: any[] = [];
-    let studentName = "Juan de la Cruz";
-    let gradeLevel = 7;
+    const scope: ResearchScope = { studentIds: [studentId] };
+    const info = (await ResearchData.students([studentId])).get(studentId);
+    if (!info) throw new Error("Student not found");
 
-    try {
-      if (hasValidDatabaseUrl) {
-        const student = await prisma.user.findUnique({
-          where: { id: studentId },
-          select: { id: true, name: true, gradeLevel: true },
-        });
-        if (student) {
-          studentName = student.name;
-          gradeLevel = student.gradeLevel || 7;
-        }
+    const attempts = await ResearchData.attempts(scope, filters);
+    const checkpoints = await ResearchData.checkpoints(scope, studentId);
 
-        const whereAttempts: any = { studentId };
-        if (filters?.skillId) whereAttempts.skillId = filters.skillId;
-        if (filters?.lessonId) whereAttempts.question = { lessonId: filters.lessonId };
+    const normalizedAttempts = attempts.map((a) => ({
+      isCorrect: a.isCorrect,
+      attemptNumber: a.attemptNumber || 1,
+      hintUsed: a.hintUsed,
+      timeTakenMs: a.timeTakenMs ?? undefined,
+      questionId: a.questionId,
+      skillId: a.skillId ?? undefined,
+      difficulty: a.difficulty as any,
+      questionType: a.questionType as any,
+      cognitiveLevel: a.cognitiveLevel as any,
+      submittedAt: a.submittedAt,
+      isAbandoned: false,
+    }));
 
-        attempts = await prisma.questionAttempt.findMany({
-          where: whereAttempts,
-          include: { question: true },
-          orderBy: { submittedAt: "asc" },
-        });
-
-        checkpoints = await prisma.checkpointAttempt.findMany({
-          where: { userId: studentId },
-          orderBy: { createdAt: "asc" },
-        });
-      }
-    } catch (e) {
-      console.warn("getStudentResearchProfile db fallback:", e);
-    }
-
-    if (attempts.length === 0) {
-      // In-memory fallback attempts
-      const foundUser = fallbackStore.users.find((u) => u.id === studentId);
-      if (foundUser) {
-        studentName = foundUser.name;
-        gradeLevel = foundUser.gradeLevel || 7;
-      }
-
-      attempts = fallbackStore.questionAttempts.filter((a) => {
-        if (a.studentId !== studentId) return false;
-        if (filters?.skillId && a.skillId !== filters.skillId) return false;
-        return true;
-      });
-
-      checkpoints = fallbackStore.checkpointAttempts.filter((c) => c.userId === studentId);
-    }
-
-    // Map attempts with cognitive level
-    const normalizedAttempts = attempts.map((a) => {
-      const q = a.question || fallbackStore.questions.find((fq) => fq.id === a.questionId) || {};
-      let cogLevel = q.cognitiveLevel || "PROCEDURAL";
-
-      // Also check assessment item metadata if available
-      if (!cogLevel || cogLevel === "PROCEDURAL") {
-        if (q.type === "MULTIPLE_CHOICE" && q.difficulty === "EASY") cogLevel = "KNOWLEDGE";
-        if (q.difficulty === "HARD") cogLevel = "APPLICATION";
-      }
-
-      return {
-        isCorrect: a.isCorrect,
-        attemptNumber: a.attemptNumber || 1,
-        hintUsed: !!a.hintUsed,
-        timeTakenMs: a.timeTakenMs,
-        questionId: a.questionId,
-        skillId: a.skillId,
-        difficulty: q.difficulty || "MEDIUM",
-        questionType: q.type || "MULTIPLE_CHOICE",
-        cognitiveLevel: cogLevel,
-        submittedAt: a.submittedAt || new Date(),
-        isAbandoned: false,
-      };
-    });
-
-    // 2. Deterministic calculations
-    const accuracy = AccuracyCalculator.calculate({ attempts: normalizedAttempts });
+    const accuracy = AccuracyCalculator.calculate({ attempts: normalizedAttempts as any });
     const understanding = UnderstandingCalculator.calculate({
-      attempts: normalizedAttempts,
+      attempts: normalizedAttempts as any,
       checkpoints: checkpoints.map((c) => ({ isCorrect: c.isCorrect, attempt: c.attempt })),
     });
-    const application = ApplicationCalculator.calculate({ attempts: normalizedAttempts });
-    const consistency = ConsistencyCalculator.calculate({ attempts: normalizedAttempts });
+    const application = ApplicationCalculator.calculate({ attempts: normalizedAttempts as any });
+    const consistency = ConsistencyCalculator.calculate({ attempts: normalizedAttempts as any });
 
-    // 3. Find unique skills evaluated
     const uniqueSkills = new Set(normalizedAttempts.map((a) => a.skillId).filter(Boolean));
+    const mistakes = (await ResearchData.mistakes(scope)).filter((m) => m.category !== "UNKNOWN");
+    const counts = new Map<string, number>();
+    for (const m of mistakes) counts.set(m.category, (counts.get(m.category) ?? 0) + 1);
+    const top = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0];
 
     return {
       studentId,
-      studentName,
-      gradeLevel,
-      metrics: {
-        accuracy,
-        understanding,
-        application,
-        consistency,
-      },
+      studentName: info.name,
+      gradeLevel: info.gradeLevel ?? undefined,
+      metrics: { accuracy, understanding, application, consistency },
       attemptCount: normalizedAttempts.length,
       skillsEvaluated: uniqueSkills.size,
-      difficultSkillCount: accuracy.value < 0.65 && accuracy.evidenceCount >= 3 ? 1 : 0,
+      difficultSkillCount: accuracy.value < RESEARCH_CONFIG.difficultSkillCriteria.lowAccuracyThreshold && accuracy.evidenceCount >= RESEARCH_CONFIG.thresholds.minAttemptsForAccuracy ? 1 : 0,
+      topMisconception: top?.[0],
       calculatedAt: new Date().toISOString(),
       calculationVersion: RESEARCH_CONFIG.version,
     };
   }
 
   /**
-   * Pre-Test to Post-Test Comparative Analytics for a Cohort or Student
+   * Pre-test vs post-test for the students in scope: averages and skill accuracies come from the graded responses.
+   * With no graded result on a side, that side is null and the trend is INSUFFICIENT_DATA.
    */
   static async getPrePostComparison(
+    scope: ResearchScope,
     preTestId: string,
     postTestId: string,
-    classroomId?: string
+    classroom?: { id: string; name: string }
   ): Promise<PrePostComparisonResult> {
-    // Collect attempts for pre-test and post-test
-    let preAttempts: any[] = [];
-    let postAttempts: any[] = [];
-    let preTitle = "Pre-Test";
-    let postTitle = "Post-Test";
-
-    try {
-      if (hasValidDatabaseUrl) {
-        const preAsm = await prisma.assessment.findUnique({ where: { id: preTestId } });
-        const postAsm = await prisma.assessment.findUnique({ where: { id: postTestId } });
-        if (preAsm) preTitle = preAsm.title;
-        if (postAsm) postTitle = postAsm.title;
-
-        preAttempts = await prisma.assessmentAttempt.findMany({
-          where: { assessmentId: preTestId, status: "GRADED" },
-          include: { responses: true },
-        });
-
-        postAttempts = await prisma.assessmentAttempt.findMany({
-          where: { assessmentId: postTestId, status: "GRADED" },
-          include: { responses: true },
-        });
+    const [pre, post, skillTitles] = await Promise.all([
+      ResearchData.assessmentResults(preTestId, scope),
+      ResearchData.assessmentResults(postTestId, scope),
+      ResearchData.skillTitles(),
+    ]);
+    const mean = (xs: number[]) => (xs.length > 0 ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+    const skillAccuracy = (responses: Array<{ skillId: string | null; isCorrect: boolean }>) => {
+      const by = new Map<string, { n: number; c: number }>();
+      for (const r of responses) {
+        if (!r.skillId) continue;
+        const e = by.get(r.skillId) ?? { n: 0, c: 0 };
+        e.n++; if (r.isCorrect) e.c++;
+        by.set(r.skillId, e);
       }
-    } catch (e) {
-      console.warn("getPrePostComparison db error:", e);
-    }
+      return Array.from(by.entries()).map(([skillId, e]) => ({ skillId, skillTitle: skillTitles.get(skillId) ?? skillId, accuracy: ratio(e.c, e.n) }));
+    };
 
-    if (preAttempts.length === 0 && postAttempts.length === 0) {
-      const preAsm = assessmentFallbackStore.assessments.find((a) => a.id === preTestId);
-      const postAsm = assessmentFallbackStore.assessments.find((a) => a.id === postTestId);
-      if (preAsm) preTitle = preAsm.title;
-      if (postAsm) postTitle = postAsm.title;
-
-      preAttempts = assessmentFallbackStore.attempts.filter(
-        (a) => a.assessmentId === preTestId && a.status === "GRADED"
-      );
-      postAttempts = assessmentFallbackStore.attempts.filter(
-        (a) => a.assessmentId === postTestId && a.status === "GRADED"
-      );
-    }
-
-    const preAverage =
-      preAttempts.length > 0
-        ? preAttempts.reduce((sum, a) => sum + (a.scorePercent || 0), 0) / preAttempts.length
-        : 65.0;
-
-    const postAverage =
-      postAttempts.length > 0
-        ? postAttempts.reduce((sum, a) => sum + (a.scorePercent || 0), 0) / postAttempts.length
-        : 88.0;
-
-    return ResearchComparisonService.compare({
-      classroomId,
-      classroomName: classroomId ? "Section Mabini" : "Grade 7 Cohort",
+    const result = ResearchComparisonService.compare({
+      classroomId: classroom?.id,
+      classroomName: classroom?.name,
       preTest: {
         assessmentId: preTestId,
-        title: preTitle,
-        totalStudents: preAttempts.length || 1,
-        averageScorePercent: preAverage,
-        skills: [
-          { skillId: "skl_01", skillTitle: "Identify Integers", accuracy: 0.70 },
-          { skillId: "skl_02", skillTitle: "Compare & Order Integers", accuracy: 0.62 },
-          { skillId: "skl_03", skillTitle: "Add Integers", accuracy: 0.58 },
-        ],
+        title: pre.title ?? preTestId,
+        totalStudents: pre.perStudent.length,
+        averageScorePercent: mean(pre.perStudent.map((p) => p.scorePercent)),
+        skills: skillAccuracy(pre.responses),
       },
       postTest: {
         assessmentId: postTestId,
-        title: postTitle,
-        totalStudents: postAttempts.length || 1,
-        averageScorePercent: postAverage,
-        skills: [
-          { skillId: "skl_01", skillTitle: "Identify Integers", accuracy: 0.95 },
-          { skillId: "skl_02", skillTitle: "Compare & Order Integers", accuracy: 0.88 },
-          { skillId: "skl_03", skillTitle: "Add Integers", accuracy: 0.84 },
-        ],
+        title: post.title ?? postTestId,
+        totalStudents: post.perStudent.length,
+        averageScorePercent: mean(post.perStudent.map((p) => p.scorePercent)),
+        skills: skillAccuracy(post.responses),
       },
     });
-  }
-
-  /**
-   * Identify Difficult Skills using empirical criteria (no arbitrary rankings)
-   */
-  static async getDifficultSkills(filters?: { gradeLevel?: number; classroomId?: string }): Promise<DifficultSkillEvidence[]> {
-    const allSkills = fallbackStore.curriculum.skills;
-    const results: DifficultSkillEvidence[] = [];
-
-    for (const skill of allSkills) {
-      // Collect attempts associated with skill
-      const attempts = fallbackStore.questionAttempts.filter((a) => a.skillId === skill.id);
-      const totalCount = attempts.length;
-
-      if (totalCount === 0) continue;
-
-      const correctCount = attempts.filter((a) => a.isCorrect).length;
-      const accuracy = Number((correctCount / totalCount).toFixed(4));
-      const hintCount = attempts.filter((a) => a.hintUsed).length;
-      const hintRate = Number((hintCount / totalCount).toFixed(4));
-
-      // Check if flags as difficult
-      const isLowAccuracy = accuracy < RESEARCH_CONFIG.difficultSkillCriteria.lowAccuracyThreshold;
-      const isHighHint = hintRate > RESEARCH_CONFIG.difficultSkillCriteria.highHintRateThreshold;
-
-      if (isLowAccuracy || isHighHint || skill.id === "skl_02") {
-        results.push({
-          skillId: skill.id,
-          skillCode: (skill as any).code || skill.id,
-          skillTitle: skill.title,
-          gradeLevel: filters?.gradeLevel || 7,
-          accuracy,
-          evidenceCount: totalCount,
-          affectedStudentCount: 1,
-          totalStudentsEvaluated: 1,
-          primaryMisconceptions: [
-            { category: "SIGN_ERROR", count: 2, percentage: 50.0 },
-            { category: "CONCEPTUAL_MISUNDERSTANDING", count: 1, percentage: 25.0 },
-          ],
-          hintDependenceRate: hintRate,
-          masteryDistribution: {
-            notStarted: 0,
-            learning: 0,
-            developing: 1,
-            proficient: 0,
-            mastered: 0,
-          },
-          flagReason: isLowAccuracy
-            ? `Cohort accuracy (${(accuracy * 100).toFixed(0)}%) is below the mastery baseline of 65%.`
-            : `High hint dependency rate (${(hintRate * 100).toFixed(0)}%) indicates conceptual hesitation.`,
-        });
-      }
+    const both = pre.perStudent.filter((p) => post.perStudent.some((q) => q.studentId === p.studentId)).length;
+    if (result.comparison.observedTrend !== "INSUFFICIENT_DATA") {
+      result.comparison.description += ` Based on ${pre.perStudent.length} pre-test and ${post.perStudent.length} post-test result(s); ${both} student(s) took both. This is an observed difference, not evidence of cause.`;
     }
-
-    return results;
+    return result;
   }
 
   /**
-   * Aggregate Mistake Analytics from Real Student Error Records
+   * Skills where the students in scope show low accuracy or heavy hint use. Needs enough evidence: at least
+   * minAttemptsToFlag attempts from at least minStudentsForClassroomAggregate students.
    */
-  static async getMistakeAnalytics(): Promise<MistakeAggregateItem[]> {
-    const mistakeCategories: Record<string, { count: number; prompts: string[] }> = {
-      SIGN_ERROR: {
-        count: 5,
-        prompts: ["Calculate: (-8) + (-5)", "Evaluate: -12 - (-7)"],
-      },
-      CONCEPTUAL_MISUNDERSTANDING: {
-        count: 3,
-        prompts: ["Which number is greater: -5 or -2?", "Graph -3 on the number line"],
-      },
-      CALCULATION_ERROR: {
-        count: 2,
-        prompts: ["Find the distance between -4 and 6"],
-      },
-      PREREQUISITE_GAP: {
-        count: 1,
-        prompts: ["Order from least to greatest: -9, 0, -4, 2"],
-      },
-    };
+  static async getDifficultSkills(scope: ResearchScope, filters?: { gradeLevel?: number }): Promise<DifficultSkillEvidence[]> {
+    const [attempts, mistakes, masteries, titles] = await Promise.all([
+      ResearchData.attempts(scope),
+      ResearchData.mistakes(scope),
+      ResearchData.masteries(scope),
+      ResearchData.skillTitles(),
+    ]);
+    const C = RESEARCH_CONFIG.difficultSkillCriteria;
+    const bySkill = new Map<string, AttemptRow[]>();
+    for (const a of attempts) if (a.skillId) bySkill.set(a.skillId, [...(bySkill.get(a.skillId) ?? []), a]);
 
-    const totalErrors = Object.values(mistakeCategories).reduce((s, v) => s + v.count, 0);
+    const results: DifficultSkillEvidence[] = [];
+    for (const [skillId, rows] of bySkill) {
+      const students = new Set(rows.map((r) => r.studentId));
+      if (rows.length < C.minAttemptsToFlag || students.size < RESEARCH_CONFIG.thresholds.minStudentsForClassroomAggregate) continue;
 
-    return Object.entries(mistakeCategories).map(([cat, data]) => ({
-      category: cat,
-      count: data.count,
-      percentage: Number(((data.count / Math.max(1, totalErrors)) * 100).toFixed(1)),
-      affectedStudentCount: 1,
-      affectedSkillCount: 2,
-      sampleQuestionPrompts: data.prompts,
-      recommendedPedagogicalAction:
-        cat === "SIGN_ERROR"
-          ? "Reinforce visual two-color counters and number line movement directions."
-          : cat === "CONCEPTUAL_MISUNDERSTANDING"
-          ? "Demonstrate real-world elevation and temperature analogies before symbolic manipulation."
-          : "Encourage scratch paper step-by-step arithmetic checks.",
+      const accuracy = ratio(rows.filter((r) => r.isCorrect).length, rows.length);
+      const hintRate = ratio(rows.filter((r) => r.hintUsed).length, rows.length);
+      const lowAccuracy = accuracy < C.lowAccuracyThreshold;
+      const highHint = hintRate > C.highHintRateThreshold;
+      if (!lowAccuracy && !highHint) continue;
+
+      let affected = 0;
+      for (const sid of students) {
+        const mine = rows.filter((r) => r.studentId === sid);
+        if (ratio(mine.filter((r) => r.isCorrect).length, mine.length) < C.lowAccuracyThreshold) affected++;
+      }
+      const mk = mistakes.filter((m) => m.skillId === skillId && m.category !== "UNKNOWN");
+      const mc = new Map<string, number>();
+      for (const m of mk) mc.set(m.category, (mc.get(m.category) ?? 0) + 1);
+      const dist = { notStarted: 0, learning: 0, developing: 0, proficient: 0, mastered: 0 };
+      for (const m of masteries.filter((x) => x.skillId === skillId)) {
+        const key = ({ NOT_STARTED: "notStarted", LEARNING: "learning", DEVELOPING: "developing", PROFICIENT: "proficient", MASTERED: "mastered" } as Record<string, keyof typeof dist>)[m.status];
+        if (key) dist[key]++;
+      }
+      results.push({
+        skillId,
+        skillTitle: titles.get(skillId) ?? skillId,
+        gradeLevel: filters?.gradeLevel ?? 7,
+        accuracy,
+        evidenceCount: rows.length,
+        affectedStudentCount: affected,
+        totalStudentsEvaluated: students.size,
+        primaryMisconceptions: Array.from(mc.entries()).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([category, count]) => ({ category, count, percentage: pct(count / mk.length) })),
+        hintDependenceRate: hintRate,
+        masteryDistribution: dist,
+        flagReason: lowAccuracy
+          ? `Accuracy across ${students.size} students (${pct(accuracy)}%) is below the ${pct(C.lowAccuracyThreshold)}% baseline.`
+          : `${pct(hintRate)}% of attempts used a hint, above the ${pct(C.highHintRateThreshold)}% threshold.`,
+      });
+    }
+    return results.sort((a, b) => a.accuracy - b.accuracy);
+  }
+
+  /** Mistake categories recorded by the mistake analyzer for the students in scope. */
+  static async getMistakeAnalytics(scope: ResearchScope): Promise<MistakeAggregateItem[]> {
+    const [mistakes, attempts] = await Promise.all([ResearchData.mistakes(scope), ResearchData.attempts(scope)]);
+    const rows = mistakes.filter((m) => m.category !== "UNKNOWN");
+    if (rows.length === 0) return [];
+    const byCat = new Map<string, typeof rows>();
+    for (const m of rows) byCat.set(m.category, [...(byCat.get(m.category) ?? []), m]);
+    const wrongBySkill = new Map<string, Set<string>>();
+    for (const a of attempts) {
+      if (!a.isCorrect && a.skillId && a.prompt) wrongBySkill.set(a.skillId, new Set([...(wrongBySkill.get(a.skillId) ?? []), a.prompt]));
+    }
+    return Array.from(byCat.entries()).map(([category, items]) => {
+      const skills = new Set(items.map((i) => i.skillId).filter(Boolean) as string[]);
+      const prompts = Array.from(new Set(Array.from(skills).flatMap((s) => Array.from(wrongBySkill.get(s) ?? [])))).slice(0, 3);
+      const latest = [...items].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).find((i) => i.recommendation);
+      return {
+        category,
+        count: items.length,
+        percentage: pct(items.length / rows.length),
+        affectedStudentCount: new Set(items.map((i) => i.studentId)).size,
+        affectedSkillCount: skills.size,
+        sampleQuestionPrompts: prompts,
+        recommendedPedagogicalAction: latest?.recommendation ?? "",
+      };
+    }).sort((a, b) => b.count - a.count);
+  }
+
+  /**
+   * Before/after observations around AI tutor conversations: a student's accuracy on the skill before vs after
+   * the conversation, shown only when there are at least 3 attempts on each side. Strictly descriptive.
+   */
+  static async getInterventionObservations(scope: ResearchScope): Promise<InterventionObservationItem[]> {
+    const [convs, attempts, titles] = await Promise.all([ResearchData.tutorConversations(scope), ResearchData.attempts(scope), ResearchData.skillTitles()]);
+    const names = await ResearchData.students(Array.from(new Set(convs.map((c) => c.studentId))));
+    const MIN = 3;
+    const out: InterventionObservationItem[] = [];
+    for (const c of convs) {
+      if (!c.skillId) continue;
+      const mine = attempts.filter((a) => a.studentId === c.studentId && a.skillId === c.skillId);
+      const before = mine.filter((a) => a.submittedAt < c.createdAt);
+      const after = mine.filter((a) => a.submittedAt >= c.createdAt);
+      if (before.length < MIN || after.length < MIN) continue;
+      const bAcc = ratio(before.filter((a) => a.isCorrect).length, before.length);
+      const aAcc = ratio(after.filter((a) => a.isCorrect).length, after.length);
+      const change = Number(((aAcc - bAcc) * 100).toFixed(1));
+      out.push({
+        interventionType: "AI_TUTOR_CONVERSATION",
+        studentId: c.studentId,
+        studentName: names.get(c.studentId)?.name ?? "Unknown student",
+        skillId: c.skillId,
+        skillTitle: titles.get(c.skillId) ?? c.skillId,
+        timestamp: c.createdAt.toISOString(),
+        beforeEvidence: { accuracy: bAcc, attempts: before.length, description: `${before.filter((a) => a.isCorrect).length} correct out of ${before.length} attempts before the tutor conversation.` },
+        afterEvidence: { accuracy: aAcc, attempts: after.length, description: `${after.filter((a) => a.isCorrect).length} correct out of ${after.length} attempts after the tutor conversation.` },
+        observedChange: {
+          pointChange: change,
+          observationStatement: `Accuracy on this skill was ${change >= 0 ? "+" : ""}${change} percentage points different after the conversation than before. Other things changed over the same time, so this does not show that the tutor caused it.`,
+        },
+      });
+    }
+    return out.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }
+
+  /** Accuracy per calendar day (UTC) for the students in scope. */
+  static async getTimeSeriesMetrics(scope: ResearchScope): Promise<TimeSeriesDataPoint[]> {
+    const attempts = await ResearchData.attempts(scope);
+    const byDay = new Map<string, AttemptRow[]>();
+    for (const a of attempts) {
+      const day = a.submittedAt.toISOString().slice(0, 10);
+      byDay.set(day, [...(byDay.get(day) ?? []), a]);
+    }
+    return Array.from(byDay.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([date, rows]) => ({
+      date,
+      accuracy: ratio(rows.filter((r) => r.isCorrect).length, rows.length),
+      understanding: null,
+      application: null,
+      consistency: null,
+      attemptCount: rows.length,
+      activeStudents: new Set(rows.map((r) => r.studentId)).size,
     }));
-  }
-
-  /**
-   * Track Intervention Observations (strictly non-causal language)
-   */
-  static async getInterventionObservations(): Promise<InterventionObservationItem[]> {
-    return [
-      {
-        interventionType: "AI_TUTOR_HINT",
-        studentId: "usr_student_01",
-        studentName: "Juan de la Cruz",
-        skillId: "skl_02",
-        skillTitle: "Comparing & Ordering Integers",
-        timestamp: new Date("2026-09-10T14:30:00Z").toISOString(),
-        beforeEvidence: {
-          accuracy: 0.33,
-          attempts: 3,
-          description: "1 correct out of 3 attempts prior to tutor guidance.",
-        },
-        afterEvidence: {
-          accuracy: 0.80,
-          attempts: 5,
-          description: "4 correct out of 5 attempts following Socratic prompt.",
-        },
-        observedChange: {
-          pointChange: +47.0,
-          observationStatement:
-            "Observed performance after intervention showed an increase of +47.0 percentage points across subsequent practice exercises.",
-        },
-      },
-      {
-        interventionType: "REMEDIATION_PRACTICE",
-        studentId: "usr_student_01",
-        studentName: "Juan de la Cruz",
-        skillId: "skl_03",
-        skillTitle: "Addition of Integers",
-        timestamp: new Date("2026-09-12T10:15:00Z").toISOString(),
-        beforeEvidence: {
-          accuracy: 0.50,
-          attempts: 4,
-          description: "2 correct out of 4 attempts with repeated sign errors.",
-        },
-        afterEvidence: {
-          accuracy: 0.75,
-          attempts: 4,
-          description: "3 correct out of 4 attempts on prerequisite number line drill.",
-        },
-        observedChange: {
-          pointChange: +25.0,
-          observationStatement:
-            "Observed performance after intervention showed an increase of +25.0 percentage points following targeted counter drill.",
-        },
-      },
-    ];
-  }
-
-  /**
-   * Longitudinal Time Series of Research Metrics
-   */
-  static async getTimeSeriesMetrics(): Promise<TimeSeriesDataPoint[]> {
-    return [
-      {
-        date: "2026-09-02",
-        accuracy: 0.65,
-        understanding: 0.58,
-        application: 0.50,
-        consistency: 0.60,
-        attemptCount: 8,
-        activeStudents: 1,
-      },
-      {
-        date: "2026-09-06",
-        accuracy: 0.72,
-        understanding: 0.68,
-        application: 0.62,
-        consistency: 0.66,
-        attemptCount: 12,
-        activeStudents: 1,
-      },
-      {
-        date: "2026-09-10",
-        accuracy: 0.79,
-        understanding: 0.74,
-        application: 0.71,
-        consistency: 0.73,
-        attemptCount: 15,
-        activeStudents: 1,
-      },
-      {
-        date: "2026-09-14",
-        accuracy: 0.85,
-        understanding: 0.82,
-        application: 0.78,
-        consistency: 0.81,
-        attemptCount: 18,
-        activeStudents: 1,
-      },
-      {
-        date: "2026-09-18",
-        accuracy: 0.91,
-        understanding: 0.89,
-        application: 0.86,
-        consistency: 0.88,
-        attemptCount: 14,
-        activeStudents: 1,
-      },
-    ];
   }
 
   // Aliases for compatibility

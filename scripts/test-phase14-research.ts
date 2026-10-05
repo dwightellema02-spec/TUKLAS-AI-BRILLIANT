@@ -22,6 +22,7 @@ import {
   PrePostComparator,
 } from "../src/lib/research/index";
 import { dbService, fallbackStore } from "../src/lib/db";
+import { assessmentFallbackStore } from "../src/lib/assessment/assessment-service";
 import { MistakeAnalyzerService } from "../src/lib/ai/mistake-analyzer";
 
 let totalTests = 0;
@@ -211,57 +212,88 @@ async function runPhase14Tests() {
   // -------------------------------------------------------------------------
   console.log("\n[6] Pre/Post-Test Comparative Analytics");
 
-  const prePostComparison = await PrePostComparator.comparePrePostTests({
-    classroomId: "cls_mabini_01",
-  });
+  const ALL = { studentIds: null } as const;
+  const NOBODY = { studentIds: [] as string[] };
+  const prePostComparison = await ResearchService.getPrePostComparison(ALL, "asm_pre_integers", "asm_post_integers", { id: "cls_test", name: "Section Test" });
+  const graded = (id: string) => assessmentFallbackStore.attempts.filter((x) => x.assessmentId === id && x.status === "GRADED");
+  const latestPer = (id: string) => Array.from(new Map(graded(id).map((x) => [x.studentId, x.scorePercent])).values());
+  const meanOf = (xs: number[]) => (xs.length ? xs.reduce((u, v) => u + v, 0) / xs.length : null);
+  const expectedPre = meanOf(latestPer("asm_pre_integers"));
+  const expectedPost = meanOf(latestPer("asm_post_integers"));
   assert(
-    prePostComparison.preTest.averageScorePercent > 0 && prePostComparison.postTest.averageScorePercent > 0,
-    "Loads real baseline and summative assessment records"
+    (expectedPre === null && prePostComparison.preTest.averageScorePercent === null) ||
+      (expectedPre !== null && Math.abs(prePostComparison.preTest.averageScorePercent! - expectedPre) < 0.06),
+    "Baseline average equals the mean of the real graded pre-test results (not a constant)"
   );
   assert(
-    typeof prePostComparison.comparison.scoreDifferencePoints === "number",
-    "Calculates empirical pre-to-post percentage point difference"
+    (expectedPost === null && prePostComparison.postTest.averageScorePercent === null) ||
+      (expectedPost !== null && Math.abs(prePostComparison.postTest.averageScorePercent! - expectedPost) < 0.06),
+    "Summative average equals the mean of the real graded post-test results (not a constant)"
   );
   assert(
-    prePostComparison.comparison.observedTrend === "IMPROVEMENT",
-    "Observes empirical improvement trend without unsupported causal claims"
+    prePostComparison.preTest.totalStudents === latestPer("asm_pre_integers").length,
+    "The student count is the real number of students who took the test"
+  );
+  const noData = await ResearchService.getPrePostComparison(ALL, "asm_does_not_exist_pre", "asm_does_not_exist_post");
+  assert(
+    noData.preTest.averageScorePercent === null && noData.postTest.averageScorePercent === null &&
+      noData.comparison.observedTrend === "INSUFFICIENT_DATA" && noData.comparison.scoreDifferencePoints === null &&
+      noData.skillBreakdown.length === 0 && noData.preTest.totalStudents === 0,
+    "With no graded results there are NO numbers (null, INSUFFICIENT_DATA), never an invented 65% -> 88%"
+  );
+  const nobodyCmp = await ResearchService.getPrePostComparison(NOBODY, "asm_pre_integers", "asm_post_integers");
+  assert(
+    nobodyCmp.comparison.observedTrend === "INSUFFICIENT_DATA" && nobodyCmp.preTest.totalStudents === 0,
+    "A teacher with no students sees no cohort data at all"
   );
   assert(
-    prePostComparison.skillBreakdown.length > 0,
-    "Provides granular skill-level accuracy comparison"
+    prePostComparison.comparison.observedTrend !== "INSUFFICIENT_DATA"
+      ? typeof prePostComparison.comparison.scoreDifferencePoints === "number" &&
+        /not evidence of cause/.test(prePostComparison.comparison.description)
+      : true,
+    "A computed comparison states that it is an observed difference, not evidence of cause"
   );
+  for (const sb of prePostComparison.skillBreakdown) {
+    assert(sb.preAccuracy >= 0 && sb.postAccuracy <= 100 && sb.skillTitle.length > 0, `Skill breakdown row ${sb.skillId} comes from real responses`);
+  }
 
   // -------------------------------------------------------------------------
   // 7. DIFFICULT SKILLS & MISTAKE AGGREGATION
   // -------------------------------------------------------------------------
   console.log("\n[7] Difficult Skills & Mistake Aggregation");
 
-  const difficultSkills = await ResearchService.identifyDifficultSkills({ gradeLevel: 7 });
+  const difficultSkills = await ResearchService.identifyDifficultSkills(ALL, { gradeLevel: 7 });
   assert(
-    Array.isArray(difficultSkills),
-    "Identifies difficult skills using empirical thresholds (<65% accuracy or high hint dependence)"
+    Array.isArray(difficultSkills) &&
+      difficultSkills.every((d) => d.evidenceCount >= 5 && d.totalStudentsEvaluated >= 2 && (d.accuracy < 0.65 || d.hintDependenceRate > 0.4)),
+    "Difficult skills need >=5 attempts from >=2 students and a real accuracy < 65% or hint rate > 40% (no forced entries)"
   );
+  assert((await ResearchService.identifyDifficultSkills(NOBODY)).length === 0, "No students in scope -> no difficult skills");
 
-  const mistakePatterns = await ResearchService.aggregateMistakeTaxonomy();
+  const mistakePatterns = await ResearchService.aggregateMistakeTaxonomy(ALL);
+  const realMistakeRows = (fallbackStore.mistakeAnalyses as any[]).filter((m) => String(m.category) !== "UNKNOWN").length;
   assert(
-    mistakePatterns.length > 0 && Boolean(mistakePatterns[0].recommendedPedagogicalAction),
-    "Aggregates mistake taxonomy with associated pedagogical recommendations"
+    mistakePatterns.reduce((n, m) => n + m.count, 0) === realMistakeRows,
+    "Mistake counts add up to the real recorded mistake analyses (no invented 5/3/2/1)"
   );
+  assert((await ResearchService.aggregateMistakeTaxonomy(NOBODY)).length === 0, "No students in scope -> no mistake data");
 
   // -------------------------------------------------------------------------
   // 8. INTERVENTION OBSERVATIONS
   // -------------------------------------------------------------------------
   console.log("\n[8] Non-Causal Intervention Observations");
 
-  const interventions = await ResearchService.getInterventionObservations();
+  const interventions = await ResearchService.getInterventionObservations(ALL);
   assert(
-    interventions.length > 0,
-    "Loads real intervention observations linking prior and subsequent evidence"
+    interventions.every((i) => i.beforeEvidence.attempts >= 3 && i.afterEvidence.attempts >= 3 && /does not show that the tutor caused/.test(i.observedChange.observationStatement)),
+    "Every observation rests on >=3 attempts on each side and says it does not show the tutor caused the change"
   );
-  assert(
-    interventions[0].observedChange.observationStatement.toLowerCase().includes("observed"),
-    "Intervention statements adhere strictly to non-causal observational language"
-  );
+  assert((await ResearchService.getInterventionObservations(NOBODY)).length === 0, "No students in scope -> no observations");
+
+  const series = await ResearchService.getTimeSeriesMetrics(ALL);
+  const realAttemptCount = fallbackStore.questionAttempts.length;
+  assert(series.reduce((n, p) => n + p.attemptCount, 0) === realAttemptCount, "The time series accounts for every real attempt and nothing else");
+  assert((await ResearchService.getTimeSeriesMetrics(NOBODY)).length === 0, "No students in scope -> empty time series");
 
   // -------------------------------------------------------------------------
   // 9. STANDARDIZED CSV EXPORTS
@@ -278,7 +310,7 @@ async function runPhase14Tests() {
   const comparisonCsv = ResearchExporter.exportPrePostComparisonToCsv(prePostComparison);
   assert(
     comparisonCsv.includes("student_id,student_name,classroom_id,classroom_name") &&
-    comparisonCsv.includes("Section Mabini"),
+    comparisonCsv.includes("Section Test"),
     "Generates pre/post comparison CSV with cohort breakdown"
   );
 

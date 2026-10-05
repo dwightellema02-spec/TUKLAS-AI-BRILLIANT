@@ -253,7 +253,7 @@ async function main() {
     section("8. Assignments");
     // find a published lesson and a draft one through the real API
     const units = await api("GET", "/api/curriculum", T1);
-    const unitId = units.json.data?.grades?.[0]?.terms?.[0]?.units?.[0]?.id ?? "unt_01";
+    const unitId = units.json.data?.[0]?.grades?.[0]?.terms?.[0]?.units?.[0]?.id ?? "unt_01";
     const mkLesson = async (title: string, publish: boolean) => {
       const l = await api("POST", "/api/lessons", T1, { title, unitId, learningObjectives: [], estimatedMinutes: 10 });
       const id = l.json.data?.id as string;

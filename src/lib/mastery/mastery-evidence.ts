@@ -184,6 +184,7 @@ export class MasteryEvidenceCollector {
           };
         }
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("Prisma error in resolveSkillInfo:", e);
       }
     }
@@ -242,6 +243,7 @@ export class MasteryEvidenceCollector {
           }));
         }
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("Prisma error in fetchSkillAttempts:", e);
       }
     }
@@ -296,6 +298,7 @@ export class MasteryEvidenceCollector {
         });
         return count;
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("Prisma error countCompletedPracticeSessions:", e);
       }
     }
@@ -326,6 +329,7 @@ export class MasteryEvidenceCollector {
           take: 5,
         });
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("Prisma error fetchMistakeEvidence:", e);
       }
     }
@@ -388,6 +392,7 @@ export class MasteryEvidenceCollector {
           take: 5,
         });
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("Prisma error fetchAdaptiveEvidence:", e);
       }
     }
@@ -459,6 +464,7 @@ export class MasteryEvidenceCollector {
         }
         return checks;
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("Prisma error fetchPrerequisitesCheck:", e);
       }
     }

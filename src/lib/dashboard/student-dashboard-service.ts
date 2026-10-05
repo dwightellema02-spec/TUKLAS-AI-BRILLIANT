@@ -313,6 +313,7 @@ export class StudentDashboardService {
         });
       });
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("Recent practice sessions error:", e);
     }
 
@@ -340,6 +341,7 @@ export class StudentDashboardService {
         });
       });
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("Recent question attempts error:", e);
     }
 
@@ -365,6 +367,7 @@ export class StudentDashboardService {
         });
       });
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("Recent checkpoints error:", e);
     }
 

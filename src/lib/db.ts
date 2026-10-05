@@ -1854,9 +1854,10 @@ export const dbService = {
             },
           },
         });
-        if (subjects.length > 0) return subjects;
+        if (subjects.length > 0 || hasValidDatabaseUrl) return subjects;
       }
     } catch (error) {
+      if (hasValidDatabaseUrl) throw error; // database mode never falls back to demo data
       console.warn("Prisma query failed, utilizing fallback seed data:", error);
     }
 
@@ -1925,9 +1926,10 @@ export const dbService = {
           },
           orderBy: { sequenceOrder: "asc" },
         });
-        if (lessons.length > 0) return lessons;
+        if (lessons.length > 0 || hasValidDatabaseUrl) return lessons;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("Falling back to in-memory lessons:", e);
     }
 
@@ -1983,6 +1985,7 @@ export const dbService = {
         if (lesson) return lesson;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn(`Lesson query for ${id} falling back:`, e);
     }
 
@@ -2033,6 +2036,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("reorderLessons falling back to memory:", e);
     }
 
@@ -2122,6 +2126,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateSkillPrerequisites falling back to in-memory:", e);
     }
 
@@ -2504,6 +2509,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("createLesson falling back to in-memory store:", e);
     }
 
@@ -2569,6 +2575,7 @@ export const dbService = {
         return updated;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateLesson falling back to in-memory:", e);
     }
 
@@ -2669,6 +2676,7 @@ export const dbService = {
         return { success: true, lesson: updated };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateLessonStatus falling back to in-memory:", e);
     }
 
@@ -2697,6 +2705,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("deleteLesson falling back to in-memory:", e);
     }
 
@@ -2723,9 +2732,10 @@ export const dbService = {
           },
           orderBy: { sequenceOrder: "asc" },
         });
-        if (skills.length > 0) return skills;
+        if (skills.length > 0 || hasValidDatabaseUrl) return skills;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("Falling back to in-memory skills:", e);
     }
     return fallbackStore.curriculum.skills.sort((a, b) => a.sequenceOrder - b.sequenceOrder);
@@ -2751,6 +2761,7 @@ export const dbService = {
         if (skill) return skill;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getSkillById fallback:", e);
     }
     const skill = fallbackStore.curriculum.skills.find((s) => s.id === id);
@@ -2890,6 +2901,7 @@ export const dbService = {
         if (session) return session;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getLessonSession fallback:", e);
     }
 
@@ -2952,6 +2964,7 @@ export const dbService = {
         return session;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("saveLessonSession fallback:", e);
     }
 
@@ -3030,6 +3043,7 @@ export const dbService = {
         return attempt;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("submitCheckpointAttempt fallback:", e);
     }
 
@@ -3076,6 +3090,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getCheckpointAttempts fallback:", e);
     }
 
@@ -3115,6 +3130,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("addContentBlock fallback:", e);
     }
 
@@ -3163,6 +3179,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateContentBlock fallback:", e);
     }
 
@@ -3193,6 +3210,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("deleteContentBlock fallback:", e);
     }
 
@@ -3228,6 +3246,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("reorderContentBlocks fallback:", e);
     }
 
@@ -3544,7 +3563,7 @@ export const dbService = {
         })) as Row[];
       }
     } catch (e) {
-      if (process.env.NODE_ENV === "production") throw e;
+      if (hasValidDatabaseUrl) throw e;
       console.warn("getLessonChunks fallback:", e);
     }
 
@@ -3616,6 +3635,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getQuestions fallback:", e);
     }
 
@@ -3666,6 +3686,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getQuestionById fallback:", e);
     }
 
@@ -3737,6 +3758,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("createQuestion fallback:", e);
     }
 
@@ -3798,6 +3820,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateQuestion fallback:", e);
     }
 
@@ -3832,6 +3855,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("deleteQuestion fallback:", e);
     }
 
@@ -3858,6 +3882,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateQuestionStatus fallback:", e);
     }
 
@@ -3903,6 +3928,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getPracticeSets fallback:", e);
     }
 
@@ -3957,6 +3983,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getPracticeSetById fallback:", e);
     }
 
@@ -4039,6 +4066,7 @@ export const dbService = {
         return this.getPracticeSetById(ps.id);
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("createPracticeSet fallback:", e);
     }
 
@@ -4091,6 +4119,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("addQuestionToPracticeSet fallback:", e);
     }
 
@@ -4129,6 +4158,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("removeQuestionFromPracticeSet fallback:", e);
     }
 
@@ -4189,6 +4219,7 @@ export const dbService = {
         return this.getPracticeSession(session.id, studentId);
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("startPracticeSession fallback:", e);
     }
 
@@ -4246,6 +4277,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getPracticeSession fallback:", e);
     }
 
@@ -4328,6 +4360,7 @@ export const dbService = {
         })) as any;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("count attempts fallback:", e);
     }
     if (priorAttempts.length === 0) {
@@ -4381,6 +4414,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("create attempt fallback:", e);
     }
 
@@ -4413,6 +4447,7 @@ export const dbService = {
           });
         }
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("update session question fallback:", e);
       }
 
@@ -4446,6 +4481,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("update session stats fallback:", e);
     }
 
@@ -4507,6 +4543,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("submitQuestionAttempt fallback:", e);
     }
     if (!attemptRecord) {
@@ -4549,6 +4586,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("completePracticeSession fallback:", e);
     }
 
@@ -4645,6 +4683,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getStudentPracticeHistory fallback:", e);
     }
 
@@ -4707,7 +4746,7 @@ export const dbService = {
         });
       }
     } catch (e) {
-      if (process.env.NODE_ENV === "production") throw e;
+      if (hasValidDatabaseUrl) throw e;
       console.warn("getOrCreateAITutorConversation prisma fallback:", e);
     }
 
@@ -4792,7 +4831,7 @@ export const dbService = {
         return convs.map(describe).filter((f): f is Flag => f !== null);
       }
     } catch (e) {
-      if (process.env.NODE_ENV === "production") throw e;
+      if (hasValidDatabaseUrl) throw e;
       console.warn("getTutorAttentionFlags prisma fallback:", e);
     }
     return fallbackStore.aiConversations
@@ -4814,7 +4853,7 @@ export const dbService = {
         return res.count === 1;
       }
     } catch (e) {
-      if (process.env.NODE_ENV === "production") throw e;
+      if (hasValidDatabaseUrl) throw e;
       console.warn("saveAITutorConversationState prisma fallback:", e);
     }
     const conv = fallbackStore.aiConversations.find((c) => c.id === conversationId && c.studentId === studentId);
@@ -4842,6 +4881,7 @@ export const dbService = {
         return conv;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getAITutorConversation prisma fallback:", e);
     }
 
@@ -4887,6 +4927,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("saveAITutorMessage prisma fallback:", e);
     }
 
@@ -4926,6 +4967,7 @@ export const dbService = {
         return latest.reverse();
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getAITutorMessages prisma fallback:", e);
     }
 
@@ -4951,6 +4993,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getQuestionAttemptsForStudent prisma fallback:", e);
     }
 
@@ -4983,6 +5026,7 @@ export const dbService = {
         return;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("markHintUsedOnQuestionAttempt prisma fallback:", e);
     }
 
@@ -5066,6 +5110,7 @@ export const dbService = {
         }));
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getDetailedAttemptsForStudent fallback:", e);
     }
 
@@ -5269,6 +5314,7 @@ export const dbService = {
         return this.getMistakeAnalysisById(analysis.id, studentId, "STUDENT");
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("saveMistakeAnalysis prisma fallback:", e);
     }
 
@@ -5374,6 +5420,7 @@ export const dbService = {
         }));
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getMistakeAnalysesForStudent prisma fallback:", e);
     }
 
@@ -5474,6 +5521,7 @@ export const dbService = {
         };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getMistakeAnalysisById prisma fallback:", e);
     }
 
@@ -5543,6 +5591,7 @@ export const dbService = {
         }
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getLatestMistakeAnalysisForSkill prisma fallback:", e);
     }
 
@@ -5588,6 +5637,7 @@ export const dbService = {
         }
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getSkillPrerequisites prisma fallback:", e);
     }
 
@@ -5643,6 +5693,7 @@ export const dbService = {
         if (rec) return rec;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getActiveAdaptiveRecommendation prisma fallback:", e);
     }
 
@@ -5701,6 +5752,7 @@ export const dbService = {
         if (rec) return rec;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getAdaptiveRecommendationById prisma fallback:", e);
     }
 
@@ -5763,6 +5815,7 @@ export const dbService = {
         return rec;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("createAdaptiveRecommendation prisma fallback:", e);
     }
 
@@ -5813,6 +5866,7 @@ export const dbService = {
         return;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("supersedeActiveRecommendations prisma fallback:", e);
     }
 
@@ -5846,6 +5900,7 @@ export const dbService = {
         return updated;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateAdaptiveRecommendationStatus prisma fallback:", e);
     }
 
@@ -5881,6 +5936,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("createAdaptiveOverrideRecord prisma fallback:", e);
     }
 
@@ -5930,6 +5986,7 @@ export const dbService = {
         return updated;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("applyTeacherOverrideToRecommendation prisma fallback:", e);
     }
 
@@ -5972,6 +6029,7 @@ export const dbService = {
         return list;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getStudentAdaptiveHistory prisma fallback:", e);
     }
 
@@ -6021,6 +6079,7 @@ export const dbService = {
         if (mastery) return mastery;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getSkillMastery prisma fallback:", e);
     }
 
@@ -6058,9 +6117,10 @@ export const dbService = {
           },
           orderBy: { updatedAt: "desc" },
         });
-        if (masteries.length > 0) return masteries;
+        if (masteries.length > 0 || hasValidDatabaseUrl) return masteries;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getStudentSkillMasteries prisma fallback:", e);
     }
 
@@ -6114,6 +6174,7 @@ export const dbService = {
         return saved;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("saveSkillMastery prisma fallback:", e);
     }
 
@@ -6156,6 +6217,7 @@ export const dbService = {
         return entry;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("recordSkillMasteryHistory prisma fallback:", e);
     }
 

@@ -38,7 +38,8 @@ check((await page.getByText("Submit Answer").count()) >= 1, "the student is take
 async function answerCurrent() {
   const n = await page.locator("input[type=radio]").count();
   for (let i = 0; i < n; i++) {
-    await page.locator("input[type=radio]").nth(i).check({ force: true });
+    await page.locator("label:has(input[type=radio])").nth(i).click();
+    await page.waitForTimeout(100);
     await page.getByRole("button", { name: "Submit Answer" }).click();
     const ok = await page.getByText(/^Correct!/).first().waitFor({ timeout: 4000 }).then(() => true).catch(() => false);
     if (ok) return true;

@@ -15,7 +15,7 @@ export interface PrePostComparisonInput {
     assessmentId: string;
     title: string;
     totalStudents?: number;
-    averageScorePercent: number;
+    averageScorePercent: number | null;
     completedAt?: string;
     skills?: Array<{ skillId: string; skillTitle: string; accuracy: number }>;
   };
@@ -23,7 +23,7 @@ export interface PrePostComparisonInput {
     assessmentId: string;
     title: string;
     totalStudents?: number;
-    averageScorePercent: number;
+    averageScorePercent: number | null;
     completedAt?: string;
     skills?: Array<{ skillId: string; skillTitle: string; accuracy: number }>;
   };
@@ -34,20 +34,20 @@ export class ResearchComparisonService {
    * Compare pre-test and post-test performance deterministically without fabricating causal claims
    */
   static compare(input: PrePostComparisonInput): PrePostComparisonResult {
-    const preScore = Number(input.preTest.averageScorePercent.toFixed(1));
-    const postScore = Number(input.postTest.averageScorePercent.toFixed(1));
+    const hasBoth = input.preTest.averageScorePercent !== null && input.postTest.averageScorePercent !== null && !!input.preTest.totalStudents && !!input.postTest.totalStudents;
+    const preScore = input.preTest.averageScorePercent === null ? null : Number(input.preTest.averageScorePercent.toFixed(1));
+    const postScore = input.postTest.averageScorePercent === null ? null : Number(input.postTest.averageScorePercent.toFixed(1));
 
-    // Observed difference in percentage points (e.g. 86.0 - 72.0 = +14.0 points)
-    const diffPoints = Number((postScore - preScore).toFixed(1));
+    // Observed difference in percentage points (e.g. 86.0 - 72.0 = +14.0 points); only when both tests have results
+    const diffPoints = hasBoth ? Number((postScore! - preScore!).toFixed(1)) : null;
+    const relativeGrowth = hasBoth && preScore! > 0 ? Number((((postScore! - preScore!) / preScore!) * 100).toFixed(1)) : null;
 
-    // Relative growth percentage
-    const relativeGrowth =
-      preScore > 0 ? Number((((postScore - preScore) / preScore) * 100).toFixed(1)) : 0;
-
-    let observedTrend: "IMPROVEMENT" | "MAINTAINED" | "DECLINE" | "INSUFFICIENT_DATA" = "MAINTAINED";
+    let observedTrend: "IMPROVEMENT" | "MAINTAINED" | "DECLINE" | "INSUFFICIENT_DATA" = "INSUFFICIENT_DATA";
     let description = "";
 
-    if (diffPoints > 2.0) {
+    if (!hasBoth || diffPoints === null) {
+      description = "Not enough data: a comparison needs graded results for both the pre-test and the post-test.";
+    } else if (diffPoints > 2.0) {
       observedTrend = "IMPROVEMENT";
       description = `Observed difference shows an increase of +${diffPoints} percentage points from pre-test (${preScore}%) to post-test (${postScore}%).`;
     } else if (diffPoints < -2.0) {
@@ -70,15 +70,14 @@ export class ResearchComparisonService {
     const preSkills = input.preTest.skills || [];
     const postSkills = input.postTest.skills || [];
 
-    const allSkillIds = Array.from(
-      new Set([...preSkills.map((s) => s.skillId), ...postSkills.map((s) => s.skillId)])
-    );
+    // Only skills measured on BOTH tests can be compared (a missing side is not zero).
+    const allSkillIds = preSkills.map((s) => s.skillId).filter((id) => postSkills.some((s) => s.skillId === id));
 
     for (const sId of allSkillIds) {
-      const pre = preSkills.find((s) => s.skillId === sId);
-      const post = postSkills.find((s) => s.skillId === sId);
-      const pAcc = pre ? Number((pre.accuracy * 100).toFixed(1)) : 0;
-      const ptAcc = post ? Number((post.accuracy * 100).toFixed(1)) : 0;
+      const pre = preSkills.find((s) => s.skillId === sId)!;
+      const post = postSkills.find((s) => s.skillId === sId)!;
+      const pAcc = Number((pre.accuracy * 100).toFixed(1));
+      const ptAcc = Number((post.accuracy * 100).toFixed(1));
       const change = Number((ptAcc - pAcc).toFixed(1));
 
       skillBreakdown.push({
@@ -98,14 +97,14 @@ export class ResearchComparisonService {
       preTest: {
         assessmentId: input.preTest.assessmentId,
         title: input.preTest.title,
-        totalStudents: input.preTest.totalStudents || 1,
+        totalStudents: input.preTest.totalStudents ?? 0,
         averageScorePercent: preScore,
         completedAt: input.preTest.completedAt,
       },
       postTest: {
         assessmentId: input.postTest.assessmentId,
         title: input.postTest.title,
-        totalStudents: input.postTest.totalStudents || 1,
+        totalStudents: input.postTest.totalStudents ?? 0,
         averageScorePercent: postScore,
         completedAt: input.postTest.completedAt,
       },
@@ -119,22 +118,6 @@ export class ResearchComparisonService {
       calculatedAt: new Date().toISOString(),
       calculationVersion: RESEARCH_CONFIG.version,
     };
-  }
-
-  /**
-   * High-level helper to compare pre-test and post-test for a given classroom
-   */
-  static async comparePrePostTests(params?: {
-    classroomId?: string;
-    preTestId?: string;
-    postTestId?: string;
-  }): Promise<PrePostComparisonResult> {
-    const { ResearchService } = await import("./research-service");
-    return ResearchService.getPrePostComparison(
-      params?.preTestId || "asm_pre_01",
-      params?.postTestId || "asm_post_01",
-      params?.classroomId
-    );
   }
 }
 

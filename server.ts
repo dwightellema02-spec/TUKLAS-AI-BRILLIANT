@@ -28,6 +28,8 @@ import { MasteryEngine } from "./src/lib/mastery/index.ts";
 import { StudentDashboardService } from "./src/lib/dashboard/index.ts";
 import { TeacherService, TeacherAIService } from "./src/lib/teacher/index.ts";
 import { ClassroomService, ClassroomError } from "./src/lib/classroom/classroom-service.ts";
+import { ClassroomRepo } from "./src/lib/classroom/classroom-repo.ts";
+import { ResearchData, type ResearchScope } from "./src/lib/research/research-data.ts";
 import { AssessmentService, ResearchService, ResearchExporter } from "./src/lib/research/index.ts";
 
 dotenv.config();
@@ -2942,6 +2944,27 @@ app.post("/api/student/assessments/attempts/:attemptId/submit", async (req: Requ
 });
 
 // Teacher/Admin views research profile for a student (IDOR scoped)
+// ---- Research scope: a teacher sees research data only for students in their own active classes. ----
+async function researchScopeFor(session: SessionPayload, classroomId?: string): Promise<ResearchScope> {
+  if (classroomId) {
+    const cls = await ClassroomService.getManageable(actorOf(session), classroomId); // 403/404 for classes that are not theirs
+    return { studentIds: (await ClassroomRepo.listEnrollments([cls.id])).map((e) => e.studentId) };
+  }
+  if (session.role === "ADMIN") return { studentIds: null };
+  const classes = await ClassroomRepo.listForTeacher(session.userId);
+  const enrollments = await ClassroomRepo.listEnrollments(classes.map((c) => c.id));
+  return { studentIds: Array.from(new Set(enrollments.map((e) => e.studentId))) };
+}
+
+const requireStaff = (req: Request, res: Response): SessionPayload | null => {
+  const session = getSessionFromRequest(req);
+  if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+    res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    return null;
+  }
+  return session;
+};
+
 app.get("/api/teacher/research/profile/:studentId", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
@@ -2958,172 +2981,158 @@ app.get("/api/teacher/research/profile/:studentId", async (req: Request, res: Re
     const profile = await ResearchService.getStudentResearchProfile(studentId);
     return res.json({ data: profile });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to load student research profile";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to load student research profile");
   }
 });
 
-// Teacher/Admin views Pre-Test vs Post-Test comparison
+// Resolves which pre/post assessments to compare: the ones asked for, else (database mode) the latest PRE_TEST / POST_TEST.
+async function resolveComparisonTests(req: Request): Promise<{ pre: string; post: string }> {
+  let pre = typeof req.query.preTestId === "string" ? req.query.preTestId : "";
+  let post = typeof req.query.postTestId === "string" ? req.query.postTestId : "";
+  if (hasValidDatabaseUrl) {
+    const { prisma } = await import("./src/lib/db.ts");
+    if (!pre) pre = (await prisma.assessment.findFirst({ where: { type: "PRE_TEST" }, orderBy: { createdAt: "desc" }, select: { id: true } }))?.id ?? "";
+    if (!post) post = (await prisma.assessment.findFirst({ where: { type: "POST_TEST" }, orderBy: { createdAt: "desc" }, select: { id: true } }))?.id ?? "";
+  } else {
+    pre = pre || "asm_pre_integers";
+    post = post || "asm_post_integers";
+  }
+  return { pre, post };
+}
+
+const researchError = (res: Response, error: unknown, fallback: string) => {
+  if (error instanceof ClassroomError) return res.status(error.status).json({ error: error.message });
+  const message = error instanceof Error ? error.message : fallback;
+  return res.status(/not found/i.test(message) ? 404 : 500).json({ error: message });
+};
+
+// Teacher/Admin views Pre-Test vs Post-Test comparison (their own students only)
 app.get("/api/teacher/research/comparison", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const preTestId = (req.query.preTestId as string) || "asm_pre_integers";
-    const postTestId = (req.query.postTestId as string) || "asm_post_integers";
-    const classroomId = req.query.classroomId as string | undefined;
-
-    const comparison = await ResearchService.getPrePostComparison(preTestId, postTestId, classroomId);
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const classroomId = typeof req.query.classroomId === "string" ? req.query.classroomId : undefined;
+    const scope = await researchScopeFor(session, classroomId);
+    const classroom = classroomId ? await ClassroomService.getManageable(actorOf(session), classroomId) : undefined;
+    const { pre, post } = await resolveComparisonTests(req);
+    const comparison = await ResearchService.getPrePostComparison(scope, pre, post, classroom ? { id: classroom.id, name: classroom.name } : undefined);
     return res.json({ data: comparison });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to compute pre/post comparison";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to compute pre/post comparison");
   }
 });
 
-// Teacher/Admin views empirical Difficult Skills analysis
 app.get("/api/teacher/research/difficult-skills", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
+    const session = requireStaff(req, res);
+    if (!session) return;
     const gradeLevel = req.query.grade ? Number(req.query.grade) : undefined;
-    const classroomId = req.query.classroomId as string | undefined;
-
-    const difficultSkills = await ResearchService.getDifficultSkills({ gradeLevel, classroomId });
-    return res.json({ data: difficultSkills });
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    return res.json({ data: await ResearchService.getDifficultSkills(scope, { gradeLevel }) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to analyze difficult skills";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to analyze difficult skills");
   }
 });
 
-// Teacher/Admin views aggregate Mistake Analytics
 app.get("/api/teacher/research/mistakes", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const mistakes = await ResearchService.getMistakeAnalytics();
-    return res.json({ data: mistakes });
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    return res.json({ data: await ResearchService.getMistakeAnalytics(scope) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to load mistake analytics";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to load mistake analytics");
   }
 });
 
-// Teacher/Admin views Intervention Observations (strictly non-causal)
+// Intervention observations (strictly non-causal)
 app.get("/api/teacher/research/interventions", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const observations = await ResearchService.getInterventionObservations();
-    return res.json({ data: observations });
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    return res.json({ data: await ResearchService.getInterventionObservations(scope) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to load intervention observations";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to load intervention observations");
   }
 });
 
-// Teacher/Admin views longitudinal Time Series metrics
 app.get("/api/teacher/research/time-series", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const timeSeries = await ResearchService.getTimeSeriesMetrics();
-    return res.json({ data: timeSeries });
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    return res.json({ data: await ResearchService.getTimeSeriesMetrics(scope) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to load time series metrics";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to load time series metrics");
   }
 });
 
-// Teacher/Admin exports standardized research metrics CSV
+const MAX_EXPORT_STUDENTS = 300;
+const sendCsv = (res: Response, name: string, csv: string) => {
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${name}_${Date.now()}.csv"`);
+  return res.send(csv);
+};
+
+// Standardised research metrics CSV: one profile per student in scope
 app.get("/api/teacher/research/export/metrics.csv", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    // Export authorized students
-    const profile = await ResearchService.getStudentResearchProfile("usr_student_01");
-    const csvData = ResearchExporter.exportMetricsSummaryCsv([profile]);
-
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="tuklas_research_metrics_${Date.now()}.csv"`);
-    return res.send(csvData);
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    const ids = scope.studentIds ?? (await dbService.listUsers({ limit: 200 })).users.filter((u: any) => u.role === "STUDENT").map((u: any) => u.id);
+    const profiles = [];
+    for (const id of ids.slice(0, MAX_EXPORT_STUDENTS)) profiles.push(await ResearchService.getStudentResearchProfile(id));
+    return sendCsv(res, "tuklas_research_metrics", ResearchExporter.exportMetricsSummaryCsv(profiles));
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to export metrics CSV";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to export metrics CSV");
   }
 });
 
-// Teacher/Admin exports raw question attempt evidence CSV
+// Raw question attempt evidence CSV (students in scope only)
 app.get("/api/teacher/research/export/attempts.csv", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const attempts = fallbackStore.questionAttempts.map((a: any) => {
-      const q = fallbackStore.questions.find((fq: any) => fq.id === a.questionId) || ({} as any);
-      return {
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    const rows = await ResearchData.attempts(scope);
+    const names = await ResearchData.students(Array.from(new Set(rows.map((r) => r.studentId))));
+    const csv = ResearchExporter.exportQuestionAttemptsCsv(
+      rows.map((a) => ({
         studentId: a.studentId,
-        studentName: "Juan de la Cruz",
+        studentName: names.get(a.studentId)?.name ?? "",
         questionId: a.questionId,
         skillId: a.skillId,
+        lessonId: a.lessonId,
         attemptNumber: a.attemptNumber,
         isCorrect: a.isCorrect,
-        difficulty: q.difficulty || "MEDIUM",
-        questionType: q.type || "MULTIPLE_CHOICE",
-        cognitiveLevel: q.cognitiveLevel || "PROCEDURAL",
-        timeTakenMs: a.timeTakenMs,
-        hintUsed: !!a.hintUsed,
+        difficulty: a.difficulty,
+        questionType: a.questionType,
+        cognitiveLevel: a.cognitiveLevel,
+        timeTakenMs: a.timeTakenMs ?? undefined,
+        hintUsed: a.hintUsed,
         submittedAt: a.submittedAt,
-      };
-    });
-
-    const csvData = ResearchExporter.exportQuestionAttemptsCsv(attempts);
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="tuklas_question_attempts_${Date.now()}.csv"`);
-    return res.send(csvData);
+      })) as any
+    );
+    return sendCsv(res, "tuklas_question_attempts", csv);
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to export attempts CSV";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to export attempts CSV");
   }
 });
 
-// Teacher/Admin exports Pre/Post comparison CSV
 app.get("/api/teacher/research/export/comparison.csv", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const comparison = await ResearchService.getPrePostComparison("asm_pre_integers", "asm_post_integers");
-    const csvData = ResearchExporter.exportPrePostComparisonCsv([comparison]);
-
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="tuklas_pre_post_comparison_${Date.now()}.csv"`);
-    return res.send(csvData);
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const classroomId = typeof req.query.classroomId === "string" ? req.query.classroomId : undefined;
+    const scope = await researchScopeFor(session, classroomId);
+    const classroom = classroomId ? await ClassroomService.getManageable(actorOf(session), classroomId) : undefined;
+    const { pre, post } = await resolveComparisonTests(req);
+    const comparison = await ResearchService.getPrePostComparison(scope, pre, post, classroom ? { id: classroom.id, name: classroom.name } : undefined);
+    return sendCsv(res, "tuklas_pre_post_comparison", ResearchExporter.exportPrePostComparisonCsv([comparison]));
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to export comparison CSV";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to export comparison CSV");
   }
 });
 
