@@ -2171,7 +2171,9 @@ export const dbService = {
 
     const rows = await prisma.lesson.findMany({
       where: { status: "PUBLISHED" },
-      orderBy: [{ sequenceOrder: "asc" }, { createdAt: "asc" }],
+      // course order: term, then unit, then the lesson's place in its unit (lessons are numbered per unit, so ordering by
+      // sequenceOrder alone would interleave the lessons of different units)
+      orderBy: [{ unit: { term: { termNumber: "asc" } } }, { unit: { sequenceOrder: "asc" } }, { sequenceOrder: "asc" }, { createdAt: "asc" }],
       include: {
         skills: { select: { skillId: true } },
         _count: { select: { contentBlocks: true, resources: true } },

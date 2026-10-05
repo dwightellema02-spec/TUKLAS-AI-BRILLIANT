@@ -160,7 +160,9 @@ async function main() {
     for (const s of [strong, sign, idle, assessOnly, confused]) await api("POST", "/api/student/classes/join", s.token, { code: c1 });
     await api("POST", "/api/student/classes/join", other.token, { code: c2 });
 
-    const skillId = (await api("GET", "/api/skills", T1)).json.data?.[0]?.id as string | undefined;
+    // the skill a student with no history is pointed at (the first skill of the first lesson on their path), so the evidence below lands on
+    // the skill the recommendation engine will actually look at; with a multi-lesson curriculum /api/skills[0] is not necessarily that one
+    const skillId = ((await api("GET", "/api/student/adaptive/recommendation", idle.token)).json.data?.skillId ?? (await api("GET", "/api/skills", T1)).json.data?.[0]?.id) as string | undefined;
     const qids: string[] = [];
     const answers = [-5, -3, 4, -7, 2, -1];
     for (const [i, a] of answers.entries()) qids.push((await api("POST", "/api/questions", T1, { type: "NUMERIC_INPUT", prompt: `P36 q${i + 1} ${run}`, status: "PUBLISHED", difficulty: "EASY", skillId, questionData: { correctAnswer: a } })).json.data.id);
@@ -231,7 +233,7 @@ async function main() {
     assert(noteDash.dataNotes.length === 1 && /2 of 2 answers/.test(noteDash.dataNotes[0]) && /linked to a skill/.test(noteDash.dataNotes[0]), `Answers that cannot feed skill analytics are called out (${noteDash.dataNotes[0]})`);
     assert((await dash(T1)).json.data.dataNotes.length === 0, "...and a class whose questions are all linked to skills gets no such note");
     const recNew = await recOf(other);
-    assert(rWeak?.decisionType === "PRACTICE_EASIER" && /0%/.test(rWeak.reason) && rStrong?.decisionType === "PRACTICE_HARDER" && /100%/.test(rStrong.reason), "Student guidance follows the evidence: the all-wrong student is steered to easier practice (reason cites 0%), the all-right student to harder (cites 100%)");
+    assert(rWeak?.decisionType === "PRACTICE_EASIER" && /0%/.test(rWeak.reason) && rStrong?.decisionType === "PRACTICE_HARDER" && /100%/.test(rStrong.reason), `Student guidance follows the evidence: the all-wrong student is steered to easier practice (reason cites 0%), the all-right student to harder (cites 100%) [weak: ${rWeak?.decisionType} "${rWeak?.reason}"; strong: ${rStrong?.decisionType} "${rStrong?.reason}"]`);
     assert(rNew?.decisionType === "INSUFFICIENT_EVIDENCE" && /0 attempts/.test(rNew.reason), "A student with no evidence is told there is not enough yet, not given invented advice");
     void recNew;
 

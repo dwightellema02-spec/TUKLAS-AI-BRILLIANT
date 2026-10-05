@@ -46,8 +46,9 @@ async function main() {
   assert((await db.user.count()) === 1, "The seeded database contains exactly one account (the admin): no demo users");
   assert((await db.lesson.count({ where: { status: "PUBLISHED" } })) >= 1 && (await db.skill.count()) >= 3, "...and the curriculum (published lesson + skills)");
   assert((await db.lessonSkill.count()) >= 3, "...and the seeded lesson is linked to its skills (it was not: nothing done in it could count towards a skill)");
+  const linksBefore = await db.lessonSkill.count();
   const seedAgain = sh("npx", ["tsx", "prisma/seed.ts"], { SEED_CURRICULUM_ONLY: "true" });
-  assert(seedAgain.status === 0 && (await db.lessonSkill.count()) === 3, "Running the seed again changes nothing (safe to repeat on every container start)");
+  assert(seedAgain.status === 0 && (await db.lessonSkill.count()) === linksBefore, "Running the seed again changes nothing (safe to repeat on every container start)");
 
   console.log("\n--- B. Skill-linking suite and browser check against PostgreSQL ---");
   const env2 = { ADMIN_EMAIL: adminEmail, ADMIN_PASSWORD: adminPassword, NODE_ENV: "development", AI_PROVIDER: "local" };

@@ -5,6 +5,7 @@
 
 import { PrismaClient, UserRole, LessonStatus, ProgressStatus } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { loadGrade7Term1 } from "../src/lib/curriculum/grade7-term1-loader";
 
 const prisma = new PrismaClient();
 
@@ -108,20 +109,23 @@ export async function seedDatabase() {
     },
   });
 
-  // 5. Create Unit: Numbers and Algebraic Expressions
-  let unit = await prisma.unit.findFirst({
-    where: { termId: term.id, title: "Numbers and Algebraic Expressions" },
-  });
+  // 4b. Term 1 (weeks 1-6): polygons, percentages, money, rates (DepEd MATATAG Budget of Work). Idempotent.
+  const loaded = await loadGrade7Term1(prisma, term.id, { authorId: teacherUser?.id });
+  console.log(`✅ Grade 7 Term 1 curriculum: ${loaded.units} units, ${loaded.skills} skills, ${loaded.lessons} lessons, ${loaded.questions} questions`);
 
+  // 5. Integers belong to Term 2 (Budget of Work, weeks 9-10). Older databases had this unit under Term 1: move it.
+  const term2 = await prisma.term.upsert({
+    where: { gradeId_termNumber: { gradeId: grade.id, termNumber: 2 } },
+    update: {},
+    create: { gradeId: grade.id, termNumber: 2, name: "Term 2" },
+  });
+  const INTEGERS_UNIT = "Number and Algebra: Integers";
+  let unit = await prisma.unit.findFirst({ where: { title: INTEGERS_UNIT, termId: term2.id } });
   if (!unit) {
-    unit = await prisma.unit.create({
-      data: {
-        termId: term.id,
-        sequenceOrder: 1,
-        title: "Numbers and Algebraic Expressions",
-        description: "Foundational number concepts, integers, and operations for Grade 7 MATATAG.",
-      },
-    });
+    const legacy = await prisma.unit.findFirst({ where: { termId: term.id, title: "Numbers and Algebraic Expressions" } });
+    unit = legacy
+      ? await prisma.unit.update({ where: { id: legacy.id }, data: { termId: term2.id, title: INTEGERS_UNIT, sequenceOrder: 1 } })
+      : await prisma.unit.create({ data: { termId: term2.id, sequenceOrder: 1, title: INTEGERS_UNIT, description: "Integers on the number line and operations with integers." } });
   }
 
   // 6. Create Lesson: Understanding Integers
