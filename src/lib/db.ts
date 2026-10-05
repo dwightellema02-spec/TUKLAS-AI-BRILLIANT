@@ -37,6 +37,13 @@ const isPostgresUrl = (url: string | undefined): boolean => {
 
 export const hasValidDatabaseUrl = isPostgresUrl(process.env.DATABASE_URL);
 
+/**
+ * Accounts are NEVER served from the in-memory demo store when a real database is configured.
+ * (Previously a missing DB row fell through to the demo users, whose password is public, so a production
+ * deployment accepted demo-account logins.)
+ */
+export const useInMemoryAccounts = !hasValidDatabaseUrl;
+
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
@@ -1756,7 +1763,8 @@ export function savePersistedUsers(): void {
 }
 
 // Initial load on startup
-loadPersistedUsers();
+// Demo/dev accounts are only loaded from disk in in-memory mode (never when a real database is configured).
+if (useInMemoryAccounts) loadPersistedUsers();
 
 
 // -------------------------------------------------------------
@@ -2646,37 +2654,24 @@ export const dbService = {
    */
   async findUserByEmail(email: string) {
     const cleanEmail = email.toLowerCase().trim();
-    try {
-      if (hasValidDatabaseUrl) {
-        const user = await prisma.user.findUnique({
-          where: { email: cleanEmail },
-        });
-        if (user) return user;
-      }
-    } catch (e) {
-      console.warn("User lookup falling back to in-memory:", e);
+    if (!useInMemoryAccounts) {
+      // Database mode: the database is the only source of truth. Errors propagate (login fails closed).
+      return prisma.user.findUnique({ where: { email: cleanEmail } });
     }
-
     return fallbackStore.users.find((u) => u.email.toLowerCase() === cleanEmail) || null;
   },
+
 
   /**
    * Find user by ID
    */
   async findUserById(id: string) {
-    try {
-      if (hasValidDatabaseUrl) {
-        const user = await prisma.user.findUnique({
-          where: { id },
-        });
-        if (user) return user;
-      }
-    } catch (e) {
-      console.warn("User lookup by ID falling back to in-memory:", e);
+    if (!useInMemoryAccounts) {
+      return prisma.user.findUnique({ where: { id } });
     }
-
     return fallbackStore.users.find((u) => u.id === id) || null;
   },
+
 
   /**
    * Create new user
@@ -2690,29 +2685,21 @@ export const dbService = {
   }) {
     const cleanEmail = data.email.toLowerCase().trim();
 
-    try {
-      if (hasValidDatabaseUrl) {
-        const created = await prisma.user.create({
-          data: {
-            name: data.name,
-            email: cleanEmail,
-            passwordHash: data.passwordHash,
-            role: data.role,
-            gradeLevel: data.gradeLevel,
-          },
-        });
-        if (created) {
-          fallbackStore.users.push(created as any);
-          savePersistedUsers();
-          return created;
-        }
-      }
-    } catch (e) {
-      console.warn("Prisma user creation failed, saving to in-memory store:", e);
+    if (!useInMemoryAccounts) {
+      // Database mode: DB only. Never mirrored into the in-memory store or the users JSON file.
+      return prisma.user.create({
+        data: {
+          name: data.name,
+          email: cleanEmail,
+          passwordHash: data.passwordHash,
+          role: data.role,
+          gradeLevel: data.gradeLevel,
+        },
+      });
     }
 
     const newUser = {
-      id: `usr_${Date.now()}`,
+      id: `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       name: data.name,
       email: cleanEmail,
       passwordHash: data.passwordHash,
@@ -2725,6 +2712,36 @@ export const dbService = {
     savePersistedUsers();
     return newUser;
   },
+
+  /** Admin user listing. Never returns password hashes. */
+  async listUsers(opts: { role?: UserRole; limit?: number; offset?: number } = {}) {
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    const strip = (u: any) => ({ id: u.id, email: u.email, name: u.name, role: u.role, gradeLevel: u.gradeLevel ?? null, createdAt: u.createdAt });
+    if (!useInMemoryAccounts) {
+      const [rows, total] = await Promise.all([
+        prisma.user.findMany({ where: opts.role ? { role: opts.role } : {}, orderBy: { createdAt: "desc" }, skip: offset, take: limit }),
+        prisma.user.count({ where: opts.role ? { role: opts.role } : {} }),
+      ]);
+      return { users: rows.map(strip), total };
+    }
+    const all = fallbackStore.users.filter((u) => !opts.role || u.role === opts.role);
+    return { users: all.slice(offset, offset + limit).map(strip), total: all.length };
+  },
+
+  async updateUserPassword(userId: string, passwordHash: string) {
+    if (!useInMemoryAccounts) {
+      const res = await prisma.user.updateMany({ where: { id: userId }, data: { passwordHash } });
+      return res.count === 1;
+    }
+    const u = fallbackStore.users.find((x) => x.id === userId);
+    if (!u) return false;
+    u.passwordHash = passwordHash;
+    u.updatedAt = new Date();
+    savePersistedUsers();
+    return true;
+  },
+
 
   /**
    * Get student progress records

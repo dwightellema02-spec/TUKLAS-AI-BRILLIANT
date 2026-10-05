@@ -9,6 +9,13 @@ import bcrypt from "bcryptjs";
 const prisma = new PrismaClient();
 
 export async function seedDatabase() {
+  if (process.env.NODE_ENV === "production" && process.env.SEED_DEMO_USERS_IN_PRODUCTION !== "I_UNDERSTAND_THESE_PASSWORDS_ARE_PUBLIC") {
+    console.error(
+      "Refusing to seed in production: this script creates student/teacher/ADMIN accounts with a publicly known password. " +
+        "Use `npx tsx scripts/create-admin.ts` to create the first administrator instead."
+    );
+    process.exit(1);
+  }
   console.log("🌱 Starting Tuklas AI Phase 2 database seed...");
 
   // 1. Create Default Role Users (Passwords securely hashed with bcrypt)
@@ -240,7 +247,7 @@ export async function seedDatabase() {
       lessonId: lesson.id,
       skillId: skill1.id,
       status: ProgressStatus.DEVELOPING,
-      progressScore: 0.65,
+      progressPercentage: 65,
       understandingScore: 0.70,
       accuracyScore: 0.60,
       applicationScore: 0.65,

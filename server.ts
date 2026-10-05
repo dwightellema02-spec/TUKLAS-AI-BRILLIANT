@@ -11,7 +11,8 @@ import dotenv from "dotenv";
 import { dbService, fallbackStore } from "./src/lib/db.ts";
 import { hashPassword, verifyPassword } from "./src/lib/auth/password.ts";
 import { createSessionToken, verifySessionToken, SessionPayload } from "./src/lib/auth/session.ts";
-import { validateEmail, validatePassword, validateName, validateRole } from "./src/lib/auth/validation.ts";
+import { validateEmail, validatePassword, validateNewPassword, validateName, validateRole } from "./src/lib/auth/validation.ts";
+import { checkLoginThrottle, recordLoginFailure, clearLoginFailures } from "./src/lib/auth/login-throttle.ts";
 import { canUserAccessPath } from "./src/lib/auth/rbac.ts";
 import { validateAndExtractYouTube, YouTubeService } from "./src/lib/youtube.ts";
 import { LessonStatus, UserRole } from "@prisma/client";
@@ -25,11 +26,16 @@ import { AdaptiveEngine } from "./src/lib/adaptive/index.ts";
 import { MasteryEngine } from "./src/lib/mastery/index.ts";
 import { StudentDashboardService } from "./src/lib/dashboard/index.ts";
 import { TeacherService, TeacherAIService } from "./src/lib/teacher/index.ts";
+import { ClassroomService, ClassroomError } from "./src/lib/classroom/classroom-service.ts";
 import { AssessmentService, ResearchService, ResearchExporter } from "./src/lib/research/index.ts";
 
 dotenv.config();
 
 const app = express();
+if (process.env.TRUST_PROXY === "true") app.set("trust proxy", 1);
+
+// A real bcrypt hash of a random value, used to equalise timing for unknown emails.
+const DUMMY_PASSWORD_HASH = "$2b$10$CwTycUXWue0Thq9StjUM0uJ8y3wRZBZl4kG5K2D9wH5g8h4mJrJ1e";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const isProd = process.env.NODE_ENV === "production";
 
@@ -68,7 +74,7 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
     const { name, email, password, gradeLevel } = req.body;
 
     const validatedEmail = validateEmail(email);
-    const validatedPass = validatePassword(password);
+    const validatedPass = validateNewPassword(password);
     const validatedName = validateName(name);
 
     // Enforce STUDENT role for public self-registration (Teacher/Admin accounts are restricted)
@@ -132,8 +138,19 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
     const validatedEmail = validateEmail(email);
     const validatedPass = validatePassword(password);
 
+    // Brute-force protection: per account and per client address.
+    const throttleKeys = [`email:${validatedEmail}`, `ip:${req.ip ?? "unknown"}`];
+    const throttle = checkLoginThrottle(throttleKeys);
+    if (!throttle.allowed) {
+      res.setHeader("Retry-After", String(throttle.retryAfterSeconds));
+      return res.status(429).json({ success: false, error: "Too many failed sign-in attempts. Please try again later." });
+    }
+
     const user = await dbService.findUserByEmail(validatedEmail);
     if (!user) {
+      // Spend the same time as a real password check so response timing does not reveal which emails exist.
+      await verifyPassword(validatedPass, DUMMY_PASSWORD_HASH);
+      recordLoginFailure(throttleKeys);
       console.log("AUTH LOGIN REJECTED: User not found");
       return res.status(401).json({ success: false, error: "Invalid email or password" });
     }
@@ -141,9 +158,11 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
 
     const isValid = await verifyPassword(validatedPass, user.passwordHash);
     if (!isValid) {
+      recordLoginFailure(throttleKeys);
       console.log("AUTH LOGIN REJECTED: Incorrect password");
       return res.status(401).json({ success: false, error: "Invalid email or password" });
     }
+    clearLoginFailures([throttleKeys[0]]);
     console.log("AUTH LOGIN PASSWORD CHECK SUCCESS");
 
     const token = createSessionToken({
@@ -2244,6 +2263,131 @@ app.get("/api/teacher/students/:studentId", async (req: Request, res: Response) 
 });
 
 // Teacher retrieves authorized classes
+// -------------------------------------------------------------
+// PHASE 25: CLASSROOMS (database-backed), ROSTER, JOIN CODES, ASSIGNMENTS
+// -------------------------------------------------------------
+
+function sendClassroomError(res: Response, error: unknown, fallback: string) {
+  if (error instanceof ClassroomError) return res.status(error.status).json({ error: error.message });
+  const message = error instanceof Error ? error.message : fallback;
+  console.error("Classroom route error:", message);
+  return res.status(500).json({ error: fallback });
+}
+
+const actorOf = (session: SessionPayload) => ({ userId: session.userId, role: session.role as string });
+
+app.post("/api/teacher/classes", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const view = await ClassroomService.create(actorOf(session), req.body ?? {});
+    return res.status(201).json({ data: view });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to create class");
+  }
+});
+
+app.patch("/api/teacher/classes/:classId", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const view = await ClassroomService.update(actorOf(session), req.params.classId, req.body ?? {});
+    return res.json({ data: view });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to update class");
+  }
+});
+
+app.post("/api/teacher/classes/:classId/join-code/regenerate", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const view = await ClassroomService.regenerateJoinCode(actorOf(session), req.params.classId);
+    return res.json({ data: view });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to regenerate class code");
+  }
+});
+
+app.post("/api/teacher/classes/:classId/students", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const results = await ClassroomService.addStudentsByEmail(actorOf(session), req.params.classId, req.body?.emails);
+    return res.json({ data: results });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to add students");
+  }
+});
+
+app.delete("/api/teacher/classes/:classId/students/:studentId", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const removed = await ClassroomService.removeStudent(actorOf(session), req.params.classId, req.params.studentId);
+    return removed ? res.json({ success: true }) : res.status(404).json({ error: "That student is not in this class." });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to remove student");
+  }
+});
+
+app.patch("/api/teacher/assignments/:assignmentId", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const updated = await ClassroomService.setAssignmentStatus(actorOf(session), req.params.assignmentId, req.body?.status);
+    return res.json({ data: updated });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to update assignment");
+  }
+});
+
+// ----- Student side -----
+app.get("/api/student/classes", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    if (session.role !== "STUDENT") return res.status(403).json({ error: "Forbidden: Student account required." });
+    return res.json({ data: await ClassroomService.listForStudent(actorOf(session)) });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to load classes");
+  }
+});
+
+app.post("/api/student/classes/join", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const view = await ClassroomService.joinByCode(actorOf(session), req.body?.code, req.ip ?? "unknown");
+    return res.json({ data: view });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to join class");
+  }
+});
+
+app.delete("/api/student/classes/:classId", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    if (session.role !== "STUDENT") return res.status(403).json({ error: "Forbidden: Student account required." });
+    const left = await ClassroomService.leave(actorOf(session), req.params.classId);
+    return left ? res.json({ success: true }) : res.status(404).json({ error: "You are not in that class." });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to leave class");
+  }
+});
+
+app.get("/api/student/assignments", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    if (session.role !== "STUDENT") return res.status(403).json({ error: "Forbidden: Student account required." });
+    return res.json({ data: await ClassroomService.listAssignmentsForStudent(actorOf(session)) });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to load assignments");
+  }
+});
+
 app.get("/api/teacher/classes", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
@@ -2272,8 +2416,8 @@ app.get("/api/teacher/classes/:classId", async (req: Request, res: Response) => 
     return res.json({ data: classDetail });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load class detail";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+    const status = message.includes("Forbidden") ? 403 : /not found/i.test(message) ? 404 : 500;
+    return res.status(status).json({ error: status === 500 ? "Failed to load class detail" : message });
   }
 });
 
@@ -2299,10 +2443,8 @@ app.post("/api/teacher/classes/:classId/assignments", async (req: Request, res: 
     );
 
     return res.status(201).json({ data: assignment });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to create assignment";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to create assignment");
   }
 });
 
@@ -2329,7 +2471,7 @@ app.post("/api/teacher/ai-assistant", async (req: Request, res: Response) => {
     return res.json({ data: result });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Teacher AI assistant failed";
-    return res.status(500).json({ error: message });
+    return res.status(message.includes("Forbidden") ? 403 : 500).json({ error: message.includes("Forbidden") ? message : "Teacher AI assistant failed" });
   }
 });
 
@@ -2365,6 +2507,98 @@ app.post("/api/teacher/lessons/:id/publish", async (req: Request, res: Response)
 });
 
 // Role-protected API route test
+// -------------------------------------------------------------
+// PHASE 25: ADMIN-MANAGED ACCOUNTS + PASSWORD CHANGE
+// Teacher and admin accounts are never self-registered; an administrator creates them.
+// -------------------------------------------------------------
+
+const ADMIN_CREATABLE_ROLES = ["TEACHER", "ADMIN", "RESEARCHER", "STUDENT"] as const;
+
+app.post("/api/admin/users", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || session.role !== "ADMIN") {
+      return res.status(403).json({ error: "Forbidden: Administrator role required" });
+    }
+    const { name, email, password, role, gradeLevel } = req.body ?? {};
+    if (typeof role !== "string" || !(ADMIN_CREATABLE_ROLES as readonly string[]).includes(role)) {
+      return res.status(400).json({ error: `Role must be one of: ${ADMIN_CREATABLE_ROLES.join(", ")}` });
+    }
+    const validatedEmail = validateEmail(email);
+    const validatedName = validateName(name);
+    const validatedPass = validateNewPassword(password);
+
+    if (await dbService.findUserByEmail(validatedEmail)) {
+      return res.status(409).json({ error: "An account with this email already exists" });
+    }
+    const user = await dbService.createUser({
+      name: validatedName,
+      email: validatedEmail,
+      passwordHash: await hashPassword(validatedPass),
+      role: role as UserRole,
+      gradeLevel: typeof gradeLevel === "number" ? gradeLevel : role === "STUDENT" ? 7 : undefined,
+    });
+    // Audit trail (no secrets): who created which account with which role.
+    console.info(`AUDIT admin_create_user actor=${session.userId} target=${user.id} role=${role}`);
+    return res.status(201).json({ data: { id: user.id, email: user.email, name: user.name, role: user.role } });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to create user";
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.get("/api/admin/users", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || session.role !== "ADMIN") {
+      return res.status(403).json({ error: "Forbidden: Administrator role required" });
+    }
+    const role = typeof req.query.role === "string" && (ADMIN_CREATABLE_ROLES as readonly string[]).includes(req.query.role) ? (req.query.role as UserRole) : undefined;
+    const result = await dbService.listUsers({
+      role,
+      limit: req.query.limit ? Number(req.query.limit) : 50,
+      offset: req.query.offset ? Number(req.query.offset) : 0,
+    });
+    return res.json({ data: result });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to list users";
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.post("/api/auth/change-password", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+
+    const keys = [`email:${session.email}`, `ip:${req.ip ?? "unknown"}`];
+    const throttle = checkLoginThrottle(keys);
+    if (!throttle.allowed) {
+      res.setHeader("Retry-After", String(throttle.retryAfterSeconds));
+      return res.status(429).json({ error: "Too many failed attempts. Please try again later." });
+    }
+
+    const { currentPassword, newPassword } = req.body ?? {};
+    if (typeof currentPassword !== "string") return res.status(400).json({ error: "Current password is required" });
+    const validatedNew = validateNewPassword(newPassword);
+
+    const user = await dbService.findUserById(session.userId);
+    if (!user || !(await verifyPassword(currentPassword, user.passwordHash))) {
+      recordLoginFailure(keys);
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+    if (currentPassword === validatedNew) return res.status(400).json({ error: "The new password must be different" });
+
+    await dbService.updateUserPassword(user.id, await hashPassword(validatedNew));
+    clearLoginFailures([keys[0]]);
+    console.info(`AUDIT password_changed user=${user.id}`);
+    return res.json({ success: true, note: "Existing sessions stay valid until they expire; sign out on other devices." });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to change password";
+    return res.status(400).json({ error: message });
+  }
+});
+
 app.get("/api/admin/system-summary", (req: Request, res: Response) => {
   const session = getSessionFromRequest(req);
   if (!session || session.role !== "ADMIN") {

@@ -921,6 +921,11 @@ model Classroom {
   subject    String   @default("Mathematics")
   schoolYear String   @default("2026-2027")
   teacherId  String
+  /// Phase 25: students join with this code; unique, regenerated on demand, can be switched off.
+  joinCode       String?   @unique
+  joinCodeActive Boolean   @default(true)
+  /// Phase 25: archived classes keep their data but stop granting the teacher access to students and stop accepting joins.
+  archivedAt     DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -937,6 +942,8 @@ model ClassroomEnrollment {
   id          String   @id @default(uuid())
   classroomId String
   studentId   String
+  /// "TEACHER" (added by the teacher), "JOIN_CODE" (student joined), "ADMIN"
+  source      String   @default("TEACHER")
   enrolledAt  DateTime @default(now())
 
   classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
@@ -955,6 +962,7 @@ model Assignment {
   lessonId      String?
   practiceSetId String?
   dueDate       DateTime?
+  createdById   String?
   status        String    @default("PUBLISHED") // "DRAFT" | "PUBLISHED" | "ARCHIVED"
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
