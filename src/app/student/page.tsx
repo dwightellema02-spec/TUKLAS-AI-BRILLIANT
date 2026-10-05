@@ -10,6 +10,7 @@ import {
   RecentActivityTimeline,
   NeedHelpSection,
 } from "@/components/dashboard";
+import { StudentClassesCard } from "@/components/classroom/StudentClassesCard";
 import { AITutorPanel } from "@/components/ai/AITutorPanel";
 import type { StudentDashboardDataDTO } from "@/lib/dashboard/student-dashboard-types";
 import type { AdaptiveRecommendationDTO } from "@/lib/adaptive/adaptive-types";
@@ -272,6 +273,8 @@ export default function StudentPage({ onNavigate }: StudentPageProps) {
           onOpenPracticeHistory={() => handleNav("/student/practice-history")}
           onAskAI={handleOpenGeneralChat}
         />
+
+        <StudentClassesCard onOpenLesson={(id) => handleNav(`/student/lessons/${id}`)} />
 
         {/* 2. Continue Learning (Where did I stop? / What am I learning?) */}
         <ContinueLearningCard

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useAuth } from "@/lib/auth/auth-context";
+import { useAuth, authFetch } from "@/lib/auth/auth-context";
 import { AuthModal } from "@/components/auth/AuthModal";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -27,6 +27,44 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [adminData, setAdminData] = useState<any>(null);
 
+  const [accounts, setAccounts] = useState<Array<{ id: string; name: string; email: string; role: string }>>([]);
+  const [acctForm, setAcctForm] = useState({ name: "", email: "", password: "", role: "TEACHER" });
+  const [acctMsg, setAcctMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const loadAccounts = async () => {
+    try {
+      const lists = await Promise.all(
+        ["TEACHER", "ADMIN"].map(async (role) => {
+          const res = await authFetch(`/api/admin/users?role=${role}`);
+          if (!res.ok) return [];
+          const json = await res.json();
+          return Array.isArray(json.data?.users) ? json.data.users : [];
+        })
+      );
+      setAccounts(lists.flat());
+    } catch {
+      /* list stays empty */
+    }
+  };
+
+  const createAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAcctMsg(null);
+    const res = await authFetch("/api/admin/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(acctForm),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setAcctMsg({ ok: false, text: json.error || "Could not create the account" });
+      return;
+    }
+    setAcctMsg({ ok: true, text: `Created ${acctForm.role.toLowerCase()} account for ${acctForm.email}. Share the password with them privately.` });
+    setAcctForm({ name: "", email: "", password: "", role: acctForm.role });
+    loadAccounts();
+  };
+
   const handleBack = () => {
     if (onNavigate) onNavigate("/");
     else window.location.pathname = "/";
@@ -46,6 +84,7 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
     }
     if (user?.role === "ADMIN") {
       loadAdminData();
+      loadAccounts();
     }
   }, [user]);
 
@@ -119,6 +158,26 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
             <LogOut className="w-3.5 h-3.5" />
             <span>Sign Out</span>
           </Button>
+        </div>
+
+        <div data-testid="admin-accounts" className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs mb-8">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-3">Staff accounts</h2>
+          <form onSubmit={createAccount} className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs mb-3">
+            <input required placeholder="Full name" aria-label="Full name" value={acctForm.name} onChange={(e) => setAcctForm({ ...acctForm, name: e.target.value })} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2" />
+            <input required type="email" placeholder="Email" aria-label="Email" value={acctForm.email} onChange={(e) => setAcctForm({ ...acctForm, email: e.target.value })} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2" />
+            <input required type="password" autoComplete="new-password" placeholder="Temporary password (8+, letter and digit)" aria-label="Temporary password" value={acctForm.password} onChange={(e) => setAcctForm({ ...acctForm, password: e.target.value })} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2" />
+            <select aria-label="Role" value={acctForm.role} onChange={(e) => setAcctForm({ ...acctForm, role: e.target.value })} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+              <option value="TEACHER">Teacher</option>
+              <option value="ADMIN">Admin</option>
+            </select>
+            <Button type="submit" variant="primary" size="sm" className="sm:col-span-2 bg-purple-600 hover:bg-purple-700">Create account</Button>
+          </form>
+          {acctMsg && <p role="status" className={`text-xs mb-3 ${acctMsg.ok ? "text-emerald-700" : "text-red-600"}`}>{acctMsg.text}</p>}
+          <ul className="text-xs divide-y divide-slate-100">
+            {accounts.map((a) => (
+              <li key={a.id} className="py-2 flex justify-between"><span><b>{a.name}</b> · {a.email}</span><Badge variant="default">{a.role}</Badge></li>
+            ))}
+          </ul>
         </div>
 
         {/* Phase 2 Admin Status Card */}

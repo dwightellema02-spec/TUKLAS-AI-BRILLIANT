@@ -56,7 +56,7 @@ export function DifficultSkillsCard({ skills, onInspectSkill }: DifficultSkillsC
                 {skill.skillTitle}
               </span>
               <span className="text-xs font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-md">
-                {skill.averageAccuracy}% Avg Acc
+                {skill.averageAccuracy === null ? "No accuracy data" : `${skill.averageAccuracy}% Avg Acc`}
               </span>
             </div>
 

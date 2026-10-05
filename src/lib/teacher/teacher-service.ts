@@ -3,7 +3,9 @@
  * Phase 12: Real-time Teacher Control Center, Scoped Authorization, and Class Analytics
  */
 
-import { dbService, fallbackStore, prisma, hasValidDatabaseUrl } from "@/lib/db";
+import { dbService } from "@/lib/db";
+import { ClassroomRepo } from "@/lib/classroom/classroom-repo";
+import { ClassroomService, ClassroomError } from "@/lib/classroom/classroom-service";
 import { MasteryEngine } from "@/lib/mastery/mastery-engine";
 import { AdaptiveEngine } from "@/lib/adaptive/adaptive-engine";
 import type {
@@ -19,13 +21,22 @@ import type {
 } from "./teacher-types";
 import type { MasteryLevel } from "@/lib/mastery/mastery-types";
 
+interface StudentBundle {
+  user: any;
+  progress: any[];
+  masteries: any[];
+  sessions: any[];
+  mistakes: any[];
+}
+
 export class TeacherService {
   /**
    * Primary entry point for Teacher Dashboard Overview
    */
   static async getTeacherDashboard(
     teacherId: string,
-    userRole: string
+    userRole: string,
+    options: { classId?: string } = {}
   ): Promise<TeacherDashboardDataDTO> {
     const isStaff = userRole === "TEACHER" || userRole === "ADMIN";
     if (!isStaff) {
@@ -41,7 +52,12 @@ export class TeacherService {
     };
 
     // 2. Load Authorized Classrooms
-    const classes = await this.getAuthorizedClassrooms(teacherId, userRole);
+    let classes = await this.getAuthorizedClassrooms(teacherId, userRole);
+    if (options.classId) {
+      // Scope every metric to one class, but only if the caller may see it.
+      if (!classes.some((c) => c.id === options.classId)) throw new Error("Forbidden: You do not have access to this class.");
+      classes = classes.filter((c) => c.id === options.classId);
+    }
     const authorizedClassIds = classes.map((c) => c.id);
 
     // 3. Load Authorized Enrolled Students
@@ -83,20 +99,19 @@ export class TeacherService {
     const publishedLessonsCount = authorizedLessons.filter((l: any) => l.status === "PUBLISHED").length;
     const draftLessonsCount = authorizedLessons.filter((l: any) => l.status === "DRAFT" || l.status === "IN_REVIEW").length;
 
-    // 6. Calculate Class Progress & Practice Activity
+    // 6. Calculate Class Progress & Practice Activity (from real records; null when there is no data)
+    const bundles = await this.loadBundles(uniqueStudentIds);
     let totalLessonsCompleted = 0;
     let totalPracticeSessions = 0;
     let totalAccuracySum = 0;
     let accuracyCounter = 0;
 
     uniqueStudentIds.forEach((sid) => {
-      const studentProgress = (fallbackStore.progress || []).filter((p) => p.userId === sid);
-      totalLessonsCompleted += studentProgress.filter((p) => p.status === "COMPLETED" && p.lessonId).length;
-
-      const sessions = (fallbackStore.practiceSessions || []).filter((ps) => ps.studentId === sid);
-      totalPracticeSessions += sessions.length;
-
-      sessions.forEach((ps) => {
+      const b = bundles.get(sid);
+      if (!b) return;
+      totalLessonsCompleted += b.progress.filter((p: any) => p.status === "COMPLETED" && p.lessonId).length;
+      totalPracticeSessions += b.sessions.length;
+      b.sessions.forEach((ps: any) => {
         if (ps.totalQuestions > 0) {
           totalAccuracySum += (ps.correctAnswers / ps.totalQuestions) * 100;
           accuracyCounter++;
@@ -104,23 +119,22 @@ export class TeacherService {
       });
     });
 
-    const averageClassAccuracy =
-      accuracyCounter > 0 ? Math.round(totalAccuracySum / accuracyCounter) : 75;
+    const averageClassAccuracy = accuracyCounter > 0 ? Math.round(totalAccuracySum / accuracyCounter) : null;
 
     // 7. Aggregate Class Mastery Distribution across all authorized students
     const masteryDistribution = await this.aggregateMasteryDistribution(uniqueStudentIds);
 
     // 8. Identify Difficult Skills (high error rate or high proportion in DEVELOPING/LEARNING)
-    const difficultSkills = this.identifyDifficultSkills(masteryDistribution, uniqueStudentIds.length);
+    const difficultSkills = this.identifyDifficultSkills(masteryDistribution, bundles);
 
     // 9. Aggregate Mistake Categories (Phase 8 MistakeAnalyzer Integration)
-    const commonMistakes = this.aggregateCommonMistakes(uniqueStudentIds);
+    const commonMistakes = this.aggregateCommonMistakes(bundles);
 
     // 10. Generate "Needs Attention" Support Signals
-    const needsAttention = this.generateSupportSignals(enrolledStudents, commonMistakes);
+    const needsAttention = this.generateSupportSignals(enrolledStudents, bundles);
 
     // 11. Recent Activity Timeline
-    const recentActivity = await this.getRecentTeacherActivity(uniqueStudentIds, authorizedLessons);
+    const recentActivity = await this.getRecentTeacherActivity(uniqueStudentIds, authorizedLessons, bundles);
 
     return {
       teacher: {
@@ -159,47 +173,24 @@ export class TeacherService {
     const isStaff = userRole === "TEACHER" || userRole === "ADMIN";
     if (!isStaff) throw new Error("Unauthorized");
 
-    const allClassrooms = fallbackStore.classrooms || [];
-    const authorized =
-      userRole === "ADMIN"
-        ? allClassrooms
-        : allClassrooms.filter((c) => c.teacherId === teacherId);
+    const authorized = await ClassroomRepo.listForTeacher(userRole === "ADMIN" ? null : teacherId);
+    const enrollments = await ClassroomRepo.listEnrollments(authorized.map((c) => c.id));
+    const bundles = await this.loadBundles(Array.from(new Set(enrollments.map((e) => e.studentId))));
+    const now = Date.now();
+    const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
 
     return authorized.map((cls) => {
-      const enrollments = (fallbackStore.classroomEnrollments || []).filter(
-        (e) => e.classroomId === cls.id
-      );
-      const studentIds = enrollments.map((e) => e.studentId);
-
-      // Active students
-      const now = Date.now();
-      const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
+      const studentIds = enrollments.filter((e) => e.classroomId === cls.id).map((e) => e.studentId);
       let activeCount = 0;
       let totalProgressSum = 0;
 
       studentIds.forEach((sid) => {
-        const studentProgress = (fallbackStore.progress || []).filter(
-          (p) => p.userId === sid && p.lessonId
-        );
-        const lastAct = studentProgress.reduce(
-          (latest: any, p: any) => (!latest || p.lastActivity > latest ? p.lastActivity : latest),
-          null
-        );
-
-        if (lastAct && now - new Date(lastAct).getTime() <= fourteenDaysMs) {
-          activeCount++;
-        }
-
-        const avgProg =
-          studentProgress.length > 0
-            ? studentProgress.reduce((sum: number, p: any) => sum + (p.progressPercentage || 0), 0) /
-              studentProgress.length
-            : 0;
-        totalProgressSum += avgProg;
+        const b = bundles.get(sid);
+        const lastAct = b ? this.lastActivityOf(b) : null;
+        if (lastAct && now - new Date(lastAct).getTime() <= fourteenDaysMs) activeCount++;
+        const lessonProgress = (b?.progress ?? []).filter((p: any) => p.lessonId);
+        totalProgressSum += lessonProgress.length > 0 ? lessonProgress.reduce((sum: number, p: any) => sum + (p.progressPercentage || 0), 0) / lessonProgress.length : 0;
       });
-
-      const averageProgress =
-        studentIds.length > 0 ? Math.round(totalProgressSum / studentIds.length) : 0;
 
       return {
         id: cls.id,
@@ -209,7 +200,7 @@ export class TeacherService {
         schoolYear: cls.schoolYear,
         totalStudents: studentIds.length,
         activeStudents: activeCount,
-        averageProgress,
+        averageProgress: studentIds.length > 0 ? Math.round(totalProgressSum / studentIds.length) : 0,
       };
     });
   }
@@ -218,20 +209,21 @@ export class TeacherService {
    * Retrieve classroom detail by ID with authorization verification
    */
   static async getClassroomDetail(classroomId: string, teacherId: string, userRole: string) {
-    const cls = (fallbackStore.classrooms || []).find((c) => c.id === classroomId);
-    if (!cls) throw new Error("Classroom not found");
-
-    if (userRole !== "ADMIN" && cls.teacherId !== teacherId) {
-      throw new Error("Forbidden: You do not have authorization to view this class.");
+    // Ownership is enforced by the classroom service (404 missing, 403 not yours).
+    let cls;
+    try {
+      cls = await ClassroomService.getManageable({ userId: teacherId, role: userRole }, classroomId);
+    } catch (e) {
+      if (e instanceof ClassroomError) throw new Error(e.status === 404 ? "Classroom not found" : `Forbidden: ${e.message.replace(/^Forbidden:\s*/, "")}`);
+      throw e;
     }
+    cls = await ClassroomService.ensureJoinCode(cls);
 
-    const enrollments = (fallbackStore.classroomEnrollments || []).filter(
-      (e) => e.classroomId === classroomId
-    );
+    const enrollments = await ClassroomRepo.listEnrollments([classroomId]);
     const studentIds = enrollments.map((e) => e.studentId);
     const students = await this.getEnrolledStudentsForClasses([classroomId]);
     const masteryDistribution = await this.aggregateMasteryDistribution(studentIds);
-    const assignments = (fallbackStore.assignments || []).filter((a) => a.classroomId === classroomId);
+    const assignments = await ClassroomRepo.listAssignments([classroomId]);
 
     return {
       classroom: cls,
@@ -256,7 +248,7 @@ export class TeacherService {
     let targetClassIds = classes.map((c) => c.id);
 
     if (classId) {
-      if (!targetClassIds.includes(classId) && userRole !== "ADMIN") {
+      if (!targetClassIds.includes(classId)) {
         throw new Error("Forbidden: You do not have access to this class.");
       }
       targetClassIds = [classId];
@@ -298,27 +290,22 @@ export class TeacherService {
       throw new Error("Unauthorized: Teacher or Administrator access required.");
     }
 
-    // 1. STRICT IDOR CHECK: Verify student is enrolled in at least one class taught by teacher
+    // 1. STRICT IDOR CHECK: the student must be enrolled in an active class taught by this teacher
     const isAuthorized = await this.isTeacherAuthorizedForStudent(teacherId, studentId, userRole);
     if (!isAuthorized) {
       throw new Error("Forbidden: You are not authorized to view this student's records.");
     }
 
-    const studentUser = (await dbService.findUserById(studentId)) || {
-      id: studentId,
-      name: "Student",
-      email: "student@tuklas.ai",
-      gradeLevel: 7,
-    };
+    const studentUser = await dbService.findUserById(studentId);
+    if (!studentUser) throw new Error("Student not found");
 
-    // Classrooms
-    const studentEnrollments = (fallbackStore.classroomEnrollments || []).filter(
-      (e) => e.studentId === studentId
-    );
-    const classrooms = studentEnrollments.map((e) => {
-      const cls = (fallbackStore.classrooms || []).find((c) => c.id === e.classroomId);
-      return { id: e.classroomId, name: cls?.name || "Classroom" };
-    });
+    // Classrooms (active classes only)
+    const studentEnrollments = await ClassroomRepo.listEnrollmentsForStudent(studentId);
+    const classrooms: Array<{ id: string; name: string }> = [];
+    for (const e of studentEnrollments) {
+      const cls = await ClassroomRepo.getById(e.classroomId);
+      if (cls && !cls.archivedAt && (userRole === "ADMIN" || cls.teacherId === teacherId)) classrooms.push({ id: cls.id, name: cls.name });
+    }
 
     // Learning Path & Current Lesson
     const pathData = await dbService.getStudentLearningPath(studentId);
@@ -355,9 +342,7 @@ export class TeacherService {
     }));
 
     // Phase 8 Mistake Analyzer patterns
-    const studentMistakes = (fallbackStore.mistakeAnalyses || []).filter(
-      (ma) => ma.studentId === studentId
-    );
+    const studentMistakes = (await dbService.getMistakeAnalysesForStudent(studentId, { limit: 100, includeOutdated: true })) as any[];
 
     const mistakePatternsMap = new Map<string, any>();
     studentMistakes.forEach((ma) => {
@@ -411,28 +396,19 @@ export class TeacherService {
   }
 
   /**
-   * Verify if teacher is authorized to access a given student
+   * Verify if teacher is authorized to access a given student: an admin, or a teacher with the student
+   * enrolled in one of their ACTIVE (non-archived) classes. Database-backed.
    */
   static async isTeacherAuthorizedForStudent(
     teacherId: string,
     studentId: string,
     userRole: string
   ): Promise<boolean> {
-    if (userRole !== "TEACHER" && userRole !== "ADMIN") return false;
-    if (userRole === "ADMIN") return true;
-
-    const teacherClasses = (fallbackStore.classrooms || []).filter((c) => c.teacherId === teacherId);
-    const teacherClassIds = teacherClasses.map((c) => c.id);
-
-    const enrollment = (fallbackStore.classroomEnrollments || []).find(
-      (e) => teacherClassIds.includes(e.classroomId) && e.studentId === studentId
-    );
-
-    return !!enrollment;
+    return ClassroomService.isTeacherAuthorizedForStudent(teacherId, studentId, userRole);
   }
 
   /**
-   * Create an assignment for a class
+   * Create an assignment for a class (ownership, lesson/practice-set existence and publication are enforced).
    */
   static async createAssignment(
     teacherId: string,
@@ -446,28 +422,55 @@ export class TeacherService {
     },
     userRole: string
   ) {
-    const cls = (fallbackStore.classrooms || []).find((c) => c.id === data.classroomId);
-    if (!cls) throw new Error("Classroom not found");
-    if (userRole !== "ADMIN" && cls.teacherId !== teacherId) {
-      throw new Error("Forbidden: You do not teach this class.");
-    }
+    return ClassroomService.createAssignment({ userId: teacherId, role: userRole }, data.classroomId, data);
+  }
 
-    const newAssignment = {
-      id: `asg_${Date.now()}`,
-      classroomId: data.classroomId,
-      title: data.title,
-      description: data.description || "",
-      lessonId: data.lessonId || null,
-      practiceSetId: data.practiceSetId || null,
-      dueDate: data.dueDate ? new Date(data.dueDate) : null,
-      status: "PUBLISHED",
-      createdAt: new Date(),
-      updatedAt: new Date(),
+  // -------------------------------------------------------------
+  // DATA LOADING (database or in-memory, through dbService)
+  // -------------------------------------------------------------
+
+  /** Everything the analytics need for a set of students, fetched through the persistence layer. */
+  private static async loadBundles(studentIds: string[]): Promise<Map<string, StudentBundle>> {
+    const out = new Map<string, StudentBundle>();
+    const queue = [...studentIds];
+    const worker = async () => {
+      while (queue.length > 0) {
+        const id = queue.shift()!;
+        const [user, progress, masteries, sessions, mistakes] = await Promise.all([
+          dbService.findUserById(id),
+          dbService.getStudentProgress(id) as Promise<any[]>,
+          dbService.getStudentSkillMasteries(id) as Promise<any[]>,
+          dbService.getStudentPracticeHistory(id) as Promise<any[]>,
+          dbService.getMistakeAnalysesForStudent(id, { limit: 100, includeOutdated: true }) as Promise<any[]>,
+        ]);
+        out.set(id, { user, progress, masteries, sessions, mistakes });
+      }
     };
+    await Promise.all(Array.from({ length: Math.min(6, Math.max(studentIds.length, 1)) }, worker));
+    return out;
+  }
 
-    if (!fallbackStore.assignments) fallbackStore.assignments = [];
-    fallbackStore.assignments.push(newAssignment);
-    return newAssignment;
+  private static lastActivityOf(b: StudentBundle): Date | null {
+    const times: number[] = [];
+    b.progress.forEach((p: any) => p.lastActivity && times.push(new Date(p.lastActivity).getTime()));
+    b.sessions.forEach((s: any) => {
+      const t = s.completedAt || s.startedAt;
+      if (t) times.push(new Date(t).getTime());
+    });
+    return times.length > 0 ? new Date(Math.max(...times)) : null;
+  }
+
+  /** Practice accuracy (0-100) from real sessions, or null when the student has no scored practice yet. */
+  private static accuracyOf(b: StudentBundle): number | null {
+    let sum = 0;
+    let n = 0;
+    b.sessions.forEach((s: any) => {
+      if (s.totalQuestions > 0) {
+        sum += (s.correctAnswers / s.totalQuestions) * 100;
+        n++;
+      }
+    });
+    return n > 0 ? Math.round(sum / n) : null;
   }
 
   // -------------------------------------------------------------
@@ -475,67 +478,53 @@ export class TeacherService {
   // -------------------------------------------------------------
 
   private static async getEnrolledStudentsForClasses(classIds: string[]): Promise<StudentListItemDTO[]> {
-    const enrollments = (fallbackStore.classroomEnrollments || []).filter((e) =>
-      classIds.includes(e.classroomId)
-    );
+    const enrollments = await ClassroomRepo.listEnrollments(classIds);
+    const classes = new Map<string, { id: string; name: string }>();
+    for (const id of classIds) {
+      const c = await ClassroomRepo.getById(id);
+      if (c) classes.set(id, { id: c.id, name: c.name });
+    }
+    const bundles = await this.loadBundles(Array.from(new Set(enrollments.map((e) => e.studentId))));
+    const skills = (await dbService.getSkills()) as any[];
 
     const studentMap = new Map<string, StudentListItemDTO>();
 
     for (const enr of enrollments) {
       const studentId = enr.studentId;
-      const cls = (fallbackStore.classrooms || []).find((c) => c.id === enr.classroomId);
-      const studentUser = (fallbackStore.users || []).find((u) => u.id === studentId);
-
+      const cls = classes.get(enr.classroomId);
+      const b = bundles.get(studentId);
+      const studentUser = b?.user;
       if (!studentUser) continue;
 
       if (!studentMap.has(studentId)) {
-        // Compute current progress & primary skill mastery
-        const progressList = (fallbackStore.progress || []).filter(
-          (p) => p.userId === studentId && p.lessonId
-        );
-        const inProgress = progressList.find((p) => p.status === "LEARNING" || p.progressPercentage < 100);
+        const progressList = b!.progress.filter((p: any) => p.lessonId);
+        const inProgress = progressList.find((p: any) => p.status === "LEARNING" || p.progressPercentage < 100);
         const lastLesson = inProgress || progressList[0];
 
         let currentLessonObj = null;
         if (lastLesson && lastLesson.lessonId) {
-          const lesson = fallbackStore.curriculum.lessons.find((l) => l.id === lastLesson.lessonId);
+          const lesson = (await dbService.getLessonById(String(lastLesson.lessonId))) as any;
           currentLessonObj = {
             id: String(lastLesson.lessonId),
-            title: lesson?.title || "Lesson",
+            title: lesson?.title || lastLesson.lesson?.title || "Lesson",
             progressPercentage: lastLesson.progressPercentage || 0,
             state: (lastLesson.status === "COMPLETED" ? "COMPLETED" : "IN_PROGRESS") as "COMPLETED" | "IN_PROGRESS" | "NOT_STARTED",
           };
         }
 
-        // Primary mastery snapshot
-        const masteries = (fallbackStore.skillMasteries || []).filter((m) => m.studentId === studentId);
-        const primaryM = masteries[0] || null;
-        const skill = primaryM ? fallbackStore.curriculum.skills.find((s) => s.id === primaryM.skillId) : null;
+        const primaryM = b!.masteries[0] || null;
+        const skill = primaryM ? skills.find((s) => s.id === primaryM.skillId) : null;
+        const lastAct = this.lastActivityOf(b!);
+        const overallAccuracy = this.accuracyOf(b!);
 
-        // Last activity
-        const lastAct = progressList.reduce(
-          (latest: any, p: any) => (!latest || p.lastActivity > latest ? p.lastActivity : latest),
-          null
-        );
-
-        // Accuracy
-        const sessions = (fallbackStore.practiceSessions || []).filter((ps) => ps.studentId === studentId);
-        let accSum = 0;
-        let accCount = 0;
-        sessions.forEach((s) => {
-          if (s.totalQuestions > 0) {
-            accSum += (s.correctAnswers / s.totalQuestions) * 100;
-            accCount++;
-          }
-        });
-        const overallAccuracy = accCount > 0 ? Math.round(accSum / accCount) : 75;
-
-        // Status logic
-        let status: "ACTIVE" | "NEEDS_SUPPORT" | "INACTIVE" = "ACTIVE";
+        // Status is derived only from real evidence. No data means "NO_DATA", never a made-up "ACTIVE".
+        let status: StudentListItemDTO["status"] = "ACTIVE";
         const now = Date.now();
-        if (overallAccuracy < 60) {
+        if (!lastAct && overallAccuracy === null) {
+          status = "NO_DATA";
+        } else if (overallAccuracy !== null && overallAccuracy < 60) {
           status = "NEEDS_SUPPORT";
-        } else if (!lastAct || now - new Date(lastAct).getTime() > 14 * 24 * 60 * 60 * 1000) {
+        } else if (!lastAct || now - lastAct.getTime() > 14 * 24 * 60 * 60 * 1000) {
           status = "INACTIVE";
         }
 
@@ -549,12 +538,12 @@ export class TeacherService {
           primaryMastery: primaryM
             ? {
                 skillId: primaryM.skillId,
-                skillTitle: skill?.title || "Skill",
+                skillTitle: primaryM.skill?.title || skill?.title || "Skill",
                 status: primaryM.status as MasteryLevel,
               }
             : null,
           overallAccuracy,
-          lastActivityAt: lastAct ? new Date(lastAct).toISOString() : null,
+          lastActivityAt: lastAct ? lastAct.toISOString() : null,
           lastActivityDisplay: this.formatRelativeTime(lastAct),
           status,
         });
@@ -570,107 +559,108 @@ export class TeacherService {
   }
 
   private static async aggregateMasteryDistribution(studentIds: string[]): Promise<MasteryDistributionDTO[]> {
-    const allSkills = fallbackStore.curriculum.skills || [];
+    const allSkills = (await dbService.getSkills()) as any[];
+    const bundles = await this.loadBundles(studentIds);
     const results: MasteryDistributionDTO[] = [];
 
     for (const skill of allSkills) {
-      const counts = {
-        MASTERED: 0,
-        PROFICIENT: 0,
-        DEVELOPING: 0,
-        LEARNING: 0,
-        NOT_STARTED: 0,
-      };
-
+      const counts = { MASTERED: 0, PROFICIENT: 0, DEVELOPING: 0, LEARNING: 0, NOT_STARTED: 0 };
       let evaluated = 0;
       for (const sid of studentIds) {
-        const masteryRec = (fallbackStore.skillMasteries || []).find(
-          (m) => m.studentId === sid && m.skillId === skill.id
-        );
+        const masteryRec = bundles.get(sid)?.masteries.find((m: any) => m.skillId === skill.id);
         const status: MasteryLevel = (masteryRec?.status as MasteryLevel) || "NOT_STARTED";
-        counts[status]++;
+        counts[status] = (counts[status] ?? 0) + 1;
         evaluated++;
       }
-
-      results.push({
-        skillId: skill.id,
-        skillTitle: skill.title,
-        counts,
-        totalEvaluated: evaluated,
-      });
+      results.push({ skillId: skill.id, skillTitle: skill.title, counts, totalEvaluated: evaluated });
     }
-
     return results;
   }
 
+  /**
+   * Skills many students are struggling with. Every number here comes from real mastery/mistake records;
+   * nothing is estimated or defaulted.
+   */
   private static identifyDifficultSkills(
     distributions: MasteryDistributionDTO[],
-    totalStudents: number
+    bundles: Map<string, StudentBundle>
   ): DifficultSkillDTO[] {
     const difficult: DifficultSkillDTO[] = [];
 
     distributions.forEach((d) => {
+      const withEvidence = d.totalEvaluated - d.counts.NOT_STARTED;
       const strugglingCount = d.counts.DEVELOPING + d.counts.LEARNING;
-      const strugglingRate = totalStudents > 0 ? strugglingCount / totalStudents : 0;
+      if (withEvidence < 2) return; // too little evidence to call a skill "difficult"
+      const strugglingRate = strugglingCount / withEvidence;
+      if (strugglingRate < 0.3 && d.counts.LEARNING < 2) return;
 
-      if (strugglingRate >= 0.3 || d.counts.LEARNING >= 2) {
-        difficult.push({
-          skillId: d.skillId,
-          skillTitle: d.skillTitle,
-          developingOrLearningCount: strugglingCount,
-          totalStudents,
-          averageAccuracy: Math.round(100 - strugglingRate * 50),
-          commonMistakeCategory: "SIGN_ERROR",
-          reason: `${strugglingCount} of ${totalStudents} students demonstrate developing or emergent understanding.`,
+      const accuracies: number[] = [];
+      const mistakeCounts: Record<string, number> = {};
+      bundles.forEach((b) => {
+        const m = b.masteries.find((x: any) => x.skillId === d.skillId);
+        if (m && typeof m.accuracy === "number") accuracies.push(m.accuracy * 100);
+        b.mistakes.filter((ma: any) => ma.skillId === d.skillId).forEach((ma: any) => {
+          const cat = ma.category || "CONCEPTUAL_MISUNDERSTANDING";
+          mistakeCounts[cat] = (mistakeCounts[cat] ?? 0) + 1;
         });
-      }
+      });
+      const topMistake = Object.entries(mistakeCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+
+      difficult.push({
+        skillId: d.skillId,
+        skillTitle: d.skillTitle,
+        developingOrLearningCount: strugglingCount,
+        totalStudents: withEvidence,
+        averageAccuracy: accuracies.length > 0 ? Math.round(accuracies.reduce((a, b) => a + b, 0) / accuracies.length) : null,
+        commonMistakeCategory: topMistake,
+        reason: `${strugglingCount} of ${withEvidence} students with evidence are still learning or developing this skill.`,
+      });
     });
 
     return difficult.slice(0, 4);
   }
 
-  private static aggregateCommonMistakes(studentIds: string[]) {
-    const countsMap: Record<string, number> = {
-      SIGN_ERROR: 0,
-      PROCEDURAL_ERROR: 0,
-      CONCEPTUAL_MISUNDERSTANDING: 0,
-      PREREQUISITE_GAP: 0,
-      CALCULATION_ERROR: 0,
-    };
-
-    (fallbackStore.mistakeAnalyses || []).forEach((ma) => {
-      if (studentIds.includes(ma.studentId)) {
+  private static aggregateCommonMistakes(bundles: Map<string, StudentBundle>) {
+    const countsMap: Record<string, number> = {};
+    bundles.forEach((b) => {
+      b.mistakes.forEach((ma: any) => {
         const cat = ma.category || "CONCEPTUAL_MISUNDERSTANDING";
         countsMap[cat] = (countsMap[cat] || 0) + 1;
-      }
+      });
     });
 
     return Object.entries(countsMap)
-      .map(([category, count]) => ({
-        category,
-        label: this.formatMistakeCategory(category),
-        count,
-      }))
+      .map(([category, count]) => ({ category, label: this.formatMistakeCategory(category), count }))
       .filter((m) => m.count > 0)
       .sort((a, b) => b.count - a.count);
   }
 
   private static generateSupportSignals(
     students: StudentListItemDTO[],
-    commonMistakes: any[]
+    bundles: Map<string, StudentBundle>
   ): StudentSupportSignalDTO[] {
     const signals: StudentSupportSignalDTO[] = [];
 
     students.forEach((s) => {
-      if (s.overallAccuracy < 60) {
+      const topMistake = (() => {
+        const counts: Record<string, number> = {};
+        (bundles.get(s.id)?.mistakes ?? []).forEach((ma: any) => {
+          const cat = ma.category || "CONCEPTUAL_MISUNDERSTANDING";
+          counts[cat] = (counts[cat] ?? 0) + 1;
+        });
+        const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+        return top ? this.formatMistakeCategory(top[0]) : undefined;
+      })();
+
+      if (s.overallAccuracy !== null && s.overallAccuracy < 60) {
         signals.push({
           studentId: s.id,
           studentName: s.name,
           classroomName: s.classrooms[0]?.name || "Classroom",
           signalType: "LOW_ACCURACY",
           severity: "HIGH",
-          details: `Practice accuracy is currently ${s.overallAccuracy}%. Common misconception flags detected.`,
-          skillTitle: s.primaryMastery?.skillTitle || "Adding Integers",
+          details: `Practice accuracy is currently ${s.overallAccuracy}%.${topMistake ? ` Most frequent diagnosed pattern: ${topMistake}.` : ""}`,
+          skillTitle: s.primaryMastery?.skillTitle,
           suggestedAction: "Recommend foundational practice or conduct 1-on-1 check-in.",
         });
       } else if (s.status === "INACTIVE") {
@@ -690,9 +680,9 @@ export class TeacherService {
           classroomName: s.classrooms[0]?.name || "Classroom",
           signalType: "PERSISTENT_DEVELOPING",
           severity: "LOW",
-          details: `Showing partial understanding in ${s.primaryMastery.skillTitle}. Occasional sign errors observed.`,
+          details: `Showing partial understanding in ${s.primaryMastery.skillTitle}.${topMistake ? ` Most frequent diagnosed pattern: ${topMistake}.` : ""}`,
           skillTitle: s.primaryMastery.skillTitle,
-          suggestedAction: "Assign 5 medium-difficulty comparison questions.",
+          suggestedAction: "Assign a few medium-difficulty practice questions on this skill.",
         });
       }
     });
@@ -702,30 +692,31 @@ export class TeacherService {
 
   private static async getRecentTeacherActivity(
     studentIds: string[],
-    lessons: any[]
+    lessons: any[],
+    bundles: Map<string, StudentBundle>
   ): Promise<TeacherActivityItemDTO[]> {
     const items: TeacherActivityItemDTO[] = [];
 
-    // 1. Practice Sessions
-    (fallbackStore.practiceSessions || []).forEach((ps) => {
-      if (studentIds.includes(ps.studentId)) {
-        const student = (fallbackStore.users || []).find((u) => u.id === ps.studentId);
-        const psAny = ps as any;
-        const practiceSet = (fallbackStore.practiceSets || []).find((s: any) => s.id === (psAny.practiceSetId || psAny.practiceSet?.id));
-        const psTitle = practiceSet?.title || psAny.practiceSet?.title || "Practice Session";
+    // 1. Practice sessions of the teacher's students
+    bundles.forEach((b, sid) => {
+      if (!studentIds.includes(sid)) return;
+      b.sessions.forEach((ps: any) => {
+        if (ps.status !== "COMPLETED") return;
+        const when = ps.completedAt || ps.startedAt;
+        if (!when) return;
         items.push({
           id: `tact_ps_${ps.id}`,
           type: "PRACTICE_SUBMITTED",
           title: "Practice Completed",
-          description: `${student?.name || "Student"} scored ${ps.correctAnswers}/${ps.totalQuestions} on ${psTitle}`,
-          studentName: student?.name,
-          timestamp: (ps.completedAt || ps.startedAt || new Date()).toISOString(),
+          description: `${b.user?.name || "Student"} scored ${ps.correctAnswers}/${ps.totalQuestions} on ${ps.practiceSet?.title || "a practice set"}`,
+          studentName: b.user?.name,
+          timestamp: new Date(when).toISOString(),
           badge: "Practice",
         });
-      }
+      });
     });
 
-    // 2. Lesson Publishing Events
+    // 2. Lesson publishing events
     lessons.forEach((l) => {
       if (l.status === "PUBLISHED") {
         items.push({
@@ -733,13 +724,12 @@ export class TeacherService {
           type: "LESSON_PUBLISHED",
           title: "Lesson Published",
           description: `"${l.title}" is live and accessible to enrolled students.`,
-          timestamp: (l.updatedAt || l.createdAt || new Date()).toISOString(),
+          timestamp: new Date(l.updatedAt || l.createdAt || Date.now()).toISOString(),
           badge: "Content",
         });
       }
     });
 
-    // Sort descending
     items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     return items.slice(0, 8);
   }

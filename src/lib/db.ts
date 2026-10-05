@@ -37,6 +37,13 @@ const isPostgresUrl = (url: string | undefined): boolean => {
 
 export const hasValidDatabaseUrl = isPostgresUrl(process.env.DATABASE_URL);
 
+/**
+ * Accounts are NEVER served from the in-memory demo store when a real database is configured.
+ * (Previously a missing DB row fell through to the demo users, whose password is public, so a production
+ * deployment accepted demo-account logins.)
+ */
+export const useInMemoryAccounts = !hasValidDatabaseUrl;
+
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
@@ -69,6 +76,12 @@ export interface LessonResourceItem {
   fileName?: string;
   fileSize?: number;
   storagePath?: string;
+  // Phase 22: document intelligence metadata
+  extractionStatus?: string;
+  extractionError?: string;
+  pageCount?: number;
+  charCount?: number;
+  contentHash?: string;
   sequenceOrder: number;
   createdAt: Date;
   updatedAt: Date;
@@ -300,6 +313,8 @@ export interface SeedDataStore {
   classrooms: any[];
   classroomEnrollments: any[];
   assignments: any[];
+  /** Phase 22: extracted document/note chunks (in-memory fallback mirror of the ResourceChunk table). */
+  resourceChunks: Array<import("./documents/types").StoredChunk>;
 }
 
 // -------------------------------------------------------------
@@ -1674,6 +1689,7 @@ export const fallbackStore: SeedDataStore = {
       enrolledAt: new Date("2026-08-16T00:00:00Z"),
     },
   ],
+  resourceChunks: [],
   assignments: [
     {
       id: "asg_01",
@@ -1747,7 +1763,8 @@ export function savePersistedUsers(): void {
 }
 
 // Initial load on startup
-loadPersistedUsers();
+// Demo/dev accounts are only loaded from disk in in-memory mode (never when a real database is configured).
+if (useInMemoryAccounts) loadPersistedUsers();
 
 
 // -------------------------------------------------------------
@@ -2416,16 +2433,6 @@ export const dbService = {
       learningObjectives?: string[];
       estimatedMinutes?: number;
       prerequisiteLessonId?: string;
-      resources?: Array<{
-        type: ResourceType;
-        title: string;
-        url?: string;
-        youtubeId?: string;
-        notes?: string;
-        fileName?: string;
-        fileSize?: number;
-        storagePath?: string;
-      }>;
       contentBlocks?: Array<{
         type: BlockType;
         title?: string;
@@ -2472,23 +2479,7 @@ export const dbService = {
       lesson.prerequisiteLessonId = data.prerequisiteLessonId;
     if (data.skillIds !== undefined) lesson.skillIds = data.skillIds;
 
-    if (data.resources !== undefined) {
-      lesson.resources = data.resources.map((r, i) => ({
-        id: `res_${Date.now()}_${i}`,
-        lessonId: id,
-        type: r.type,
-        title: r.title,
-        url: r.url,
-        youtubeId: r.youtubeId,
-        notes: r.notes,
-        fileName: r.fileName,
-        fileSize: r.fileSize,
-        storagePath: r.storagePath,
-        sequenceOrder: i + 1,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }));
-    }
+    // Resources are intentionally NOT editable here: see addLessonDocumentResource / removeLessonResource.
 
     if (data.contentBlocks !== undefined) {
       lesson.contentBlocks = data.contentBlocks.map((b, i) => ({
@@ -2663,37 +2654,24 @@ export const dbService = {
    */
   async findUserByEmail(email: string) {
     const cleanEmail = email.toLowerCase().trim();
-    try {
-      if (hasValidDatabaseUrl) {
-        const user = await prisma.user.findUnique({
-          where: { email: cleanEmail },
-        });
-        if (user) return user;
-      }
-    } catch (e) {
-      console.warn("User lookup falling back to in-memory:", e);
+    if (!useInMemoryAccounts) {
+      // Database mode: the database is the only source of truth. Errors propagate (login fails closed).
+      return prisma.user.findUnique({ where: { email: cleanEmail } });
     }
-
     return fallbackStore.users.find((u) => u.email.toLowerCase() === cleanEmail) || null;
   },
+
 
   /**
    * Find user by ID
    */
   async findUserById(id: string) {
-    try {
-      if (hasValidDatabaseUrl) {
-        const user = await prisma.user.findUnique({
-          where: { id },
-        });
-        if (user) return user;
-      }
-    } catch (e) {
-      console.warn("User lookup by ID falling back to in-memory:", e);
+    if (!useInMemoryAccounts) {
+      return prisma.user.findUnique({ where: { id } });
     }
-
     return fallbackStore.users.find((u) => u.id === id) || null;
   },
+
 
   /**
    * Create new user
@@ -2707,29 +2685,21 @@ export const dbService = {
   }) {
     const cleanEmail = data.email.toLowerCase().trim();
 
-    try {
-      if (hasValidDatabaseUrl) {
-        const created = await prisma.user.create({
-          data: {
-            name: data.name,
-            email: cleanEmail,
-            passwordHash: data.passwordHash,
-            role: data.role,
-            gradeLevel: data.gradeLevel,
-          },
-        });
-        if (created) {
-          fallbackStore.users.push(created as any);
-          savePersistedUsers();
-          return created;
-        }
-      }
-    } catch (e) {
-      console.warn("Prisma user creation failed, saving to in-memory store:", e);
+    if (!useInMemoryAccounts) {
+      // Database mode: DB only. Never mirrored into the in-memory store or the users JSON file.
+      return prisma.user.create({
+        data: {
+          name: data.name,
+          email: cleanEmail,
+          passwordHash: data.passwordHash,
+          role: data.role,
+          gradeLevel: data.gradeLevel,
+        },
+      });
     }
 
     const newUser = {
-      id: `usr_${Date.now()}`,
+      id: `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       name: data.name,
       email: cleanEmail,
       passwordHash: data.passwordHash,
@@ -2742,6 +2712,36 @@ export const dbService = {
     savePersistedUsers();
     return newUser;
   },
+
+  /** Admin user listing. Never returns password hashes. */
+  async listUsers(opts: { role?: UserRole; limit?: number; offset?: number } = {}) {
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    const strip = (u: any) => ({ id: u.id, email: u.email, name: u.name, role: u.role, gradeLevel: u.gradeLevel ?? null, createdAt: u.createdAt });
+    if (!useInMemoryAccounts) {
+      const [rows, total] = await Promise.all([
+        prisma.user.findMany({ where: opts.role ? { role: opts.role } : {}, orderBy: { createdAt: "desc" }, skip: offset, take: limit }),
+        prisma.user.count({ where: opts.role ? { role: opts.role } : {} }),
+      ]);
+      return { users: rows.map(strip), total };
+    }
+    const all = fallbackStore.users.filter((u) => !opts.role || u.role === opts.role);
+    return { users: all.slice(offset, offset + limit).map(strip), total: all.length };
+  },
+
+  async updateUserPassword(userId: string, passwordHash: string) {
+    if (!useInMemoryAccounts) {
+      const res = await prisma.user.updateMany({ where: { id: userId }, data: { passwordHash } });
+      return res.count === 1;
+    }
+    const u = fallbackStore.users.find((x) => x.id === userId);
+    if (!u) return false;
+    u.passwordHash = passwordHash;
+    u.updatedAt = new Date();
+    savePersistedUsers();
+    return true;
+  },
+
 
   /**
    * Get student progress records
@@ -3251,53 +3251,205 @@ export const dbService = {
    * Remove a video resource from a lesson
    */
   async removeLessonVideo(lessonId: string, resourceId: string, userRole: string, userId: string) {
+    const result = await this.removeLessonResource(lessonId, resourceId, userRole, userId);
+    return { success: result.success, removed: result.removed };
+  },
+
+  // -------------------------------------------------------------
+  // PHASE 22: DOCUMENT RESOURCES + EXTRACTED CHUNKS
+  // -------------------------------------------------------------
+
+  /** Verify the caller may modify a lesson's resources and return the lesson. */
+  async assertCanEditLesson(lessonId: string, userRole: string, userId: string) {
     if (userRole !== "TEACHER" && userRole !== "ADMIN") {
       throw new Error("Forbidden: Teacher or Administrator access required.");
     }
-
     const lesson = await this.getLessonById(lessonId);
     if (!lesson) throw new Error("Lesson not found");
-
     if (userRole !== "ADMIN" && lesson.authorId && lesson.authorId !== userId) {
       throw new Error("Forbidden: You are not authorized to modify another teacher's lesson.");
     }
+    return lesson;
+  },
+
+  /**
+   * Attach an uploaded document (PDF/DOCX/TXT) or teacher note to a lesson together with its extraction result.
+   * Resource row and chunks are written together.
+   */
+  async addLessonDocumentResource(
+    lessonId: string,
+    userRole: string,
+    userId: string,
+    data: {
+      type: "PDF" | "DOCUMENT" | "TEACHER_NOTE";
+      title: string;
+      fileName?: string;
+      fileSize?: number;
+      storagePath?: string;
+      notes?: string;
+      ingest: import("./documents/types").IngestResult;
+    }
+  ) {
+    const lesson = await this.assertCanEditLesson(lessonId, userRole, userId);
+    const nextOrder = (lesson.resources?.length || 0) + 1;
+    const { ingest } = data;
 
     try {
       if (hasValidDatabaseUrl) {
-        await prisma.lessonResource.delete({
-          where: { id: resourceId },
-        });
-
-        // If no more youtube resources, clear videoUrl
-        const remainingYt = await prisma.lessonResource.count({
-          where: { lessonId, type: "YOUTUBE" },
-        });
-        if (remainingYt === 0) {
-          await prisma.lesson.update({
-            where: { id: lessonId },
-            data: { videoUrl: null },
+        return await prisma.$transaction(async (tx) => {
+          const resource = await tx.lessonResource.create({
+            data: {
+              lessonId,
+              type: data.type,
+              title: data.title,
+              fileName: data.fileName,
+              fileSize: data.fileSize,
+              storagePath: data.storagePath,
+              notes: data.notes,
+              addedBy: userId,
+              sequenceOrder: nextOrder,
+              extractionStatus: ingest.status,
+              extractionError: ingest.error,
+              pageCount: ingest.pageCount,
+              charCount: ingest.charCount,
+              contentHash: ingest.contentHash,
+            },
           });
-        }
-        return { success: true };
+          if (ingest.chunks.length > 0) {
+            await tx.resourceChunk.createMany({
+              data: ingest.chunks.map((c) => ({
+                resourceId: resource.id,
+                lessonId,
+                ordinal: c.ordinal,
+                text: c.text,
+                sectionLabel: c.sectionLabel,
+                pageStart: c.pageStart,
+                pageEnd: c.pageEnd,
+                isAnswerKey: c.isAnswerKey,
+              })),
+            });
+          }
+          return resource;
+        });
       }
     } catch (e) {
       if (process.env.NODE_ENV === "production") {
-        throw new Error(`Database error removing video: ${e instanceof Error ? e.message : String(e)}`);
+        throw new Error(`Database error attaching document: ${e instanceof Error ? e.message : String(e)}`);
       }
-      console.warn("removeLessonVideo fallback:", e);
+      console.warn("addLessonDocumentResource fallback:", e);
     }
 
-    const targetLesson = fallbackStore.curriculum.lessons.find((l) => l.id === lessonId);
-    if (targetLesson && targetLesson.resources) {
-      const idx = targetLesson.resources.findIndex((r) => r.id === resourceId);
-      if (idx !== -1) {
-        targetLesson.resources.splice(idx, 1);
-        const hasYt = targetLesson.resources.some((r) => r.type === "YOUTUBE");
-        if (!hasYt) targetLesson.videoUrl = undefined;
+    const resourceId = `res_doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const now = new Date();
+    const resource: LessonResourceItem = {
+      id: resourceId,
+      lessonId,
+      type: data.type as ResourceType,
+      title: data.title,
+      fileName: data.fileName,
+      fileSize: data.fileSize,
+      storagePath: data.storagePath,
+      notes: data.notes,
+      addedBy: userId,
+      sequenceOrder: nextOrder,
+      extractionStatus: ingest.status,
+      extractionError: ingest.error,
+      pageCount: ingest.pageCount,
+      charCount: ingest.charCount,
+      contentHash: ingest.contentHash,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const target = fallbackStore.curriculum.lessons.find((l) => l.id === lessonId);
+    if (target) {
+      if (!target.resources) target.resources = [];
+      target.resources.push(resource);
+    }
+    for (const c of ingest.chunks) {
+      fallbackStore.resourceChunks.push({
+        ...c,
+        id: `chk_${resourceId}_${c.ordinal}`,
+        resourceId,
+        lessonId,
+      });
+    }
+    return resource;
+  },
+
+  /** Remove any resource (video, document, note) from a lesson, with its chunks. Scoped to the lesson. */
+  async removeLessonResource(lessonId: string, resourceId: string, userRole: string, userId: string) {
+    await this.assertCanEditLesson(lessonId, userRole, userId);
+
+    try {
+      if (hasValidDatabaseUrl) {
+        const existing = await prisma.lessonResource.findFirst({ where: { id: resourceId, lessonId } });
+        if (!existing) return { success: false as const, removed: null };
+        await prisma.lessonResource.delete({ where: { id: resourceId } }); // chunks cascade
+        if (existing.type === "YOUTUBE") {
+          const remainingYt = await prisma.lessonResource.count({ where: { lessonId, type: "YOUTUBE" } });
+          if (remainingYt === 0) {
+            await prisma.lesson.update({ where: { id: lessonId }, data: { videoUrl: null } });
+          }
+        }
+        return { success: true as const, removed: existing as unknown as LessonResourceItem };
       }
+    } catch (e) {
+      if (process.env.NODE_ENV === "production") {
+        throw new Error(`Database error removing resource: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      console.warn("removeLessonResource fallback:", e);
     }
 
-    return { success: true };
+    const target = fallbackStore.curriculum.lessons.find((l) => l.id === lessonId);
+    const idx = target?.resources?.findIndex((r) => r.id === resourceId) ?? -1;
+    if (!target || idx === -1) return { success: false as const, removed: null };
+    const [removed] = target.resources.splice(idx, 1);
+    fallbackStore.resourceChunks = fallbackStore.resourceChunks.filter((c) => c.resourceId !== resourceId);
+    if (removed.type === "YOUTUBE" && !target.resources.some((r) => r.type === "YOUTUBE")) {
+      target.videoUrl = undefined;
+    }
+    return { success: true as const, removed };
+  },
+
+  /** Chunks for a lesson, joined with their resource's title/type. Answer-key chunks are excluded by default. */
+  async getLessonChunks(lessonId: string, opts: { includeAnswerKeys?: boolean } = {}) {
+    type Row = import("./documents/types").StoredChunk & { resourceTitle: string; resourceType: string };
+    let rows: Row[] = [];
+
+    try {
+      if (hasValidDatabaseUrl) {
+        const found = await prisma.resourceChunk.findMany({
+          where: { lessonId, ...(opts.includeAnswerKeys ? {} : { isAnswerKey: false }) },
+          include: { resource: { select: { title: true, type: true } } },
+          orderBy: [{ resourceId: "asc" }, { ordinal: "asc" }],
+        });
+        return found.map((c) => ({
+          id: c.id,
+          resourceId: c.resourceId,
+          lessonId: c.lessonId,
+          ordinal: c.ordinal,
+          text: c.text,
+          sectionLabel: c.sectionLabel,
+          pageStart: c.pageStart ?? undefined,
+          pageEnd: c.pageEnd ?? undefined,
+          isAnswerKey: c.isAnswerKey,
+          resourceTitle: c.resource.title,
+          resourceType: c.resource.type as string,
+        })) as Row[];
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === "production") throw e;
+      console.warn("getLessonChunks fallback:", e);
+    }
+
+    const lesson = fallbackStore.curriculum.lessons.find((l) => l.id === lessonId);
+    rows = fallbackStore.resourceChunks
+      .filter((c) => c.lessonId === lessonId && (opts.includeAnswerKeys || !c.isAnswerKey))
+      .map((c) => {
+        const res = lesson?.resources?.find((r) => r.id === c.resourceId);
+        return { ...c, resourceTitle: res?.title || "Resource", resourceType: (res?.type as string) || "DOCUMENT" };
+      });
+    return rows;
   },
 
   /**
@@ -4418,18 +4570,22 @@ export const dbService = {
     practiceSessionId?: string | null;
   }) {
     const { studentId, lessonId, skillId, questionId, practiceSessionId } = params;
+    // A conversation is only continued while it is "live": after a long gap the student starts a fresh
+    // dialogue (fresh scaffolding state) instead of resuming hours-old pedagogical state.
+    const IDLE_LIMIT_MS = 3 * 60 * 60 * 1000;
+    const cutoff = new Date(Date.now() - IDLE_LIMIT_MS);
 
     try {
       if (hasValidDatabaseUrl) {
-        // Find existing conversation matching context
         const existing = await prisma.aITutorConversation.findFirst({
           where: {
             studentId,
-            ...(questionId ? { questionId } : {}),
-            ...(practiceSessionId ? { practiceSessionId } : {}),
-            ...(lessonId && !questionId ? { lessonId } : {}),
+            questionId: questionId || null,
+            practiceSessionId: practiceSessionId || null,
+            lessonId: lessonId || null,
+            updatedAt: { gte: cutoff },
           },
-          orderBy: { createdAt: "desc" },
+          orderBy: { updatedAt: "desc" },
         });
 
         if (existing) return existing;
@@ -4445,16 +4601,20 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (process.env.NODE_ENV === "production") throw e;
       console.warn("getOrCreateAITutorConversation prisma fallback:", e);
     }
 
-    const existing = fallbackStore.aiConversations.find(
-      (c) =>
-        c.studentId === studentId &&
-        (questionId ? c.questionId === questionId : true) &&
-        (practiceSessionId ? c.practiceSessionId === practiceSessionId : true) &&
-        (lessonId && !questionId ? c.lessonId === lessonId : true)
-    );
+    const existing = fallbackStore.aiConversations
+      .filter(
+        (c) =>
+          c.studentId === studentId &&
+          (c.questionId || null) === (questionId || null) &&
+          (c.practiceSessionId || null) === (practiceSessionId || null) &&
+          (c.lessonId || null) === (lessonId || null) &&
+          new Date(c.updatedAt).getTime() >= cutoff.getTime()
+      )
+      .sort((x, y) => new Date(y.updatedAt).getTime() - new Date(x.updatedAt).getTime())[0];
 
     if (existing) return existing;
 
@@ -4465,12 +4625,97 @@ export const dbService = {
       skillId: skillId || null,
       questionId: questionId || null,
       practiceSessionId: practiceSessionId || null,
+      stateJson: null as string | null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
     fallbackStore.aiConversations.push(newConv);
     return newConv;
+  },
+
+  /**
+   * Phase 23: conversations where the tutor judged the student needs the teacher (frustration, repeated
+   * wrong answers, long confusion, or an explicit hand-off). Reads only the student's own conversations.
+   */
+  async getTutorAttentionFlags(studentId: string, limit: number = 10) {
+    type Flag = {
+      conversationId: string;
+      lessonId: string | null;
+      questionId: string | null;
+      updatedAt: Date;
+      reasons: string[];
+      mistakePatterns: Record<string, number>;
+      recentStudentMessages: string[];
+      lastStrategy?: string;
+    };
+    const describe = (conv: { id: string; lessonId: string | null; questionId: string | null; updatedAt: Date; stateJson: string | null }): Flag | null => {
+      if (!conv.stateJson) return null;
+      let st: any;
+      try {
+        st = JSON.parse(conv.stateJson);
+      } catch {
+        return null;
+      }
+      if (!st?.needsTeacherAttention) return null;
+      const reasons: string[] = [];
+      if ((st.frustration ?? 0) >= 2) reasons.push("Showed repeated frustration");
+      if ((st.wrongOnProblem ?? 0) >= 4) reasons.push(`${st.wrongOnProblem} wrong attempts on one problem`);
+      if ((st.consecutiveConfusion ?? 0) >= 4) reasons.push(`Said they were confused ${st.consecutiveConfusion} times in a row`);
+      if (st.strategyHistory?.some((h: any) => h.strategy === "SUGGEST_TEACHER")) reasons.push("The tutor suggested asking the teacher");
+      if (reasons.length === 0) reasons.push("The tutor flagged this conversation");
+      return {
+        conversationId: conv.id,
+        lessonId: conv.lessonId,
+        questionId: conv.questionId,
+        updatedAt: conv.updatedAt,
+        reasons,
+        mistakePatterns: st.diagnoses ?? {},
+        recentStudentMessages: (st.recentStudentStatements ?? []).slice(-3),
+        lastStrategy: st.strategyHistory?.[st.strategyHistory.length - 1]?.strategy,
+      };
+    };
+
+    try {
+      if (hasValidDatabaseUrl) {
+        const convs = await prisma.aITutorConversation.findMany({
+          where: { studentId, stateJson: { contains: '"needsTeacherAttention":true' } },
+          orderBy: { updatedAt: "desc" },
+          take: limit,
+        });
+        return convs.map(describe).filter((f): f is Flag => f !== null);
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === "production") throw e;
+      console.warn("getTutorAttentionFlags prisma fallback:", e);
+    }
+    return fallbackStore.aiConversations
+      .filter((c) => c.studentId === studentId)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .map(describe)
+      .filter((f): f is Flag => f !== null)
+      .slice(0, limit);
+  },
+
+  /** Phase 23: persist the tutor's conversation state (strategy history, scaffold, pending problems). */
+  async saveAITutorConversationState(conversationId: string, studentId: string, stateJson: string) {
+    try {
+      if (hasValidDatabaseUrl) {
+        const res = await prisma.aITutorConversation.updateMany({
+          where: { id: conversationId, studentId },
+          data: { stateJson },
+        });
+        return res.count === 1;
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === "production") throw e;
+      console.warn("saveAITutorConversationState prisma fallback:", e);
+    }
+    const conv = fallbackStore.aiConversations.find((c) => c.id === conversationId && c.studentId === studentId);
+    if (!conv) return false;
+    conv.stateJson = stateJson;
+    conv.updatedAt = new Date();
+    return true;
   },
 
   /**
@@ -4566,11 +4811,13 @@ export const dbService = {
   async getAITutorMessages(conversationId: string, limit: number = 20) {
     try {
       if (hasValidDatabaseUrl) {
-        return await prisma.aITutorMessage.findMany({
+        // Latest N messages (oldest first). Ordering ascending with `take` would return the FIRST N forever.
+        const latest = await prisma.aITutorMessage.findMany({
           where: { conversationId },
-          orderBy: { createdAt: "asc" },
+          orderBy: { createdAt: "desc" },
           take: limit,
         });
+        return latest.reverse();
       }
     } catch (e) {
       console.warn("getAITutorMessages prisma fallback:", e);

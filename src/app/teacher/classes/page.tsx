@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useAuth } from "@/lib/auth/auth-context";
+import { useAuth, authFetch } from "@/lib/auth/auth-context";
 import { TeacherNav } from "@/components/teacher";
 import { Button } from "@/components/ui/Button";
 import { GraduationCap, Users, ArrowRight, BookOpen, Loader2 } from "lucide-react";
@@ -39,6 +39,32 @@ export default function TeacherClassesPage({ onNavigate }: TeacherClassesPagePro
     fetchClasses();
   }, []);
 
+  const [newName, setNewName] = useState("");
+  const [newGrade, setNewGrade] = useState("7");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const res = await authFetch("/api/teacher/classes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName, gradeLevel: Number(newGrade) }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not create the class");
+      setNewName("");
+      await fetchClasses();
+    } catch (err: unknown) {
+      setCreateError(err instanceof Error ? err.message : "Could not create the class");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="min-h-[calc(100vh-140px)] bg-slate-50/70">
       <TeacherNav currentTab="classes" onNavigate={handleNav} />
@@ -52,6 +78,23 @@ export default function TeacherClassesPage({ onNavigate }: TeacherClassesPagePro
             View student enrollments, curricular progress, and mastery across your authorized classroom sections.
           </p>
         </div>
+
+        <form onSubmit={handleCreate} data-testid="create-class-form" className="bg-white rounded-2xl border border-slate-200 p-4 mb-6 flex flex-col sm:flex-row gap-3 sm:items-end">
+          <div className="flex-1">
+            <label htmlFor="new-class-name" className="text-xs font-bold text-slate-700 block mb-1">New class name</label>
+            <input id="new-class-name" required minLength={2} maxLength={80} value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Grade 7 - Rizal" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs" />
+          </div>
+          <div>
+            <label htmlFor="new-class-grade" className="text-xs font-bold text-slate-700 block mb-1">Grade</label>
+            <select id="new-class-grade" value={newGrade} onChange={(e) => setNewGrade(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs">
+              {[7, 8, 9, 10, 11, 12].map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
+          </div>
+          <Button type="submit" variant="primary" size="sm" disabled={creating} className="bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs">
+            {creating ? "Creating..." : "Create class"}
+          </Button>
+          {createError && <p role="alert" className="text-xs text-red-600 sm:basis-full">{createError}</p>}
+        </form>
 
         {loading && (
           <div className="py-24 text-center">

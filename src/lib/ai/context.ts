@@ -1,6 +1,7 @@
 // Phase 7: AI Tutor Context Builder
 
 import { dbService } from "../db";
+import { retrieveTutorGrounding, isLessonAccessibleToStudent, EMPTY_GROUNDING } from "../documents/grounding";
 import type { AITutorContext, AITutorInteractParams, QuestionContextData } from "./types";
 
 export async function buildAITutorContext(params: AITutorInteractParams): Promise<AITutorContext> {
@@ -58,6 +59,10 @@ export async function buildAITutorContext(params: AITutorInteractParams): Promis
   // 3. Lesson & Curriculum Context
   let lessonContext: { id: string; title: string; description?: string | null } | undefined = undefined;
   let unitTitle: string | undefined = "Integers & Rational Numbers";
+
+  // Authorization: a student may only attach lessons that are published and unlocked for them.
+  const lessonAllowed = targetLessonId ? await isLessonAccessibleToStudent(studentId, targetLessonId) : false;
+  if (targetLessonId && !lessonAllowed) targetLessonId = undefined;
 
   if (targetLessonId) {
     const lesson = await dbService.getLessonById(targetLessonId);
@@ -147,6 +152,21 @@ export async function buildAITutorContext(params: AITutorInteractParams): Promis
     }
   }
 
+  // 9. Phase 22: Retrieve grounding material (permission-aware, answer-key safe)
+  let grounding = EMPTY_GROUNDING;
+  if (targetLessonId) {
+    try {
+      grounding = await retrieveTutorGrounding({
+        studentId,
+        lessonId: targetLessonId,
+        query: studentQuery || "",
+        questionPrompt: questionContext?.prompt,
+      });
+    } catch (e) {
+      console.warn("Grounding retrieval failed; continuing without source material:", e);
+    }
+  }
+
   return {
     student,
     curriculum: {
@@ -167,5 +187,6 @@ export async function buildAITutorContext(params: AITutorInteractParams): Promis
     practiceSessionId,
     mistakeInsight,
     masteryInsight,
+    grounding,
   };
 }

@@ -112,7 +112,6 @@ export default function TeacherLessonEditorPage({
           description: description.trim(),
           estimatedMinutes,
           learningObjectives: objectives,
-          resources,
           contentBlocks,
           skillIds: selectedSkillIds,
         }),
@@ -145,7 +144,6 @@ export default function TeacherLessonEditorPage({
           description: description.trim(),
           estimatedMinutes,
           learningObjectives: objectives,
-          resources,
           contentBlocks,
           skillIds: selectedSkillIds,
         }),
@@ -222,11 +220,15 @@ export default function TeacherLessonEditorPage({
     setResources(resources.filter((_, i) => i !== index));
     if (target?.id && !target.id.startsWith("res_temp_")) {
       try {
-        await fetch(`/api/lessons/${lessonId}/video/${target.id}`, { method: "DELETE" });
+        await fetch(`/api/lessons/${lessonId}/resources/${target.id}`, { method: "DELETE" });
       } catch (e) {
-        console.warn("Video delete error:", e);
+        console.warn("Resource delete error:", e);
       }
     }
+  };
+
+  const handleDocumentAdded = (result: { resource: any }) => {
+    setResources((prev) => [...prev, result.resource]);
   };
 
   const toggleSkill = (sId: string) => {
@@ -596,6 +598,26 @@ export default function TeacherLessonEditorPage({
                           <span className="text-[10px] text-slate-400 uppercase mt-1 block">
                             {r.type}
                           </span>
+                          {(r.type === "PDF" || r.type === "DOCUMENT" || r.type === "TEACHER_NOTE") && (
+                            <span
+                              className={`inline-block mt-1 text-[10px] font-semibold rounded-full px-2 py-0.5 ${
+                                r.extractionStatus === "EXTRACTED" || r.extractionStatus === "TRUNCATED"
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : "bg-amber-50 text-amber-800"
+                              }`}
+                              title={r.extractionError || undefined}
+                            >
+                              {r.extractionStatus === "EXTRACTED"
+                                ? "AI can read this"
+                                : r.extractionStatus === "TRUNCATED"
+                                  ? "AI can read the first part"
+                                  : r.extractionStatus === "NO_TEXT"
+                                    ? "AI cannot read this (no text found)"
+                                    : r.extractionStatus === "FAILED"
+                                      ? "AI cannot read this (unreadable file)"
+                                      : "Not processed"}
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -653,8 +675,9 @@ export default function TeacherLessonEditorPage({
       />
       <DocumentResourceModal
         isOpen={docModalOpen}
+        lessonId={lessonId}
         onClose={() => setDocModalOpen(false)}
-        onAddResource={handleAddResource}
+        onResourceAdded={handleDocumentAdded}
       />
     </div>
   );

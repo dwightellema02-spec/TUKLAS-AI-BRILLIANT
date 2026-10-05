@@ -215,6 +215,8 @@ export function AITutorPanel({
                           {msg.messageType === "EXPLANATION" && "Concept Review"}
                           {msg.messageType === "EXAMPLE" && "Worked Example"}
                           {msg.messageType === "REDIRECT" && "Guidance"}
+                          {msg.messageType === "FEEDBACK" && "Feedback"}
+                          {msg.messageType === "CLARIFICATION" && "Note"}
                         </span>
                       </div>
                     )}
@@ -227,6 +229,20 @@ export function AITutorPanel({
                       <div className="mt-2.5 pt-2 border-t border-emerald-100/70 bg-emerald-50/50 -mx-1 px-2.5 py-1.5 rounded-lg text-emerald-900 font-medium text-xs">
                         <span className="font-bold text-emerald-700 mr-1">Think about:</span>
                         <MathText content={msg.guidingQuestion} />
+                      </div>
+                    )}
+
+                    {!isStudent && msg.citations && msg.citations.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Sources">
+                        {msg.citations.map((c) => (
+                          <span
+                            key={c.sourceId}
+                            className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200"
+                            title={`${c.title} - ${c.sectionLabel}`}
+                          >
+                            Source: {c.title} &middot; {c.sectionLabel}
+                          </span>
+                        ))}
                       </div>
                     )}
 

@@ -287,9 +287,35 @@ model LessonResource {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
-  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  // Phase 22: document intelligence metadata
+  extractionStatus String? // EXTRACTED | NO_TEXT | FAILED | TRUNCATED (null for non-document resources)
+  extractionError  String?
+  pageCount        Int?
+  charCount        Int?
+  contentHash      String?
+
+  lesson Lesson          @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  chunks ResourceChunk[]
 
   @@index([lessonId, sequenceOrder])
+}
+
+/// Phase 22: indexed, retrievable text chunks extracted from a lesson resource (PDF/DOCX/TXT/teacher note).
+model ResourceChunk {
+  id           String  @id @default(uuid())
+  resourceId   String
+  lessonId     String
+  ordinal      Int
+  text         String
+  sectionLabel String
+  pageStart    Int?
+  pageEnd      Int?
+  isAnswerKey  Boolean @default(false)
+
+  resource LessonResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId])
+  @@index([resourceId, ordinal])
 }
 
 model LessonContentBlock {
@@ -597,6 +623,8 @@ model AITutorConversation {
   skillId           String?
   questionId        String?
   practiceSessionId String?
+  /// Phase 23: serialized ConversationState (strategy history, scaffold level, pending problems...)
+  stateJson         String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -893,6 +921,11 @@ model Classroom {
   subject    String   @default("Mathematics")
   schoolYear String   @default("2026-2027")
   teacherId  String
+  /// Phase 25: students join with this code; unique, regenerated on demand, can be switched off.
+  joinCode       String?   @unique
+  joinCodeActive Boolean   @default(true)
+  /// Phase 25: archived classes keep their data but stop granting the teacher access to students and stop accepting joins.
+  archivedAt     DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -909,6 +942,8 @@ model ClassroomEnrollment {
   id          String   @id @default(uuid())
   classroomId String
   studentId   String
+  /// "TEACHER" (added by the teacher), "JOIN_CODE" (student joined), "ADMIN"
+  source      String   @default("TEACHER")
   enrolledAt  DateTime @default(now())
 
   classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
@@ -927,6 +962,7 @@ model Assignment {
   lessonId      String?
   practiceSetId String?
   dueDate       DateTime?
+  createdById   String?
   status        String    @default("PUBLISHED") // "DRAFT" | "PUBLISHED" | "ARCHIVED"
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

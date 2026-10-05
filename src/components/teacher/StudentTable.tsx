@@ -34,6 +34,8 @@ export function StudentTable({
         return <Badge variant="success" className="text-[10px]">Active</Badge>;
       case "NEEDS_SUPPORT":
         return <Badge variant="warning" className="text-[10px]">Needs Support</Badge>;
+      case "NO_DATA":
+        return <Badge variant="outline" className="text-[10px] text-slate-500">No activity yet</Badge>;
       default:
         return <Badge variant="outline" className="text-[10px] text-slate-500">Inactive</Badge>;
     }
@@ -136,7 +138,7 @@ export function StudentTable({
 
                   {/* Accuracy */}
                   <td className="py-3.5 px-4 font-bold text-slate-700">
-                    {st.overallAccuracy}%
+                    {st.overallAccuracy === null ? <span className="text-slate-400 font-normal" title="No scored practice yet">—</span> : `${st.overallAccuracy}%`}
                   </td>
 
                   {/* Primary Mastery Badge */}

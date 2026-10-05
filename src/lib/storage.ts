@@ -1,12 +1,13 @@
 /**
  * Storage Abstraction & Document Resource Architecture
- * Handles metadata validation and storage provider decoupling for PDFs, DOCX, and PPTX.
+ * Client-side metadata pre-check for PDF, DOCX and TXT. The authoritative validation (magic bytes,
+ * archive inspection) happens server-side in src/lib/documents/validate.ts.
  * Large binary files are decoupled from PostgreSQL into object storage abstraction.
  */
 
 export interface DocumentMetadata {
   fileName: string;
-  fileType: "application/pdf" | "application/vnd.openxmlformats-officedocument.wordprocessingml.document" | "application/vnd.openxmlformats-officedocument.presentationml.presentation" | string;
+  fileType: "application/pdf" | "application/vnd.openxmlformats-officedocument.wordprocessingml.document" | string;
   fileSize: number; // In bytes
   storagePath: string;
   publicUrl?: string;
@@ -15,8 +16,7 @@ export interface DocumentMetadata {
 export const ALLOWED_DOCUMENT_TYPES = [
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation", // .pptx
-  "application/msword", // .doc
+  "text/plain", // .txt
 ];
 
 export const MAX_DOCUMENT_SIZE_BYTES = 25 * 1024 * 1024; // 25 MB
@@ -31,12 +31,12 @@ export function validateDocumentMetadata(file: {
   }
 
   const extension = file.name.split(".").pop()?.toLowerCase();
-  const allowedExtensions = ["pdf", "docx", "pptx", "doc"];
+  const allowedExtensions = ["pdf", "docx", "txt"];
 
   if (!extension || !allowedExtensions.includes(extension)) {
     return {
       isValid: false,
-      error: `Unsupported file format (.${extension}). Only PDF, DOCX, and PPTX are supported.`,
+      error: `Unsupported file format (.${extension}). Only PDF, DOCX, and TXT are supported.`,
     };
   }
 

@@ -15,7 +15,23 @@ export interface SessionPayload {
   expiresAt: number;
 }
 
-const SECRET = process.env.AUTH_SECRET || "tuklas_ai_phase2_dev_secret_key_minimum_32_bytes";
+const DEV_FALLBACK_SECRET = "tuklas_ai_phase2_dev_secret_key_minimum_32_bytes";
+
+function resolveSecret(): string {
+  const configured = process.env.AUTH_SECRET;
+  if (process.env.NODE_ENV === "production") {
+    if (!configured || configured.length < 32 || configured === DEV_FALLBACK_SECRET || configured.startsWith("placeholder_")) {
+      throw new Error(
+        "AUTH_SECRET must be set to a unique value of at least 32 characters when NODE_ENV=production."
+      );
+    }
+    return configured;
+  }
+  return configured || DEV_FALLBACK_SECRET;
+}
+
+// Evaluated at import time so a misconfigured production server fails to start.
+const SECRET = resolveSecret();
 const SESSION_DURATION_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 
 function signData(dataString: string): string {

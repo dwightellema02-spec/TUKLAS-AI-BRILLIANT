@@ -87,28 +87,82 @@ export function validateTutorOutput(rawText: string, context: AITutorContext): S
         typeof parsed.encouragement === "string" ? sanitizeMessage(parsed.encouragement.trim()) : "You can do this!";
       const nextStep = typeof parsed.nextStep === "string" ? sanitizeMessage(parsed.nextStep.trim()) : undefined;
 
-      return {
-        responseType,
-        message,
-        guidingQuestion,
-        hintLevel,
-        encouragement,
-        nextStep,
-      };
+      const citedSourceIds = Array.isArray(parsed.citedSourceIds)
+        ? parsed.citedSourceIds.filter((x: unknown): x is string => typeof x === "string")
+        : [];
+
+      return enforceGrounding(
+        { responseType, message, guidingQuestion, hintLevel, encouragement, nextStep, citedSourceIds },
+        context
+      );
     }
   } catch {
     // JSON parsing failed; if the rawText looks like natural text, use it safely
     if (rawText.length > 10 && rawText.length < 1500 && !rawText.includes("{") && !rawText.includes("```")) {
-      return {
-        responseType: "HINT",
-        message: sanitizeMessage(rawText.trim()),
-        hintLevel: 1,
-        encouragement: "Keep trying!",
-      };
+      return enforceGrounding(
+        {
+          responseType: "HINT",
+          message: sanitizeMessage(rawText.trim()),
+          hintLevel: 1,
+          encouragement: "Keep trying!",
+        },
+        context
+      );
     }
   }
 
   return generateFallbackTutorResponse(context);
+}
+
+// -------------------------------------------------------------
+// PHASE 22: GROUNDING ENFORCEMENT (hallucination protection)
+// -------------------------------------------------------------
+
+// Phrases that attribute content to a specific attached resource.
+const DOCUMENT_CLAIM = /\b(?:the|your|this|that)\s+(?:pdf|docx?|document|worksheet|handout|module|las|activity sheet|learning activity sheet|file|teacher'?s? (?:notes?|materials?|handout))\b[^.?!\n]{0,40}\b(?:says?|said|states?|stated|shows?|showed|explains?|explained|mentions?|mentioned|describes?|described|lists?|contains?|defines?)\b|\baccording to (?:the|your|this)\s+(?:pdf|docx?|document|worksheet|handout|module|las|activity sheet|file|teacher)/i;
+const VIDEO_CLAIM = /\b(?:in|from|the)\s+(?:the|this|that|your)\s+(?:video|mathisipan|youtube)\b[^.?!\n]{0,40}\b(?:says?|said|shows?|showed|explains?|explained|mentions?|mentioned|demonstrates?|demonstrated|teaches?)\b|\b(?:as|when) (?:you|we) (?:saw|watched) in the video\b|\bthe video (?:says?|said|shows?|showed|explains?|explained|mentions?|mentioned|demonstrates?)\b/i;
+
+const HONEST_NO_SOURCE_MESSAGE =
+  "I can't see that part of your learning materials, so I don't want to guess what it says. Let's use the idea behind it instead.";
+
+/**
+ * Verifies the model's source citations against what was actually retrieved and blocks claims
+ * about resources the tutor never had access to. Pure function of (response, context).
+ */
+export function enforceGrounding(
+  response: StructuredTutorResponse,
+  context: AITutorContext
+): StructuredTutorResponse {
+  const sources = context.grounding?.sources ?? [];
+  const validIds = new Set(sources.map((s) => s.sourceId));
+
+  // 1. Keep only citations that exist; also harvest inline markers like [S1] / (S2).
+  const inline = [...response.message.matchAll(/[\[(]\s*(S\d+)\s*[\])]/g)].map((m) => m[1]);
+  const cited = [...new Set([...(response.citedSourceIds ?? []), ...inline])].filter((id) => validIds.has(id));
+
+  // Remove inline markers (the UI renders citations separately) so students never see raw ids.
+  let message = response.message.replace(/\s*[\[(]\s*S\d+\s*[\])]/g, "");
+  let guidingQuestion = response.guidingQuestion?.replace(/\s*[\[(]\s*S\d+\s*[\])]/g, "");
+
+  // 2. Resource-attribution claims without supporting retrieved source => replace with an honest message.
+  const claimText = `${message} ${guidingQuestion ?? ""}`;
+  const claimsDocument = DOCUMENT_CLAIM.test(claimText);
+  const claimsVideo = VIDEO_CLAIM.test(claimText);
+  // No video transcript exists in this phase: any claim about video content is unsupported.
+  const unsupportedDocumentClaim = claimsDocument && cited.length === 0;
+
+  if (unsupportedDocumentClaim || claimsVideo) {
+    message = HONEST_NO_SOURCE_MESSAGE;
+    return {
+      ...response,
+      responseType: "CLARIFICATION",
+      message,
+      guidingQuestion: "Which step of the problem would you like to think through first?",
+      citedSourceIds: [],
+    };
+  }
+
+  return { ...response, message, guidingQuestion, citedSourceIds: cited };
 }
 
 function sanitizeMessage(text: string): string {

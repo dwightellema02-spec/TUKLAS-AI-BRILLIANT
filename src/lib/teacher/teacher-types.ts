@@ -42,10 +42,11 @@ export interface StudentListItemDTO {
     skillTitle: string;
     status: MasteryLevel;
   } | null;
-  overallAccuracy: number;
+  /** Percent from real scored practice, or null when the student has none yet. */
+  overallAccuracy: number | null;
   lastActivityAt: string | null;
   lastActivityDisplay: string;
-  status: "ACTIVE" | "NEEDS_SUPPORT" | "INACTIVE";
+  status: "ACTIVE" | "NEEDS_SUPPORT" | "INACTIVE" | "NO_DATA";
 }
 
 export interface PaginatedStudentsDTO {
@@ -123,7 +124,8 @@ export interface DifficultSkillDTO {
   skillTitle: string;
   developingOrLearningCount: number;
   totalStudents: number;
-  averageAccuracy: number;
+  /** Mean mastery accuracy over students with evidence, or null if unavailable. */
+  averageAccuracy: number | null;
   commonMistakeCategory?: string;
   reason: string;
 }
@@ -169,7 +171,8 @@ export interface TeacherDashboardDataDTO {
   classProgress: {
     lessonsCompletedTotal: number;
     practiceSessionsTotal: number;
-    averageClassAccuracy: number;
+    /** null when no student has scored practice yet. */
+    averageClassAccuracy: number | null;
   };
   masteryDistribution: MasteryDistributionDTO[];
   difficultSkills: DifficultSkillDTO[];

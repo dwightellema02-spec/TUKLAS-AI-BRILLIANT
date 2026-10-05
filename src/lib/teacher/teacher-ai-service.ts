@@ -7,6 +7,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { TeacherService } from "./teacher-service";
+import { resolveGeminiModel } from "../ai/provider";
 import type { TeacherAIQueryResponse } from "./teacher-types";
 
 export class TeacherAIService {
@@ -21,24 +22,23 @@ export class TeacherAIService {
   }): Promise<TeacherAIQueryResponse> {
     const { teacherId, userRole, prompt, classId } = params;
 
-    // 1. Retrieve authorized dashboard analytics
-    const dashboard = await TeacherService.getTeacherDashboard(teacherId, userRole);
-
-    // If specific classId requested, verify authorization
-    let classMetrics: any = null;
-    if (classId) {
-      classMetrics = await TeacherService.getClassroomDetail(classId, teacherId, userRole);
-    }
+    // 1. Retrieve authorized dashboard analytics (scoped to one class when asked, after an ownership check)
+    const dashboard = await TeacherService.getTeacherDashboard(teacherId, userRole, { classId });
+    const selectedClass = classId ? dashboard.classes[0]?.name ?? "Selected class" : "All Assigned Classes";
+    const pct = (n: number | null | undefined) => (n === null || n === undefined ? "no data yet" : `${n}%`);
 
     const groundedContext = {
       totalStudents: dashboard.stats.totalStudents,
       activeStudents: dashboard.stats.activeStudents,
       inactiveStudents: dashboard.stats.inactiveStudents,
-      averageClassAccuracy: `${dashboard.classProgress.averageClassAccuracy}%`,
+      averageClassAccuracy: pct(dashboard.classProgress.averageClassAccuracy),
+      lessonsCompleted: dashboard.classProgress.lessonsCompletedTotal,
+      practiceSessions: dashboard.classProgress.practiceSessionsTotal,
       difficultSkills: dashboard.difficultSkills.map((d) => ({
         skillTitle: d.skillTitle,
         strugglingStudents: d.developingOrLearningCount,
-        averageAccuracy: `${d.averageAccuracy}%`,
+        studentsWithEvidence: d.totalStudents,
+        averageAccuracy: pct(d.averageAccuracy),
         reason: d.reason,
       })),
       commonMistakes: dashboard.commonMistakes.map((m) => `${m.label} (${m.count} occurrences)`),
@@ -47,7 +47,7 @@ export class TeacherAIService {
         issue: s.details,
         severity: s.severity,
       })),
-      selectedClass: classMetrics ? classMetrics.classroom.name : "All Assigned Classes",
+      selectedClass,
     };
 
     const apiKey = process.env.GEMINI_API_KEY || process.env.AI_API_KEY;
@@ -59,9 +59,9 @@ export class TeacherAIService {
 You assist teachers by interpreting real classroom analytics and suggesting evidence-based teaching interventions.
 
 CRITICAL RULES:
-1. ONLY use the verified grounded metrics provided below. NEVER invent, extrapolate, or alter any numerical statistics, student names, or percentages.
-2. Keep your response professional, constructive, and actionable.
-3. Suggest 2-3 specific pedagogical strategies (e.g. manipulatives, number line exercises, small-group remediation).
+1. ONLY use the verified grounded metrics provided below. NEVER invent, extrapolate, or alter any numerical statistics, student names, or percentages. If a metric says "no data yet", say that the data is not available yet; do not estimate it.
+2. If there are no students or no activity, say so plainly and suggest how to get data (enrol students, assign a lesson).
+3. Keep your response professional, constructive, and actionable. Suggest at most 3 specific pedagogical strategies that follow from the data.
 4. Never assume authority to change grades or publish content automatically.`;
 
         const userPrompt = `Teacher Query: "${prompt}"
@@ -69,67 +69,64 @@ CRITICAL RULES:
 Current Grounded Classroom Data:
 ${JSON.stringify(groundedContext, null, 2)}
 
-Provide a clear, scannable response summarizing key patterns and outlining 2-3 specific pedagogical actions.`;
+Provide a clear, scannable response summarizing key patterns that are actually present in this data.`;
 
         const response = await ai.models.generateContent({
-          model: "gemini-3.8-flash",
+          model: resolveGeminiModel(),
           contents: userPrompt,
-          config: {
-            systemInstruction: systemPrompt,
-            maxOutputTokens: 600,
-            temperature: 0.3,
-          },
+          config: { systemInstruction: systemPrompt, maxOutputTokens: 600, temperature: 0.3 },
         });
 
         const text = response.text || "";
         if (text.trim().length > 0) {
-          return {
-            answer: text,
-            groundedMetrics: groundedContext,
-            suggestedActions: [
-              "Conduct visual number-line counters workshop for integers.",
-              "Group students currently in Developing status for targeted 10-minute remediation.",
-              "Assign 5 formative questions focusing on sign determination.",
-            ],
-          };
+          // The model's wording is used as-is; actions are derived only from what the data shows.
+          return { answer: text, groundedMetrics: groundedContext, suggestedActions: this.actionsFromData(dashboard) };
         }
       } catch (err) {
         console.warn("Gemini Teacher AI assistant failed, falling back to deterministic synthesis:", err);
       }
     }
 
-    // 2. High-quality Deterministic Grounded Synthesis
+    // 2. Deterministic synthesis: every sentence below is built from real values or states that none exist.
     const p = prompt.toLowerCase();
     let answer = "";
-    const suggestedActions: string[] = [];
 
-    if (p.includes("difficult") || p.includes("struggle") || p.includes("hard")) {
-      const topDifficult = dashboard.difficultSkills[0];
-      answer = `Based on current Mastery Engine evaluations across ${dashboard.stats.totalStudents} students in ${groundedContext.selectedClass}, the most challenging skill is **${topDifficult?.skillTitle || "Adding Integers"}**. Currently, ${topDifficult?.developingOrLearningCount || 2} students are in Developing or Learning status, with an average accuracy of ${topDifficult?.averageAccuracy || "65%"}. The predominant misconception flagged is **${dashboard.commonMistakes[0]?.label || "Sign & Inverse Errors"}**.`;
-      suggestedActions.push("Review two-color counter representations before arithmetic symbols.");
-      suggestedActions.push("Provide targeted practice sets with opposite-sign integers.");
+    if (dashboard.stats.totalStudents === 0) {
+      answer = `${selectedClass} has no enrolled students yet, so there are no analytics to interpret. Add students to a class (by email or by sharing the class code) and assign a lesson; insights appear once they start working.`;
+    } else if (p.includes("difficult") || p.includes("struggle") || p.includes("hard")) {
+      const top = dashboard.difficultSkills[0];
+      answer = top
+        ? `In ${selectedClass}, the skill with the clearest struggle signal is **${top.skillTitle}**: ${top.developingOrLearningCount} of ${top.totalStudents} students with evidence are still learning or developing it (average mastery accuracy: ${pct(top.averageAccuracy)}).${top.commonMistakeCategory ? ` The most frequent diagnosed pattern for this skill is **${top.commonMistakeCategory.replace(/_/g, " ").toLowerCase()}**.` : ""}`
+        : `No skill currently meets the threshold for "difficult" (at least 2 students with evidence and 30% still learning/developing). This may simply mean students have not produced enough evidence yet.`;
     } else if (p.includes("support") || p.includes("help") || p.includes("attention")) {
       const highNeed = dashboard.needsAttention.filter((n) => n.severity === "HIGH");
-      answer = `There are currently **${dashboard.needsAttention.length} student support signals** active across your class. ${highNeed.length} students have high-priority flags: ${dashboard.needsAttention.map((s) => `${s.studentName} (${s.details})`).join("; ")}. Overall class accuracy is currently ${dashboard.classProgress.averageClassAccuracy}%.`;
-      suggestedActions.push("Schedule a 1-on-1 check-in with flagged students during practice time.");
-      suggestedActions.push("Trigger foundational adaptive practice sets from the Teacher Dashboard.");
+      answer = dashboard.needsAttention.length > 0
+        ? `There are **${dashboard.needsAttention.length} student support signals** in ${selectedClass}; ${highNeed.length} are high priority: ${dashboard.needsAttention.map((s) => `${s.studentName} (${s.details})`).join("; ")}.`
+        : `No student currently has a support signal in ${selectedClass}. That reflects the data available (${dashboard.classProgress.practiceSessionsTotal} practice sessions so far), not a guarantee that everyone is doing well.`;
     } else if (p.includes("mistake") || p.includes("misconception")) {
-      answer = `Aggregated mistake analysis from student practice sessions highlights **${dashboard.commonMistakes[0]?.label}** as the primary error pattern (${dashboard.commonMistakes[0]?.count} instances), followed by **${dashboard.commonMistakes[1]?.label || "Conceptual Misunderstanding"}**. Students frequently confuse whole number magnitude when comparing negative values.`;
-      suggestedActions.push("Reinforce that distance from zero (absolute value) is separate from directional value.");
-      suggestedActions.push("Use horizontal number lines plotted with both positive and negative temperatures.");
+      const [m1, m2] = dashboard.commonMistakes;
+      answer = m1
+        ? `Diagnosed mistakes in ${selectedClass} are led by **${m1.label}** (${m1.count} instances)${m2 ? `, then **${m2.label}** (${m2.count})` : ""}.`
+        : `No mistake analyses have been recorded for ${selectedClass} yet.`;
     } else {
-      answer = `In ${groundedContext.selectedClass}, you have **${dashboard.stats.totalStudents} enrolled students** with **${dashboard.stats.activeStudents} active** recently. The overall class accuracy is **${dashboard.classProgress.averageClassAccuracy}%** with **${dashboard.classProgress.lessonsCompletedTotal} lessons completed** to date. Most students demonstrate strong foundational recall on identifying integers, while integer comparison and addition remain active areas for reinforcement.`;
-      suggestedActions.push("Check the Needs Attention panel to inspect individual student diagnostic summaries.");
-      suggestedActions.push("Publish Lesson 2 practice sets to calibrate class mastery progression.");
+      answer = `${selectedClass} has **${dashboard.stats.totalStudents} enrolled students**, **${dashboard.stats.activeStudents}** active in the last 14 days. Class practice accuracy: **${pct(dashboard.classProgress.averageClassAccuracy)}** across ${dashboard.classProgress.practiceSessionsTotal} practice sessions; ${dashboard.classProgress.lessonsCompletedTotal} lessons completed in total.`;
     }
 
-    return {
-      answer,
-      groundedMetrics: groundedContext,
-      suggestedActions: suggestedActions.length > 0 ? suggestedActions : [
-        "Review student details in the Student Roster.",
-        "Assign targeted remediation practice to students with developing mastery.",
-      ],
-    };
+    return { answer, groundedMetrics: groundedContext, suggestedActions: this.actionsFromData(dashboard) };
+  }
+
+  /** Suggestions that follow from the data actually present (never boilerplate about topics the data does not mention). */
+  private static actionsFromData(dashboard: Awaited<ReturnType<typeof TeacherService.getTeacherDashboard>>): string[] {
+    const actions: string[] = [];
+    if (dashboard.stats.totalStudents === 0) {
+      actions.push("Add students to a class or share its class code so they can join.");
+      return actions;
+    }
+    if (dashboard.needsAttention.length > 0) actions.push("Open the flagged students' profiles and plan a short check-in.");
+    if (dashboard.difficultSkills[0]) actions.push(`Plan a short small-group review of "${dashboard.difficultSkills[0].skillTitle}".`);
+    if (dashboard.commonMistakes[0]) actions.push(`Address the most frequent diagnosed pattern (${dashboard.commonMistakes[0].label}) in the next lesson.`);
+    if (dashboard.stats.inactiveStudents > 0) actions.push(`${dashboard.stats.inactiveStudents} student(s) have no recent activity: check that an assignment is available to them.`);
+    if (actions.length === 0) actions.push("Assign a lesson or practice set to generate more evidence.");
+    return actions.slice(0, 3);
   }
 }

@@ -3,6 +3,7 @@
  * Full-stack Express server with Vite middleware in development and static serving in production.
  */
 
+import "dotenv/config"; // must load before modules that read process.env at import time (e.g. AUTH_SECRET)
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
@@ -10,21 +11,31 @@ import dotenv from "dotenv";
 import { dbService, fallbackStore } from "./src/lib/db.ts";
 import { hashPassword, verifyPassword } from "./src/lib/auth/password.ts";
 import { createSessionToken, verifySessionToken, SessionPayload } from "./src/lib/auth/session.ts";
-import { validateEmail, validatePassword, validateName, validateRole } from "./src/lib/auth/validation.ts";
+import { validateEmail, validatePassword, validateNewPassword, validateName, validateRole } from "./src/lib/auth/validation.ts";
+import { checkLoginThrottle, recordLoginFailure, clearLoginFailures } from "./src/lib/auth/login-throttle.ts";
 import { canUserAccessPath } from "./src/lib/auth/rbac.ts";
 import { validateAndExtractYouTube, YouTubeService } from "./src/lib/youtube.ts";
 import { LessonStatus, UserRole } from "@prisma/client";
+import { validateUpload, ingestDocument, DOCUMENT_LIMITS } from "./src/lib/documents/index.ts";
+import { saveOriginal, deleteOriginal } from "./src/lib/documents/file-store.ts";
+import { generateQuestionsFromChunks } from "./src/lib/documents/question-generation.ts";
+import { getAIProvider, LocalTutorEngine } from "./src/lib/ai/provider.ts";
 import { AITutorService } from "./src/lib/ai/tutor.ts";
 import { MistakeAnalyzerService } from "./src/lib/ai/mistake-analyzer.ts";
 import { AdaptiveEngine } from "./src/lib/adaptive/index.ts";
 import { MasteryEngine } from "./src/lib/mastery/index.ts";
 import { StudentDashboardService } from "./src/lib/dashboard/index.ts";
 import { TeacherService, TeacherAIService } from "./src/lib/teacher/index.ts";
+import { ClassroomService, ClassroomError } from "./src/lib/classroom/classroom-service.ts";
 import { AssessmentService, ResearchService, ResearchExporter } from "./src/lib/research/index.ts";
 
 dotenv.config();
 
 const app = express();
+if (process.env.TRUST_PROXY === "true") app.set("trust proxy", 1);
+
+// A real bcrypt hash of a random value, used to equalise timing for unknown emails.
+const DUMMY_PASSWORD_HASH = "$2b$10$CwTycUXWue0Thq9StjUM0uJ8y3wRZBZl4kG5K2D9wH5g8h4mJrJ1e";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const isProd = process.env.NODE_ENV === "production";
 
@@ -63,7 +74,7 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
     const { name, email, password, gradeLevel } = req.body;
 
     const validatedEmail = validateEmail(email);
-    const validatedPass = validatePassword(password);
+    const validatedPass = validateNewPassword(password);
     const validatedName = validateName(name);
 
     // Enforce STUDENT role for public self-registration (Teacher/Admin accounts are restricted)
@@ -127,8 +138,19 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
     const validatedEmail = validateEmail(email);
     const validatedPass = validatePassword(password);
 
+    // Brute-force protection: per account and per client address.
+    const throttleKeys = [`email:${validatedEmail}`, `ip:${req.ip ?? "unknown"}`];
+    const throttle = checkLoginThrottle(throttleKeys);
+    if (!throttle.allowed) {
+      res.setHeader("Retry-After", String(throttle.retryAfterSeconds));
+      return res.status(429).json({ success: false, error: "Too many failed sign-in attempts. Please try again later." });
+    }
+
     const user = await dbService.findUserByEmail(validatedEmail);
     if (!user) {
+      // Spend the same time as a real password check so response timing does not reveal which emails exist.
+      await verifyPassword(validatedPass, DUMMY_PASSWORD_HASH);
+      recordLoginFailure(throttleKeys);
       console.log("AUTH LOGIN REJECTED: User not found");
       return res.status(401).json({ success: false, error: "Invalid email or password" });
     }
@@ -136,9 +158,11 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
 
     const isValid = await verifyPassword(validatedPass, user.passwordHash);
     if (!isValid) {
+      recordLoginFailure(throttleKeys);
       console.log("AUTH LOGIN REJECTED: Incorrect password");
       return res.status(401).json({ success: false, error: "Invalid email or password" });
     }
+    clearLoginFailures([throttleKeys[0]]);
     console.log("AUTH LOGIN PASSWORD CHECK SUCCESS");
 
     const token = createSessionToken({
@@ -241,7 +265,13 @@ app.get("/api/curriculum", async (_req: Request, res: Response) => {
 
 app.get("/api/lessons", async (req: Request, res: Response) => {
   try {
-    const status = req.query.status as LessonStatus | undefined;
+    const session = getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    }
+    // Students (and any non-staff role) only ever see published lessons.
+    const staff = session.role === "TEACHER" || session.role === "ADMIN";
+    const status = staff ? (req.query.status as LessonStatus | undefined) : ("PUBLISHED" as LessonStatus);
     const unitId = req.query.unitId as string | undefined;
     const lessons = await dbService.getLessons({ status, unitId });
     return res.json({ data: lessons });
@@ -260,14 +290,18 @@ app.get("/api/lessons/:id", async (req: Request, res: Response) => {
     }
 
     const session = getSessionFromRequest(req);
-    // Student protection: Students can only view PUBLISHED lessons
-    if (session?.role === "STUDENT" && lesson.status !== "PUBLISHED") {
+    if (!session) {
+      return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    }
+    const staff = session.role === "TEACHER" || session.role === "ADMIN";
+    // Non-staff roles can only view PUBLISHED lessons
+    if (!staff && lesson.status !== "PUBLISHED") {
       return res.status(403).json({
         error: "Forbidden: This lesson has not been published yet.",
       });
     }
 
-    return res.json({ data: lesson });
+    return res.json({ data: staff ? lesson : toStudentLessonView(lesson) });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to retrieve lesson";
     return res.status(500).json({ error: message });
@@ -322,14 +356,14 @@ app.put("/api/lessons/:id", async (req: Request, res: Response) => {
       return res.status(403).json({ error: "Forbidden: You are not authorized to edit another teacher's lesson" });
     }
 
-    const { title, description, learningObjectives, estimatedMinutes, resources, contentBlocks, skillIds } = req.body;
+    // Resources are managed only through dedicated endpoints so extracted documents are never clobbered.
+    const { title, description, learningObjectives, estimatedMinutes, contentBlocks, skillIds } = req.body;
 
     const updated = await dbService.updateLesson(id, {
       title,
       description,
       learningObjectives,
       estimatedMinutes,
-      resources,
       contentBlocks,
       skillIds,
     });
@@ -493,6 +527,284 @@ app.delete("/api/lessons/:id/video/:resourceId", async (req: Request, res: Respo
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to remove video resource";
     const status = message.includes("Forbidden") ? 403 : 500;
+    return res.status(status).json({ error: message });
+  }
+});
+
+// Students must not see storage keys, content hashes, uploader ids or raw extraction diagnostics.
+function toStudentLessonView<T extends { resources?: unknown[] }>(lesson: T): T {
+  if (!lesson.resources) return lesson;
+  return {
+    ...lesson,
+    resources: lesson.resources.map((r) => {
+      const { storagePath, contentHash, addedBy, extractionError, charCount, ...safe } = r as Record<string, unknown>;
+      return safe;
+    }),
+  };
+}
+
+// -------------------------------------------------------------
+// PHASE 22: DOCUMENT UPLOAD, NOTES & EXTRACTION STATUS
+// -------------------------------------------------------------
+
+const uploadHistory = new Map<string, number[]>();
+const UPLOADS_PER_WINDOW = 20;
+const UPLOAD_WINDOW_MS = 10 * 60 * 1000;
+
+function checkUploadRateLimit(userId: string): boolean {
+  const now = Date.now();
+  const recent = (uploadHistory.get(userId) || []).filter((t) => now - t < UPLOAD_WINDOW_MS);
+  if (recent.length >= UPLOADS_PER_WINDOW) {
+    uploadHistory.set(userId, recent);
+    return false;
+  }
+  recent.push(now);
+  uploadHistory.set(userId, recent);
+  return true;
+}
+
+function publicResourceView(resource: Record<string, any>) {
+  const { storagePath, ...rest } = resource;
+  return rest;
+}
+
+// Auth + ownership are checked BEFORE the (up to 25MB) body is buffered.
+const authorizeDocumentUpload = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    }
+    if (!checkUploadRateLimit(session.userId)) {
+      return res.status(429).json({ error: "Too many uploads. Please wait a few minutes and try again." });
+    }
+    await dbService.assertCanEditLesson(req.params.id, session.role, session.userId);
+    (req as any).session = session;
+    return next();
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Upload not permitted";
+    const status = message.includes("Forbidden") ? 403 : message.includes("not found") ? 404 : 500;
+    return res.status(status).json({ error: message });
+  }
+};
+
+const rawUploadBody = (req: Request, res: Response, next: NextFunction) => {
+  express.raw({ type: () => true, limit: DOCUMENT_LIMITS.MAX_FILE_BYTES + 1024 })(req, res, (err?: any) => {
+    if (err) {
+      const tooLarge = err.type === "entity.too.large";
+      return res.status(tooLarge ? 413 : 400).json({
+        error: tooLarge ? "File exceeds the 25MB upload limit." : "The upload could not be read.",
+      });
+    }
+    return next();
+  });
+};
+
+app.post("/api/lessons/:id/documents", authorizeDocumentUpload, rawUploadBody, async (req: Request, res: Response) => {
+  let storedKey: string | undefined;
+  try {
+    const session = (req as any).session as SessionPayload;
+    const { id } = req.params;
+
+    const rawName = decodeURIComponent(String(req.headers["x-file-name"] || ""));
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+
+    const validation = await validateUpload(buffer, rawName);
+    if (!validation.ok) {
+      return res.status(validation.status).json({ error: validation.error });
+    }
+
+    const ingest = await ingestDocument(buffer, validation.kind);
+
+    // Keep the original only when we could read it; unreadable files are reported but not retained.
+    const keepOriginal = ingest.status === "EXTRACTED" || ingest.status === "TRUNCATED";
+    if (keepOriginal) {
+      storedKey = saveOriginal(buffer, validation.kind.toLowerCase());
+    }
+
+    const requestedTitle = decodeURIComponent(String(req.headers["x-resource-title"] || "")).trim().slice(0, 200);
+    const resource = await dbService.addLessonDocumentResource(id, session.role, session.userId, {
+      type: validation.kind === "PDF" ? "PDF" : "DOCUMENT",
+      title: requestedTitle || validation.safeFileName,
+      fileName: validation.safeFileName,
+      fileSize: buffer.length,
+      storagePath: storedKey,
+      ingest,
+    });
+
+    return res.status(201).json({
+      data: publicResourceView(resource as any),
+      extraction: {
+        status: ingest.status,
+        error: ingest.error,
+        pageCount: ingest.pageCount,
+        chunkCount: ingest.chunks.length,
+        usableByAITutor: ingest.status === "EXTRACTED" || ingest.status === "TRUNCATED",
+      },
+    });
+  } catch (error: unknown) {
+    deleteOriginal(storedKey);
+    const message = error instanceof Error ? error.message : "Failed to upload document";
+    const status = message.includes("Forbidden") ? 403 : 500;
+    console.error("Document upload error:", message);
+    return res.status(status).json({ error: status === 403 ? message : "Failed to process the document." });
+  }
+});
+
+// Teacher notes are real, retrievable lesson material (chunked and indexed like documents).
+app.post("/api/lessons/:id/notes", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    }
+    const title = typeof req.body?.title === "string" ? req.body.title.trim().slice(0, 200) : "";
+    const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
+    if (!title || !notes) return res.status(400).json({ error: "Note title and content are required." });
+    if (notes.length > 20000) return res.status(413).json({ error: "Teacher notes are limited to 20,000 characters." });
+
+    const ingest = await ingestDocument(Buffer.from(notes, "utf-8"), "TXT");
+    const resource = await dbService.addLessonDocumentResource(req.params.id, session.role, session.userId, {
+      type: "TEACHER_NOTE",
+      title,
+      notes,
+      ingest,
+    });
+    return res.status(201).json({ data: publicResourceView(resource as any) });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to add teacher note";
+    const status = message.includes("Forbidden") ? 403 : message.includes("not found") ? 404 : 500;
+    return res.status(status).json({ error: message });
+  }
+});
+
+app.delete("/api/lessons/:id/resources/:resourceId", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    }
+    const result = await dbService.removeLessonResource(req.params.id, req.params.resourceId, session.role, session.userId);
+    if (!result.success) return res.status(404).json({ error: "Resource not found on this lesson." });
+    deleteOriginal(result.removed?.storagePath);
+    return res.json({ success: true });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to remove resource";
+    const status = message.includes("Forbidden") ? 403 : message.includes("not found") ? 404 : 500;
+    return res.status(status).json({ error: message });
+  }
+});
+
+// Teacher-facing view of what the AI Tutor can actually read from a resource.
+app.get("/api/lessons/:id/resources/:resourceId/extraction", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    }
+    const lesson = await dbService.assertCanEditLesson(req.params.id, session.role, session.userId);
+    const resource = lesson.resources?.find((r: any) => r.id === req.params.resourceId);
+    if (!resource) return res.status(404).json({ error: "Resource not found on this lesson." });
+
+    const chunks = (await dbService.getLessonChunks(req.params.id, { includeAnswerKeys: true })).filter(
+      (c) => c.resourceId === req.params.resourceId
+    );
+    return res.json({
+      data: {
+        resourceId: resource.id,
+        title: resource.title,
+        status: resource.extractionStatus ?? null,
+        error: resource.extractionError ?? null,
+        pageCount: resource.pageCount ?? null,
+        charCount: resource.charCount ?? null,
+        chunkCount: chunks.length,
+        answerKeyChunkCount: chunks.filter((c) => c.isAnswerKey).length,
+        preview: chunks.slice(0, 5).map((c) => ({
+          sectionLabel: c.sectionLabel,
+          isAnswerKey: c.isAnswerKey,
+          text: c.text.slice(0, 300),
+        })),
+      },
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to load extraction details";
+    const status = message.includes("Forbidden") ? 403 : message.includes("not found") ? 404 : 500;
+    return res.status(status).json({ error: message });
+  }
+});
+
+// Draft lesson-aligned questions from a document's extracted text. Evidence-verified; saved as DRAFT only.
+app.post("/api/lessons/:id/resources/:resourceId/generate-questions", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    }
+    const lesson = await dbService.assertCanEditLesson(req.params.id, session.role, session.userId);
+    const resource = lesson.resources?.find((r: any) => r.id === req.params.resourceId);
+    if (!resource) return res.status(404).json({ error: "Resource not found on this lesson." });
+    if (resource.extractionStatus !== "EXTRACTED" && resource.extractionStatus !== "TRUNCATED") {
+      return res.status(422).json({
+        error: "This resource has no readable text, so questions cannot be generated from it.",
+      });
+    }
+
+    const provider = getAIProvider();
+    if (provider instanceof LocalTutorEngine) {
+      return res.status(503).json({
+        error: "Question generation needs the external AI provider, which is not configured or is unavailable. No questions were generated.",
+      });
+    }
+
+    const count = Math.min(Math.max(parseInt(String(req.body?.count ?? "3"), 10) || 3, 1), 5);
+    const chunks = (await dbService.getLessonChunks(req.params.id, { includeAnswerKeys: false })).filter(
+      (c) => c.resourceId === req.params.resourceId
+    );
+
+    let outcome;
+    try {
+      outcome = await generateQuestionsFromChunks({ provider, chunks, count });
+    } catch (e) {
+      console.error("Question generation provider error:", e instanceof Error ? e.message : e);
+      return res.status(502).json({ error: "The AI provider could not generate questions right now. Please try again later." });
+    }
+
+    const created = [];
+    for (const q of outcome.accepted) {
+      const saved = await dbService.createQuestion(
+        {
+          lessonId: req.params.id,
+          skillId: (lesson as any).skills?.[0]?.skillId,
+          type: q.type as any,
+          prompt: q.prompt,
+          explanation: q.explanation,
+          difficulty: q.difficulty as any,
+          status: "DRAFT" as any,
+          source: "AI_GENERATED" as any,
+          questionData: q.questionData,
+          metadata: {
+            generatedFrom: {
+              resourceId: req.params.resourceId,
+              chunkId: q.sourceChunkId,
+              evidenceQuote: q.evidenceQuote,
+              answerVerification: q.answerVerification,
+            },
+          },
+        },
+        session.userId
+      );
+      created.push(saved);
+    }
+
+    return res.status(201).json({
+      data: created,
+      rejectedCount: outcome.rejected.length,
+      rejected: outcome.rejected.slice(0, 10),
+      note: "Questions are saved as DRAFT. Review each one before publishing.",
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to generate questions";
+    const status = message.includes("Forbidden") ? 403 : message.includes("not found") ? 404 : 500;
     return res.status(status).json({ error: message });
   }
 });
@@ -1390,7 +1702,9 @@ app.get("/api/ai/conversations/:id", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Conversation not found or access denied." });
     }
 
-    return res.json({ data: conversation });
+    // The pedagogical state holds pending problems and their answers: never send it to the client.
+    const { stateJson: _internalState, ...safeConversation } = conversation as typeof conversation & { stateJson?: string | null };
+    return res.json({ data: safeConversation });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load conversation";
     return res.status(500).json({ error: message });
@@ -1479,6 +1793,9 @@ app.get("/api/teacher/students/:studentId/insights", async (req: Request, res: R
     }
 
     const { studentId } = req.params;
+    if (!(await TeacherService.isTeacherAuthorizedForStudent(session.userId, studentId, session.role))) {
+      return res.status(403).json({ error: "Forbidden: This student is not in one of your classes." });
+    }
     const { skillId, limit } = req.query;
 
     const insights = await dbService.getMistakeAnalysesForStudent(studentId, {
@@ -1495,6 +1812,25 @@ app.get("/api/teacher/students/:studentId/insights", async (req: Request, res: R
 });
 
 // Teacher/Admin manually triggers learning pattern analysis for a student
+// Phase 23: conversations where the AI Tutor judged this student needs their teacher.
+app.get("/api/teacher/students/:studentId/tutor-flags", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Admin privileges required." });
+    }
+    const { studentId } = req.params;
+    if (!(await TeacherService.isTeacherAuthorizedForStudent(session.userId, studentId, session.role))) {
+      return res.status(403).json({ error: "Forbidden: This student is not in one of your classes." });
+    }
+    const flags = await dbService.getTutorAttentionFlags(studentId, 10);
+    return res.json({ data: flags });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to load tutor flags";
+    return res.status(500).json({ error: message });
+  }
+});
+
 app.post("/api/teacher/students/:studentId/analyze", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
@@ -1503,6 +1839,9 @@ app.post("/api/teacher/students/:studentId/analyze", async (req: Request, res: R
     }
 
     const { studentId } = req.params;
+    if (!(await TeacherService.isTeacherAuthorizedForStudent(session.userId, studentId, session.role))) {
+      return res.status(403).json({ error: "Forbidden: This student is not in one of your classes." });
+    }
     const { skillId, lessonId, practiceSessionId, maxAttempts } = req.body;
 
     const analysis = await MistakeAnalyzerService.analyzeStudentMistakes({
@@ -1924,6 +2263,131 @@ app.get("/api/teacher/students/:studentId", async (req: Request, res: Response) 
 });
 
 // Teacher retrieves authorized classes
+// -------------------------------------------------------------
+// PHASE 25: CLASSROOMS (database-backed), ROSTER, JOIN CODES, ASSIGNMENTS
+// -------------------------------------------------------------
+
+function sendClassroomError(res: Response, error: unknown, fallback: string) {
+  if (error instanceof ClassroomError) return res.status(error.status).json({ error: error.message });
+  const message = error instanceof Error ? error.message : fallback;
+  console.error("Classroom route error:", message);
+  return res.status(500).json({ error: fallback });
+}
+
+const actorOf = (session: SessionPayload) => ({ userId: session.userId, role: session.role as string });
+
+app.post("/api/teacher/classes", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const view = await ClassroomService.create(actorOf(session), req.body ?? {});
+    return res.status(201).json({ data: view });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to create class");
+  }
+});
+
+app.patch("/api/teacher/classes/:classId", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const view = await ClassroomService.update(actorOf(session), req.params.classId, req.body ?? {});
+    return res.json({ data: view });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to update class");
+  }
+});
+
+app.post("/api/teacher/classes/:classId/join-code/regenerate", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const view = await ClassroomService.regenerateJoinCode(actorOf(session), req.params.classId);
+    return res.json({ data: view });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to regenerate class code");
+  }
+});
+
+app.post("/api/teacher/classes/:classId/students", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const results = await ClassroomService.addStudentsByEmail(actorOf(session), req.params.classId, req.body?.emails);
+    return res.json({ data: results });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to add students");
+  }
+});
+
+app.delete("/api/teacher/classes/:classId/students/:studentId", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const removed = await ClassroomService.removeStudent(actorOf(session), req.params.classId, req.params.studentId);
+    return removed ? res.json({ success: true }) : res.status(404).json({ error: "That student is not in this class." });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to remove student");
+  }
+});
+
+app.patch("/api/teacher/assignments/:assignmentId", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const updated = await ClassroomService.setAssignmentStatus(actorOf(session), req.params.assignmentId, req.body?.status);
+    return res.json({ data: updated });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to update assignment");
+  }
+});
+
+// ----- Student side -----
+app.get("/api/student/classes", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    if (session.role !== "STUDENT") return res.status(403).json({ error: "Forbidden: Student account required." });
+    return res.json({ data: await ClassroomService.listForStudent(actorOf(session)) });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to load classes");
+  }
+});
+
+app.post("/api/student/classes/join", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const view = await ClassroomService.joinByCode(actorOf(session), req.body?.code, req.ip ?? "unknown");
+    return res.json({ data: view });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to join class");
+  }
+});
+
+app.delete("/api/student/classes/:classId", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    if (session.role !== "STUDENT") return res.status(403).json({ error: "Forbidden: Student account required." });
+    const left = await ClassroomService.leave(actorOf(session), req.params.classId);
+    return left ? res.json({ success: true }) : res.status(404).json({ error: "You are not in that class." });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to leave class");
+  }
+});
+
+app.get("/api/student/assignments", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    if (session.role !== "STUDENT") return res.status(403).json({ error: "Forbidden: Student account required." });
+    return res.json({ data: await ClassroomService.listAssignmentsForStudent(actorOf(session)) });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to load assignments");
+  }
+});
+
 app.get("/api/teacher/classes", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
@@ -1952,8 +2416,8 @@ app.get("/api/teacher/classes/:classId", async (req: Request, res: Response) => 
     return res.json({ data: classDetail });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load class detail";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+    const status = message.includes("Forbidden") ? 403 : /not found/i.test(message) ? 404 : 500;
+    return res.status(status).json({ error: status === 500 ? "Failed to load class detail" : message });
   }
 });
 
@@ -1979,10 +2443,8 @@ app.post("/api/teacher/classes/:classId/assignments", async (req: Request, res: 
     );
 
     return res.status(201).json({ data: assignment });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to create assignment";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to create assignment");
   }
 });
 
@@ -2009,7 +2471,7 @@ app.post("/api/teacher/ai-assistant", async (req: Request, res: Response) => {
     return res.json({ data: result });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Teacher AI assistant failed";
-    return res.status(500).json({ error: message });
+    return res.status(message.includes("Forbidden") ? 403 : 500).json({ error: message.includes("Forbidden") ? message : "Teacher AI assistant failed" });
   }
 });
 
@@ -2045,6 +2507,98 @@ app.post("/api/teacher/lessons/:id/publish", async (req: Request, res: Response)
 });
 
 // Role-protected API route test
+// -------------------------------------------------------------
+// PHASE 25: ADMIN-MANAGED ACCOUNTS + PASSWORD CHANGE
+// Teacher and admin accounts are never self-registered; an administrator creates them.
+// -------------------------------------------------------------
+
+const ADMIN_CREATABLE_ROLES = ["TEACHER", "ADMIN", "RESEARCHER", "STUDENT"] as const;
+
+app.post("/api/admin/users", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || session.role !== "ADMIN") {
+      return res.status(403).json({ error: "Forbidden: Administrator role required" });
+    }
+    const { name, email, password, role, gradeLevel } = req.body ?? {};
+    if (typeof role !== "string" || !(ADMIN_CREATABLE_ROLES as readonly string[]).includes(role)) {
+      return res.status(400).json({ error: `Role must be one of: ${ADMIN_CREATABLE_ROLES.join(", ")}` });
+    }
+    const validatedEmail = validateEmail(email);
+    const validatedName = validateName(name);
+    const validatedPass = validateNewPassword(password);
+
+    if (await dbService.findUserByEmail(validatedEmail)) {
+      return res.status(409).json({ error: "An account with this email already exists" });
+    }
+    const user = await dbService.createUser({
+      name: validatedName,
+      email: validatedEmail,
+      passwordHash: await hashPassword(validatedPass),
+      role: role as UserRole,
+      gradeLevel: typeof gradeLevel === "number" ? gradeLevel : role === "STUDENT" ? 7 : undefined,
+    });
+    // Audit trail (no secrets): who created which account with which role.
+    console.info(`AUDIT admin_create_user actor=${session.userId} target=${user.id} role=${role}`);
+    return res.status(201).json({ data: { id: user.id, email: user.email, name: user.name, role: user.role } });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to create user";
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.get("/api/admin/users", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || session.role !== "ADMIN") {
+      return res.status(403).json({ error: "Forbidden: Administrator role required" });
+    }
+    const role = typeof req.query.role === "string" && (ADMIN_CREATABLE_ROLES as readonly string[]).includes(req.query.role) ? (req.query.role as UserRole) : undefined;
+    const result = await dbService.listUsers({
+      role,
+      limit: req.query.limit ? Number(req.query.limit) : 50,
+      offset: req.query.offset ? Number(req.query.offset) : 0,
+    });
+    return res.json({ data: result });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to list users";
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.post("/api/auth/change-password", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+
+    const keys = [`email:${session.email}`, `ip:${req.ip ?? "unknown"}`];
+    const throttle = checkLoginThrottle(keys);
+    if (!throttle.allowed) {
+      res.setHeader("Retry-After", String(throttle.retryAfterSeconds));
+      return res.status(429).json({ error: "Too many failed attempts. Please try again later." });
+    }
+
+    const { currentPassword, newPassword } = req.body ?? {};
+    if (typeof currentPassword !== "string") return res.status(400).json({ error: "Current password is required" });
+    const validatedNew = validateNewPassword(newPassword);
+
+    const user = await dbService.findUserById(session.userId);
+    if (!user || !(await verifyPassword(currentPassword, user.passwordHash))) {
+      recordLoginFailure(keys);
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+    if (currentPassword === validatedNew) return res.status(400).json({ error: "The new password must be different" });
+
+    await dbService.updateUserPassword(user.id, await hashPassword(validatedNew));
+    clearLoginFailures([keys[0]]);
+    console.info(`AUDIT password_changed user=${user.id}`);
+    return res.json({ success: true, note: "Existing sessions stay valid until they expire; sign out on other devices." });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to change password";
+    return res.status(400).json({ error: message });
+  }
+});
+
 app.get("/api/admin/system-summary", (req: Request, res: Response) => {
   const session = getSessionFromRequest(req);
   if (!session || session.role !== "ADMIN") {
