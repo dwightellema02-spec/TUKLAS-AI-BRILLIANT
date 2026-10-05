@@ -4,6 +4,7 @@
  * Deep evidence inspection for a specific skill
  */
 
+import { findPracticeSetId } from "@/lib/practice/find-practice";
 import React, { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth/auth-context";
 import { MasteryBadge } from "@/components/mastery/MasteryBadge";
@@ -353,7 +354,11 @@ export default function StudentMasteryDetailPage({
           <Button
             variant="primary"
             size="md"
-            onClick={() => handleNav("/student/practice/ps_integers_basics")}
+            onClick={async () => {
+              const id = await findPracticeSetId(skillId);
+              if (id) handleNav(`/student/practice/${id}`);
+              else window.alert("Your teacher has not published a practice set yet.");
+            }}
             className="gap-2 text-xs font-bold shrink-0 cursor-pointer"
           >
             <span>Practice Now</span>

@@ -558,6 +558,19 @@ export class AssessmentService {
     return toDTO((await loadAssessment(assessmentId))!);
   }
 
+  /** Author (or admin) takes an assessment away from students. Results are kept; an archived assessment cannot be reopened. */
+  static async archiveAssessment(assessmentId: string, userId: string, userRole: string): Promise<AssessmentDTO> {
+    if (!isStaff(userRole)) throw new AssessmentError("Forbidden: Teacher or Administrator access required.", 403);
+    const a = await loadAssessment(assessmentId);
+    if (!a) throw new AssessmentError("Assessment not found", 404);
+    if (userRole !== "ADMIN" && a.authorId !== userId) throw new AssessmentError("Forbidden: You cannot archive an assessment created by another teacher.", 403);
+    if (a.status !== "ARCHIVED") {
+      if (hasValidDatabaseUrl) await prisma.assessment.update({ where: { id: assessmentId }, data: { status: "ARCHIVED" } });
+      else { const f = assessmentFallbackStore.assessments.find((x) => x.id === assessmentId)!; f.status = "ARCHIVED"; f.updatedAt = new Date(); }
+    }
+    return toDTO((await loadAssessment(assessmentId))!);
+  }
+
   /** Assign a published assessment to one of the author's classes (optionally to one enrolled student). */
   static async assignAssessment(
     assessmentId: string,

@@ -10,6 +10,7 @@ import {
   RecentActivityTimeline,
   NeedHelpSection,
 } from "@/components/dashboard";
+import { findPracticeSetId } from "@/lib/practice/find-practice";
 import { StudentAssessmentsCard } from "@/components/assessment/StudentAssessmentsCard";
 import { StudentClassesCard } from "@/components/classroom/StudentClassesCard";
 import { AITutorPanel } from "@/components/ai/AITutorPanel";
@@ -87,15 +88,17 @@ export default function StudentPage({ onNavigate }: StudentPageProps) {
   };
 
   // Handle Starting Adaptive Activity
-  const handleStartAdaptiveActivity = (rec: AdaptiveRecommendationDTO) => {
+  const handleStartAdaptiveActivity = async (rec: AdaptiveRecommendationDTO) => {
     if (rec.recommendedActivityType === "PRACTICE_SET") {
-      const practiceSetId =
-        rec.recommendedPracticeSetId || rec.recommendedActivityId || "ps_integers_basics";
-      handleNav(`/student/practice/${practiceSetId}`);
+      const practiceSetId = rec.recommendedPracticeSetId || rec.recommendedActivityId || (await findPracticeSetId(rec.skillId));
+      if (practiceSetId) handleNav(`/student/practice/${practiceSetId}`);
+      else window.alert("Your teacher has not published a practice set yet.");
     } else if (rec.lessonId) {
       handleNav(`/student/lessons/${rec.lessonId}`);
     } else {
-      handleNav("/student/practice/ps_integers_basics");
+      const practiceSetId = await findPracticeSetId(rec.skillId);
+      if (practiceSetId) handleNav(`/student/practice/${practiceSetId}`);
+      else window.alert("Your teacher has not published a practice set yet.");
     }
   };
 
@@ -106,9 +109,7 @@ export default function StudentPage({ onNavigate }: StudentPageProps) {
       const res = await authFetch("/api/student/adaptive/recommendation/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          skillId: dashboardData?.continueLearning?.lessonId ? undefined : "skl_01",
-        }),
+        body: JSON.stringify({}),
       });
       if (res.ok) {
         const json = await res.json();
@@ -276,7 +277,7 @@ export default function StudentPage({ onNavigate }: StudentPageProps) {
         />
 
         <StudentAssessmentsCard onOpen={() => handleNav("/student/assessments")} />
-        <StudentClassesCard onOpenLesson={(id) => handleNav(`/student/lessons/${id}`)} />
+        <StudentClassesCard onOpenLesson={(id) => handleNav(`/student/lessons/${id}`)} onOpenPractice={(id) => handleNav(`/student/practice/${id}`)} />
 
         {/* 2. Continue Learning (Where did I stop? / What am I learning?) */}
         <ContinueLearningCard

@@ -1,3 +1,4 @@
+import { findPracticeSetId } from "@/lib/practice/find-practice";
 import React from "react";
 import { Target, ArrowRight, Award } from "lucide-react";
 import { MathText } from "@/components/ui/MathText";
@@ -29,9 +30,12 @@ export function PracticeBlock({
 
   const skillName = parsed.skillName || "Target MATATAG Skill";
   const questionCount = parsed.questionCount || 8;
-  const practiceSetId = parsed.practiceSetId || "ps_integers_basics";
-
-  const handleLaunch = () => {
+  const handleLaunch = async () => {
+    const practiceSetId = parsed.practiceSetId || (await findPracticeSetId());
+    if (!practiceSetId) {
+      window.alert("Your teacher has not published a practice set yet.");
+      return;
+    }
     if (onComplete) onComplete();
     if (onNavigate) {
       onNavigate(`/student/practice/${practiceSetId}`);

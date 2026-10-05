@@ -76,7 +76,7 @@ export function Navbar({ currentPath = "/", onNavigate }: NavbarProps) {
                 <Database className="w-3 h-3 text-slate-500" />
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 <span>
-                  {dbStatus?.provider === "neon-postgresql" ? "Neon PostgreSQL" : "Sandbox DB"}
+                  {dbStatus?.provider === "neon-postgresql" ? "Database connected" : "Demo data (not saved)"}
                 </span>
               </div>
             </div>
@@ -166,6 +166,12 @@ export function Navbar({ currentPath = "/", onNavigate }: NavbarProps) {
 
             {/* Mobile Menu Button */}
             <div className="flex md:hidden items-center gap-2">
+              {!user && (
+                <Button variant="primary" size="sm" onClick={() => setAuthModalOpen(true)}className="gap-1.5">
+                  <LogIn className="w-4 h-4" />
+                  <span>Sign In</span>
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"

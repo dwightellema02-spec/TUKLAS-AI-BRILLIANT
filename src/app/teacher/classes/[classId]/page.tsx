@@ -36,6 +36,9 @@ export default function TeacherClassDetailPage({
 
   const [lessons, setLessons] = useState<Array<{ id: string; title: string }>>([]);
   const [assignmentLessonId, setAssignmentLessonId] = useState("");
+  const [practiceSets, setPracticeSets] = useState<Array<{ id: string; title: string }>>([]);
+  const [assignmentPracticeId, setAssignmentPracticeId] = useState("");
+  const [assignmentDue, setAssignmentDue] = useState(() => new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10));
   const [assignmentError, setAssignmentError] = useState<string | null>(null);
   const [emailsText, setEmailsText] = useState("");
   const [rosterResults, setRosterResults] = useState<Array<{ email: string; status: string }>>([]);
@@ -135,11 +138,23 @@ export default function TeacherClassDetailPage({
       .catch(() => setLessons([]));
   }, []);
 
+  useEffect(() => {
+    authFetch("/api/practice-sets?status=PUBLISHED")
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((j) => setPracticeSets((j.data || []).map((p: any) => ({ id: p.id, title: p.title }))))
+      .catch(() => setPracticeSets([]));
+  }, []);
+
   const handleCreateAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!assignmentTitle.trim()) return;
-    if (!assignmentLessonId) {
-      setAssignmentError("Choose a published lesson to assign.");
+    if (!assignmentLessonId && !assignmentPracticeId) {
+      setAssignmentError("Choose a published lesson or a practice set to assign.");
+      return;
+    }
+    const due = assignmentDue ? new Date(`${assignmentDue}T23:59:00`) : null;
+    if (due && Number.isNaN(due.getTime())) {
+      setAssignmentError("The due date is not valid.");
       return;
     }
 
@@ -152,8 +167,9 @@ export default function TeacherClassDetailPage({
         body: JSON.stringify({
           title: assignmentTitle,
           description: assignmentDesc,
-          lessonId: assignmentLessonId,
-          dueDate: new Date(Date.now() + 86400000 * 7).toISOString(),
+          lessonId: assignmentLessonId || undefined,
+          practiceSetId: assignmentPracticeId || undefined,
+          dueDate: due ? due.toISOString() : undefined,
         }),
       });
 
@@ -161,6 +177,7 @@ export default function TeacherClassDetailPage({
         setAssignmentTitle("");
         setAssignmentDesc("");
         setAssignmentLessonId("");
+        setAssignmentPracticeId("");
         setAssignmentModalOpen(false);
         fetchClassDetail(true);
       } else {
@@ -406,9 +423,20 @@ export default function TeacherClassDetailPage({
                 <div>
                   <label htmlFor="assignment-lesson" className="font-bold text-slate-700 block mb-1">Lesson</label>
                   <select id="assignment-lesson" value={assignmentLessonId} onChange={(e) => setAssignmentLessonId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs">
-                    <option value="">Select a published lesson...</option>
+                    <option value="">No lesson</option>
                     {lessons.map((l) => <option key={l.id} value={l.id}>{l.title}</option>)}
                   </select>
+                </div>
+                <div>
+                  <label htmlFor="assignment-practice" className="font-bold text-slate-700 block mb-1">Practice set</label>
+                  <select id="assignment-practice" value={assignmentPracticeId} onChange={(e) => setAssignmentPracticeId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs">
+                    <option value="">No practice set</option>
+                    {practiceSets.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="assignment-due" className="font-bold text-slate-700 block mb-1">Due date</label>
+                  <input id="assignment-due" type="date" value={assignmentDue} onChange={(e) => setAssignmentDue(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs" />
                 </div>
                 {assignmentError && <p role="alert" className="text-red-600">{assignmentError}</p>}
                 <div className="flex items-center justify-end gap-2 pt-2">

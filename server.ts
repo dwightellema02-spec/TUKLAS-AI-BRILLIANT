@@ -1733,7 +1733,9 @@ app.post("/api/practice/start", async (req: Request, res: Response) => {
     return res.status(201).json({ data: practiceSession });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to start practice session";
-    return res.status(500).json({ error: message });
+    // expected, student-facing conditions are not server faults
+    const status = /not found/i.test(message) ? 404 : /not published|contains no questions/i.test(message) ? 409 : 500;
+    return res.status(status).json({ error: status === 500 ? "Failed to start practice session" : message });
   }
 });
 
@@ -2162,7 +2164,8 @@ app.get("/api/student/adaptive/recommendation", async (req: Request, res: Respon
     return res.json({ data: recommendation });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load adaptive recommendation";
-    return res.status(500).json({ error: message });
+    if (/No skills are available/.test(message)) return res.json({ data: null });
+    return res.status(/not found/i.test(message) ? 404 : 500).json({ error: message });
   }
 });
 
@@ -2186,7 +2189,8 @@ app.post("/api/student/adaptive/recommendation/generate", async (req: Request, r
     return res.json({ data: recommendation });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to generate recommendation";
-    return res.status(500).json({ error: message });
+    if (/No skills are available/.test(message)) return res.json({ data: null });
+    return res.status(/not found/i.test(message) ? 404 : 500).json({ error: message });
   }
 });
 
@@ -3038,6 +3042,17 @@ app.post("/api/teacher/assessments/:id/publish", async (req: Request, res: Respo
     return res.json({ data: await AssessmentService.publishAssessment(req.params.id, session.userId, session.role) });
   } catch (error: unknown) {
     return sendAssessmentError(res, error, "Failed to publish assessment");
+  }
+});
+
+// Teacher archives assessment (students lose access; results stay)
+app.post("/api/teacher/assessments/:id/archive", async (req: Request, res: Response) => {
+  try {
+    const session = requireStaff(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.archiveAssessment(req.params.id, session.userId, session.role) });
+  } catch (error: unknown) {
+    return sendAssessmentError(res, error, "Failed to archive assessment");
   }
 });
 

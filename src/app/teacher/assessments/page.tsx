@@ -78,6 +78,29 @@ export default function TeacherAssessmentsPage({ onNavigate }: { onNavigate?: (p
     catch (err) { say(false, err instanceof Error ? err.message : "Could not publish"); } finally { setBusy(false); }
   };
 
+  const archive = async (a: Asm) => {
+    if (!window.confirm(`Archive "${a.title}"? Students will no longer see it. Results are kept.`)) return;
+    setBusy(true); setNotice(null);
+    try { await call(`/api/teacher/assessments/${a.id}/archive`); say(true, `"${a.title}" is archived.`); await load(); }
+    catch (err) { say(false, err instanceof Error ? err.message : "Could not archive"); } finally { setBusy(false); }
+  };
+
+  // pre/post comparison
+  const [cmpClass, setCmpClass] = useState("");
+  const [cmpPre, setCmpPre] = useState("");
+  const [cmpPost, setCmpPost] = useState("");
+  const [cmp, setCmp] = useState<any>(null);
+  const [cmpError, setCmpError] = useState<string | null>(null);
+  const compare = async () => {
+    setCmp(null); setCmpError(null);
+    try {
+      const res = await authFetch(`/api/teacher/research/comparison?preTestId=${encodeURIComponent(cmpPre)}&postTestId=${encodeURIComponent(cmpPost)}&classroomId=${encodeURIComponent(cmpClass)}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not compare");
+      setCmp(json.data);
+    } catch (err) { setCmpError(err instanceof Error ? err.message : "Could not compare"); }
+  };
+
   const assign = async (a: Asm) => {
     setBusy(true); setNotice(null);
     try {
@@ -136,6 +159,39 @@ export default function TeacherAssessmentsPage({ onNavigate }: { onNavigate?: (p
           </form>
         )}
 
+
+        {(() => {
+          const pres = (list ?? []).filter((x) => x.type === "PRE_TEST" && x.status !== "DRAFT");
+          const posts = (list ?? []).filter((x) => x.type === "POST_TEST" && x.status !== "DRAFT");
+          if (pres.length === 0 || posts.length === 0) return null;
+          const fmt = (n: number | null) => (n === null || n === undefined ? "–" : `${Math.round(n * 10) / 10}%`);
+          return (
+            <section data-testid="compare-panel" className="bg-white border border-slate-200 rounded-2xl p-5 mb-6 shadow-xs">
+              <h2 className="text-base font-black text-slate-900">Compare pre-test and post-test</h2>
+              <p className="text-xs text-slate-500 mt-0.5 mb-3">Pick a class and the two tests. The numbers come from graded results only.</p>
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-xs font-bold text-slate-700">Class<select data-testid="cmp-class" value={cmpClass} onChange={(e) => setCmpClass(e.target.value)} className="mt-1 block border border-slate-200 rounded-xl px-3 py-2 text-sm font-normal bg-white"><option value="">Choose…</option>{classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+                <label className="text-xs font-bold text-slate-700">Pre-test<select data-testid="cmp-pre" value={cmpPre} onChange={(e) => setCmpPre(e.target.value)} className="mt-1 block border border-slate-200 rounded-xl px-3 py-2 text-sm font-normal bg-white"><option value="">Choose…</option>{pres.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</select></label>
+                <label className="text-xs font-bold text-slate-700">Post-test<select data-testid="cmp-post" value={cmpPost} onChange={(e) => setCmpPost(e.target.value)} className="mt-1 block border border-slate-200 rounded-xl px-3 py-2 text-sm font-normal bg-white"><option value="">Choose…</option>{posts.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</select></label>
+                <Button size="sm" variant="primary" data-testid="cmp-run" disabled={!cmpClass || !cmpPre || !cmpPost} onClick={compare} className="bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold">Compare</Button>
+              </div>
+              {cmpError && <p role="alert" className="text-sm text-red-600 mt-3">{cmpError}</p>}
+              {cmp && (
+                <div data-testid="cmp-result" className="mt-4">
+                  <div className="grid grid-cols-3 gap-3 text-center">
+                    <div className="border border-slate-100 rounded-xl p-3"><p className="text-[10px] font-black uppercase text-slate-500">Pre-test average</p><p className="text-xl font-black">{fmt(cmp.preTest.averageScorePercent)}</p><p className="text-[10px] text-slate-400">{cmp.preTest.totalStudents} student(s)</p></div>
+                    <div className="border border-slate-100 rounded-xl p-3"><p className="text-[10px] font-black uppercase text-slate-500">Post-test average</p><p className="text-xl font-black">{fmt(cmp.postTest.averageScorePercent)}</p><p className="text-[10px] text-slate-400">{cmp.postTest.totalStudents} student(s)</p></div>
+                    <div className="border border-slate-100 rounded-xl p-3"><p className="text-[10px] font-black uppercase text-slate-500">Change</p><p className="text-xl font-black">{cmp.comparison.scoreDifferencePoints === null ? "–" : `${cmp.comparison.scoreDifferencePoints > 0 ? "+" : ""}${Math.round(cmp.comparison.scoreDifferencePoints * 10) / 10} pts`}</p></div>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-3">{cmp.comparison.description}</p>
+                  {Array.isArray(cmp.skillBreakdown) && cmp.skillBreakdown.length > 0 && (
+                    <ul className="mt-3 text-xs space-y-1">{cmp.skillBreakdown.map((sk: any) => <li key={sk.skillId} className="flex justify-between"><span>{sk.skillTitle}</span><span className="font-semibold">{Math.round(sk.preAccuracy * 100)}% → {Math.round(sk.postAccuracy * 100)}%</span></li>)}</ul>
+                  )}
+                </div>
+              )}
+            </section>
+          );
+        })()}
         {!list && !error && <p className="text-sm text-slate-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</p>}
         {list && list.length === 0 && <p className="text-sm text-slate-500 bg-white border border-slate-200 rounded-2xl p-5">You have not made any assessments yet.</p>}
         <ul className="space-y-3">
@@ -150,6 +206,7 @@ export default function TeacherAssessmentsPage({ onNavigate }: { onNavigate?: (p
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 {a.status === "DRAFT" && <Button size="sm" variant="primary" disabled={busy} data-testid="publish-assessment" onClick={() => publish(a)} className="bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold">Publish</Button>}
+                {a.status === "PUBLISHED" && <Button size="sm" variant="ghost" disabled={busy} data-testid="archive-assessment" onClick={() => archive(a)} className="text-xs font-bold text-slate-500">Archive</Button>}
                 {a.status === "PUBLISHED" && <Button size="sm" variant="outline" onClick={() => { setAssigning(assigning === a.id ? null : a.id); setAssignClass(classes[0]?.id ?? ""); }} data-testid="open-assign" className="text-xs font-bold">Assign to a class</Button>}
                 <Button size="sm" variant="outline" onClick={() => go(`/teacher/assessments/${a.id}`)} data-testid="view-results" className="text-xs font-bold">Results</Button>
               </div>

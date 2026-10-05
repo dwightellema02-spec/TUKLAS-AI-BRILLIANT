@@ -5,14 +5,14 @@ import { Button } from "@/components/ui/Button";
 interface ClassItem { id: string; name: string; teacherName?: string }
 interface AssignmentItem {
   id: string; title: string; description: string | null; classroomName: string;
-  lessonId: string | null; lessonTitle: string | null; dueDate: string | null; state: string;
+  lessonId: string | null; lessonTitle: string | null; practiceSetId?: string | null; dueDate: string | null; state: string;
 }
 
 const STATE_TEXT: Record<string, string> = {
   NOT_STARTED: "Not started", IN_PROGRESS: "In progress", COMPLETED: "Completed", NOT_TRACKED: "",
 };
 
-export function StudentClassesCard({ onOpenLesson }: { onOpenLesson?: (lessonId: string) => void }) {
+export function StudentClassesCard({ onOpenLesson, onOpenPractice }: { onOpenLesson?: (lessonId: string) => void; onOpenPractice?: (practiceSetId: string) => void }) {
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [assignments, setAssignments] = useState<AssignmentItem[]>([]);
   const [code, setCode] = useState("");
@@ -99,9 +99,12 @@ export function StudentClassesCard({ onOpenLesson }: { onOpenLesson?: (lessonId:
                   <span className="text-slate-500"> · {a.classroomName}{a.lessonTitle ? ` · ${a.lessonTitle}` : ""}{a.dueDate ? ` · due ${new Date(a.dueDate).toLocaleDateString()}` : ""}</span>
                   {STATE_TEXT[a.state] ? <span className="text-slate-500"> · {STATE_TEXT[a.state]}</span> : null}
                 </span>
-                {a.lessonId && onOpenLesson && (
-                  <button type="button" onClick={() => onOpenLesson(a.lessonId!)} className="text-teal-700 font-bold hover:underline shrink-0">Open</button>
-                )}
+                {a.lessonId && onOpenLesson ? (
+                  <button type="button" onClick={() => onOpenLesson(a.lessonId!)} className="text-teal-700 font-bold hover:underline shrink-0">Open lesson</button>
+                ) : null}
+                {a.practiceSetId && onOpenPractice ? (
+                  <button type="button" data-testid="open-practice-assignment" onClick={() => onOpenPractice(a.practiceSetId!)} className="text-teal-700 font-bold hover:underline shrink-0">Start practice</button>
+                ) : null}
               </li>
             ))}
           </ul>

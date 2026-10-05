@@ -224,6 +224,18 @@ async function main() {
     assert(list1.length >= 5 && list2.length === 0, "A teacher's list holds only their own assessments");
     assert(!list1.some((x: any) => x.authorName === "Teacher Santos"), "No invented author names");
 
+    section("7b. Archiving")
+    const arc = (id: string, tok: string | undefined) => api("POST", `/api/teacher/assessments/${id}/archive`, tok);
+    assert((await arc(lonely.id, T2)).status === 403 && (await arc(lonely.id, S1.token)).status === 403 && (await arc(lonely.id, undefined)).status === 403, "Only the author (or an admin) can archive: other teacher, student and signed-out are refused");
+    assert((await arc("nope", T1)).status === 404, "Archiving an unknown id -> 404");
+    const arced = await arc(lonely.id, T1);
+    assert(arced.status === 200 && arced.json.data.status === "ARCHIVED", "The author archives it");
+    assert((await arc(lonely.id, T1)).status === 200, "Archiving twice is harmless");
+    assert((await api("GET", `/api/student/assessments/${lonely.id}`, S1.token)).status === 404 && !(await stuList(S1.token)).json.data.some((x: any) => x.id === lonely.id), "Students can no longer see or open it");
+    assert((await api("POST", `/api/teacher/assessments/${lonely.id}/publish`, T1)).status === 409, "An archived assessment cannot be published again (409)");
+    assert((await api("GET", `/api/teacher/assessments/${lonely.id}/results`, T1)).status === 200, "Its results remain available to the teacher");
+    assert((await api("GET", "/api/teacher/assessments?status=ARCHIVED", T1)).json.data.some((x: any) => x.id === lonely.id), "It can be listed as archived");
+
     section("8. Leaving the class removes access");
     const leave = await api("DELETE", `/api/student/classes/${C1.id}`, S3.token);
     assert(leave.status === 200, "Student 3 leaves the class");
