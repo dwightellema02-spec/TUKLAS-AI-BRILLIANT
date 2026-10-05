@@ -24,7 +24,9 @@
     "test:phase25": "AI_PROVIDER=local tsx scripts/test-phase25-classrooms.ts",
     "test:phase25:pg": "tsx scripts/test-phase25-prisma.ts",
     "test:phase26": "AI_PROVIDER=local tsx scripts/test-phase26-progress.ts",
-    "test:phase26:pg": "tsx scripts/test-phase26-prisma.ts"
+    "test:phase26:pg": "tsx scripts/test-phase26-prisma.ts",
+    "test:phase27": "AI_PROVIDER=local tsx scripts/test-phase27-grading.ts",
+    "test:phase27:pg": "tsx scripts/test-phase27-prisma.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts",

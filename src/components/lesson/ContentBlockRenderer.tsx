@@ -7,7 +7,7 @@ import { ExampleBlock } from "./blocks/ExampleBlock";
 import { QuestionBlock } from "./blocks/QuestionBlock";
 import { InteractiveBlock } from "./blocks/InteractiveBlock";
 import { HintBlock } from "./blocks/HintBlock";
-import { CheckpointBlock } from "./blocks/CheckpointBlock";
+import { CheckpointBlock, type GradingResult } from "./blocks/CheckpointBlock";
 import { PracticeBlock } from "./blocks/PracticeBlock";
 import { SummaryBlock } from "./blocks/SummaryBlock";
 
@@ -26,6 +26,7 @@ export interface ContentBlockRendererProps {
   isCompleted?: boolean;
   onComplete?: () => void;
   onAttemptCheckpoint?: (blockId: string, answer: string, isCorrect: boolean, feedback: string) => void;
+  onSubmitAnswer?: (blockId: string, answer: string) => Promise<GradingResult>;
   previousAttempt?: { answer: string; isCorrect: boolean; feedback?: string };
   onNavigate?: (path: string) => void;
   readOnly?: boolean;
@@ -36,6 +37,7 @@ export function ContentBlockRenderer({
   isCompleted,
   onComplete,
   onAttemptCheckpoint,
+  onSubmitAnswer,
   previousAttempt,
   onNavigate,
   readOnly = false,
@@ -61,6 +63,7 @@ export function ContentBlockRenderer({
           content={block.content}
           metadata={block.metadata}
           onAttempt={onAttemptCheckpoint}
+          onSubmitAnswer={onSubmitAnswer}
           previousAttempt={previousAttempt}
           readOnly={readOnly}
         />
@@ -88,6 +91,7 @@ export function ContentBlockRenderer({
           content={block.content}
           metadata={block.metadata}
           onAttempt={onAttemptCheckpoint}
+          onSubmitAnswer={onSubmitAnswer}
           previousAttempt={previousAttempt}
           readOnly={readOnly}
         />

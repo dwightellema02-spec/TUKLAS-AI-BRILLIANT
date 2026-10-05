@@ -11,6 +11,7 @@ import dotenv from "dotenv";
 import { dbService, fallbackStore } from "./src/lib/db.ts";
 import { hashPassword, verifyPassword } from "./src/lib/auth/password.ts";
 import { createSessionToken, verifySessionToken, SessionPayload } from "./src/lib/auth/session.ts";
+import { gradeChoiceAnswer, toStudentBlockView } from "./src/lib/lesson/block-grading.ts";
 import { validateEmail, validatePassword, validateNewPassword, validateName, validateRole } from "./src/lib/auth/validation.ts";
 import { checkLoginThrottle, recordLoginFailure, clearLoginFailures } from "./src/lib/auth/login-throttle.ts";
 import { canUserAccessPath } from "./src/lib/auth/rbac.ts";
@@ -253,10 +254,27 @@ app.get("/api/health", async (_req: Request, res: Response) => {
   });
 });
 
-app.get("/api/curriculum", async (_req: Request, res: Response) => {
+app.get("/api/curriculum", async (req: Request, res: Response) => {
   try {
-    const curriculum = await dbService.getCurriculum();
-    return res.json({ data: curriculum });
+    const curriculum: any = await dbService.getCurriculum();
+    const session = getSessionFromRequest(req);
+    const staff = !!session && (session.role === "TEACHER" || session.role === "ADMIN");
+    if (staff) return res.json({ data: curriculum });
+    // Anyone else (students, signed-out visitors) sees only published lessons, with answer keys removed.
+    const clean = (curriculum as any[]).map((subject) => ({
+      ...subject,
+      grades: (subject.grades ?? []).map((g: any) => ({
+        ...g,
+        terms: (g.terms ?? []).map((t: any) => ({
+          ...t,
+          units: (t.units ?? []).map((u: any) => ({
+            ...u,
+            lessons: (u.lessons ?? []).filter((l: any) => l.status === "PUBLISHED").map((l: any) => toStudentLessonView(l)),
+          })),
+        })),
+      })),
+    }));
+    return res.json({ data: clean });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load curriculum";
     return res.status(500).json({ error: message });
@@ -274,7 +292,7 @@ app.get("/api/lessons", async (req: Request, res: Response) => {
     const status = staff ? (req.query.status as LessonStatus | undefined) : ("PUBLISHED" as LessonStatus);
     const unitId = req.query.unitId as string | undefined;
     const lessons = await dbService.getLessons({ status, unitId });
-    return res.json({ data: lessons });
+    return res.json({ data: staff ? lessons : lessons.map((l: any) => toStudentLessonView(l)) });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load lessons";
     return res.status(500).json({ error: message });
@@ -532,15 +550,17 @@ app.delete("/api/lessons/:id/video/:resourceId", async (req: Request, res: Respo
 });
 
 // Students must not see storage keys, content hashes, uploader ids or raw extraction diagnostics.
-function toStudentLessonView<T extends { resources?: unknown[] }>(lesson: T): T {
-  if (!lesson.resources) return lesson;
-  return {
-    ...lesson,
-    resources: lesson.resources.map((r) => {
+function toStudentLessonView<T extends { resources?: unknown[]; contentBlocks?: any[] }>(lesson: T): T {
+  const view: any = { ...lesson };
+  if (lesson.resources) {
+    view.resources = lesson.resources.map((r) => {
       const { storagePath, contentHash, addedBy, extractionError, charCount, ...safe } = r as Record<string, unknown>;
       return safe;
-    }),
-  };
+    });
+  }
+  // Questions and checkpoints: the correct answer and explanation stay on the server until graded.
+  if (lesson.contentBlocks) view.contentBlocks = lesson.contentBlocks.map((b) => toStudentBlockView(b));
+  return view;
 }
 
 // -------------------------------------------------------------
@@ -1037,23 +1057,35 @@ app.post(["/api/student/lessons/:id/checkpoint", "/api/student/lessons/:id/check
     }
     const userId = session.userId;
     const { id } = req.params;
-    const { blockId, answer, isCorrect, feedback } = req.body;
+    // Correctness is decided here, from the stored answer key. Any isCorrect / feedback sent by the
+    // client is ignored.
+    const { blockId, answer } = req.body ?? {};
 
-    if (!blockId || answer === undefined) {
+    if (typeof blockId !== "string" || !blockId || answer === undefined) {
       return res.status(400).json({ error: "blockId and answer are required" });
     }
     if (!(await ensureLessonAccess(res, userId, id))) return;
+
+    const lesson = await dbService.getLessonById(id);
+    const block = lesson?.contentBlocks?.find((b: any) => b.id === blockId);
+    if (!block) return res.status(404).json({ error: "Question not found in this lesson." });
+
+    const graded = gradeChoiceAnswer(block as any, answer);
+    if (!graded.ok) return res.status(graded.status).json({ error: graded.error });
 
     const attempt = await dbService.submitCheckpointAttempt({
       userId,
       lessonId: id,
       blockId,
-      answer,
-      isCorrect: Boolean(isCorrect),
-      feedback,
+      answer: graded.chosen,
+      isCorrect: graded.isCorrect,
+      feedback: graded.feedback,
     });
 
-    return res.json({ data: attempt });
+    return res.json({
+      data: attempt,
+      grading: { isCorrect: graded.isCorrect, feedback: graded.feedback, correctAnswer: graded.correctAnswer },
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to record checkpoint attempt";
     return res.status(500).json({ error: message });

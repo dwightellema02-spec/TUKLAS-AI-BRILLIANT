@@ -3,6 +3,7 @@
  * Singleton Prisma Client with Phase 4 Learning Path & Prerequisite Engine and resilient sandbox fallback.
  */
 
+import { isGradableType, parseChoiceBlock } from "./lesson/block-grading";
 import fs from "fs";
 import path from "path";
 import {
@@ -2611,6 +2612,15 @@ export const dbService = {
       if (userRole !== "ADMIN" && userRole !== "TEACHER") {
         return { success: false, error: "Publishing requires teacher or admin credentials" };
       }
+      // Students can only be graded on questions that have a usable answer key.
+      for (const b of (lesson.contentBlocks || []) as any[]) {
+        if (isGradableType(b.type) && !parseChoiceBlock(b)) {
+          return {
+            success: false,
+            error: `The ${b.type === "CHECKPOINT" ? "checkpoint" : "question"} "${b.title || "untitled"}" needs at least two different answer choices and a correct answer that is one of them before the lesson can be published.`,
+          };
+        }
+      }
       if (currentStatus !== "APPROVED") {
         return {
           success: false,
@@ -3010,15 +3020,14 @@ export const dbService = {
 
     fallbackStore.checkpointAttempts.push(newAttempt);
 
-    // Update session
-    const session = fallbackStore.sessions.find(
-      (s) => s.userId === data.userId && s.lessonId === data.lessonId
-    );
-    if (session) {
-      if (!session.completedBlockIds.includes(data.blockId)) {
-        session.completedBlockIds.push(data.blockId);
+    // Like the database path: a block counts as completed only when answered correctly.
+    if (data.isCorrect) {
+      const session = await this.getLessonSession(data.userId, data.lessonId);
+      if (session && !session.completedBlockIds.includes(data.blockId)) {
+        await this.saveLessonSession(data.userId, data.lessonId, {
+          completedBlockIds: [...session.completedBlockIds, data.blockId],
+        });
       }
-      session.lastActivityAt = now;
     }
 
     return newAttempt;

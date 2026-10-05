@@ -142,39 +142,23 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
     }
   };
 
-  // Checkpoint attempt handler
-  const handleCheckpointAttempt = async (
-    blockId: string,
-    answer: string,
-    correct: boolean,
-    feedback: string
-  ) => {
-    // Record in local state
-    setAttemptsMap((prev) => ({
-      ...prev,
-      [blockId]: { answer, isCorrect: correct, feedback },
-    }));
-
-    const updated = completedBlockIds.includes(blockId)
-      ? completedBlockIds
-      : [...completedBlockIds, blockId];
-    setCompletedBlockIds(updated);
-
-    try {
-      await fetch(`/api/student/lessons/${lessonId}/checkpoint`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          blockId,
-          answer,
-          isCorrect: correct,
-          feedback,
-        }),
-      });
-      syncSession(activeSectionIndex, updated);
-    } catch (e) {
-      console.warn("Checkpoint submit error:", e);
+  // Answers are graded by the server; the browser never holds the answer key.
+  const handleSubmitAnswer = async (blockId: string, answer: string) => {
+    const res = await fetch(`/api/student/lessons/${lessonId}/checkpoint`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blockId, answer }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.grading) {
+      throw new Error(json.error || "Could not check your answer. Please try again.");
     }
+    const { isCorrect, feedback, correctAnswer } = json.grading as { isCorrect: boolean; feedback: string; correctAnswer?: string };
+    setAttemptsMap((prev) => ({ ...prev, [blockId]: { answer, isCorrect, feedback } }));
+    const updated = completedBlockIds.includes(blockId) ? completedBlockIds : [...completedBlockIds, blockId];
+    setCompletedBlockIds(updated);
+    syncSession(activeSectionIndex, updated);
+    return { isCorrect, feedback, correctAnswer };
   };
 
   // Navigation handlers
@@ -414,7 +398,7 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
                       block={currentBlock}
                       isCompleted={completedBlockIds.includes(currentBlock.id)}
                       onComplete={() => markBlockComplete(currentBlock.id)}
-                      onAttemptCheckpoint={handleCheckpointAttempt}
+                      onSubmitAnswer={handleSubmitAnswer}
                       previousAttempt={attemptsMap[currentBlock.id]}
                       onNavigate={handleNav}
                     />
@@ -485,7 +469,7 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
                     block={block}
                     isCompleted={completedBlockIds.includes(block.id)}
                     onComplete={() => markBlockComplete(block.id)}
-                    onAttemptCheckpoint={handleCheckpointAttempt}
+                    onSubmitAnswer={handleSubmitAnswer}
                     previousAttempt={attemptsMap[block.id]}
                     onNavigate={handleNav}
                   />
