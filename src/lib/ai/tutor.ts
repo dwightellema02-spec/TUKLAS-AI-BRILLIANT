@@ -1,5 +1,6 @@
 // Phase 7: AI Tutor Core Service Orchestrator
 
+import { normalizeSpokenMath } from "../voice/spoken-math";
 import { dbService } from "../db";
 import { buildAITutorContext } from "./context";
 import { buildTutorSystemPrompt, buildTutorUserPrompt } from "./prompts";
@@ -81,8 +82,13 @@ export class AITutorService {
   /**
    * Main interaction entrypoint
    */
-  static async interact(params: AITutorInteractParams): Promise<TutorAPIResponse> {
-    const { studentId, studentQuery, questionId, practiceSessionId } = params;
+  static async interact(rawParams: AITutorInteractParams): Promise<TutorAPIResponse> {
+    const { studentId, studentQuery: spokenOrTyped, questionId, practiceSessionId } = rawParams;
+    const channel: "voice" | "text" = rawParams.inputChannel === "voice" ? "voice" : "text";
+    // Spoken or word-form maths ("negative five plus three") is rewritten to digits for understanding; the original text is what is stored and shown.
+    const speech = spokenOrTyped && spokenOrTyped.trim() ? normalizeSpokenMath(spokenOrTyped) : null;
+    const studentQuery = speech?.changed ? speech.text : spokenOrTyped;
+    const params: AITutorInteractParams = { ...rawParams, studentQuery };
 
     // 1. Rate Limit Enforcement
     const rateLimit = this.checkRateLimit(studentId);
@@ -99,7 +105,7 @@ export class AITutorService {
     }
 
     // 3. Input Sanitization & Guard
-    if (studentQuery && studentQuery.length > 1000) {
+    if (spokenOrTyped && spokenOrTyped.length > 1000) {
       throw new Error("Student query exceeds the maximum allowed length of 1000 characters.");
     }
 
@@ -117,8 +123,9 @@ export class AITutorService {
       await dbService.saveAITutorMessage({
         conversationId: conversation.id,
         role: "STUDENT",
-        content: studentQuery.trim(),
+        content: (spokenOrTyped ?? studentQuery).trim(),
         messageType: "QUESTION",
+        metadata: JSON.stringify({ inputChannel: channel, ...(speech?.changed ? { understoodAs: speech.text, uncertain: speech.uncertain } : {}) }),
       });
     }
 
@@ -187,6 +194,7 @@ export class AITutorService {
     return {
       success: true,
       conversationId: conversation.id,
+      input: { channel, ...(speech?.changed ? { understoodAs: speech.text, uncertain: speech.uncertain } : {}) },
       message: {
         id: savedTutorMessage.id,
         role: "TUTOR",

@@ -12,10 +12,25 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  Square,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { MathText } from "@/components/ui/MathText";
-import type { TutorMessageDTO, AITutorHelpLevel } from "@/lib/ai/types";
+import type { TutorMessageDTO, AITutorHelpLevel, TutorInputInfo } from "@/lib/ai/types";
+import { useSpeechRecognition, useSpeechSynthesis } from "@/lib/voice/use-speech";
+import { toSpeechText } from "@/lib/voice/speech-text";
+import type { VoiceLang } from "@/lib/voice/capabilities";
+
+const readPref = (key: string, fallback: string): string => {
+  try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
+};
+const writePref = (key: string, value: string) => {
+  try { localStorage.setItem(key, value); } catch { /* storage unavailable: the preference just won't persist */ }
+};
 
 export interface AITutorPanelProps {
   isOpen: boolean;
@@ -50,6 +65,54 @@ export function AITutorPanel({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasRequestedRef = useRef<string | null>(null);
 
+  // ---- Voice (browser speech recognition + synthesis; only text ever leaves the browser) ----
+  const [voiceLang, setVoiceLang] = useState<VoiceLang>(() => (readPref("tuklas_voice_lang", "en") === "fil" ? "fil" : "en"));
+  const [speakReplies, setSpeakReplies] = useState<boolean>(() => readPref("tuklas_voice_speak", "0") === "1");
+  const [handsFree, setHandsFree] = useState(false);
+  const [noticeSeen, setNoticeSeen] = useState<boolean>(() => readPref("tuklas_voice_notice", "0") === "1");
+  const [lastInput, setLastInput] = useState<TutorInputInfo | null>(null);
+  const draftChannelRef = useRef<"voice" | "text">("text");
+  const handsFreeRef = useRef(false);
+  handsFreeRef.current = handsFree;
+  const sendRef = useRef<(level: AITutorHelpLevel, query?: string, channel?: "voice" | "text") => void>(() => {});
+
+  const recog = useSpeechRecognition({
+    lang: voiceLang,
+    onFinal: (transcript) => {
+      if (handsFreeRef.current) {
+        sendRef.current("LEVEL_1_HINT", transcript, "voice");
+      } else {
+        // Put the words in the box so the student can check and fix them before sending.
+        draftChannelRef.current = "voice";
+        setInputQuery(transcript);
+      }
+    },
+  });
+  const tts = useSpeechSynthesis({ lang: voiceLang });
+
+  const toggleMic = () => {
+    if (tts.speaking) tts.cancel(); // barge-in: talking over the tutor stops the tutor
+    if (recog.state === "listening" || recog.state === "starting") { recog.stop(); return; }
+    recog.start();
+  };
+  const chooseLang = (l: VoiceLang) => { setVoiceLang(l); writePref("tuklas_voice_lang", l); };
+  const toggleSpeak = () => {
+    const next = !speakReplies;
+    setSpeakReplies(next);
+    writePref("tuklas_voice_speak", next ? "1" : "0");
+    if (!next) { tts.cancel(); setHandsFree(false); }
+  };
+  const toggleHandsFree = () => {
+    const next = !handsFree;
+    setHandsFree(next);
+    if (next) { setSpeakReplies(true); writePref("tuklas_voice_speak", "1"); if (!tts.speaking) recog.start(); }
+    else { recog.stop(); }
+  };
+  const speakMessage = (msg: TutorMessageDTO, andThenListen = false) => {
+    const text = toSpeechText({ content: msg.content, guidingQuestion: msg.guidingQuestion });
+    tts.speak(text, () => { if (andThenListen && handsFreeRef.current) recog.start(); });
+  };
+
   // Auto-scroll messages
   useEffect(() => {
     if (!isMinimized) {
@@ -60,11 +123,14 @@ export function AITutorPanel({
   // Request help from server
   const requestTutorHelp = async (
     helpLevel: AITutorHelpLevel,
-    query?: string
+    query?: string,
+    channel: "voice" | "text" = "text"
   ) => {
     if (loading) return;
+    tts.cancel(); // sending anything silences the tutor
     setLoading(true);
     setError(null);
+    setLastInput(null);
 
     // Optimistically add student message if it was a user query
     if (query && query.trim().length > 0) {
@@ -96,6 +162,7 @@ export function AITutorPanel({
           questionId: context.questionId,
           practiceSessionId: context.practiceSessionId,
           studentQuery: query,
+          inputChannel: query ? channel : undefined,
           helpLevel,
           studentAnswer: context.studentAnswer,
         }),
@@ -109,6 +176,8 @@ export function AITutorPanel({
       if (json.data) {
         setConversationId(json.data.conversationId);
         setMessages((prev) => [...prev, json.data.message]);
+        if (json.data.input && json.data.input.understoodAs) setLastInput(json.data.input);
+        if (speakReplies && tts.available) speakMessage(json.data.message, true);
         if (json.data.message.hintLevel) {
           setCurrentHintLevel(json.data.message.hintLevel);
         }
@@ -120,6 +189,8 @@ export function AITutorPanel({
       setLoading(false);
     }
   };
+
+  sendRef.current = (level, q, ch) => { requestTutorHelp(level, q, ch ?? "text"); };
 
   // If opened fresh and no messages, automatically request a Level 1 Hint once
   useEffect(() => {
@@ -139,6 +210,7 @@ export function AITutorPanel({
           ? "bottom-4 right-4 w-80 h-14"
           : "bottom-4 right-4 w-96 sm:w-[420px] max-h-[85vh] h-[600px] flex flex-col"
       } bg-white rounded-2xl shadow-2xl border border-emerald-200 overflow-hidden`}
+      onKeyDown={(e) => { if (e.key === "Escape") { tts.cancel(); recog.stop(); setHandsFree(false); } }}
     >
       {/* Header */}
       <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white p-3.5 flex items-center justify-between shadow-sm select-none">
@@ -168,7 +240,7 @@ export function AITutorPanel({
             {isMinimized ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </button>
           <button
-            onClick={onClose}
+            onClick={() => { tts.cancel(); recog.stop(); setHandsFree(false); onClose(); }}
             className="p-1.5 hover:bg-white/10 rounded-lg text-emerald-100 hover:text-white transition-colors"
             title="Close"
           >
@@ -225,6 +297,18 @@ export function AITutorPanel({
                       <MathText content={msg.content} />
                     </div>
 
+                    {!isStudent && tts.available && (
+                      <button
+                        type="button"
+                        onClick={() => (tts.speaking ? tts.cancel() : speakMessage(msg))}
+                        aria-label={tts.speaking ? "Stop reading aloud" : "Read this reply aloud"}
+                        className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 hover:text-emerald-900"
+                      >
+                        {tts.speaking ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+                        <span>{tts.speaking ? "Stop" : "Listen"}</span>
+                      </button>
+                    )}
+
                     {!isStudent && msg.guidingQuestion && (
                       <div className="mt-2.5 pt-2 border-t border-emerald-100/70 bg-emerald-50/50 -mx-1 px-2.5 py-1.5 rounded-lg text-emerald-900 font-medium text-xs">
                         <span className="font-bold text-emerald-700 mr-1">Think about:</span>
@@ -255,6 +339,12 @@ export function AITutorPanel({
                   <span className="text-[10px] text-slate-400 mt-1 px-1">
                     {new Date(msg.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </span>
+                  {isStudent && lastInput?.understoodAs && i === messages.map((m) => m.role).lastIndexOf("STUDENT") && (
+                    <span data-testid="heard-as" className="text-[10px] text-slate-500 px-1">
+                      Understood as <span className="font-mono">{lastInput.understoodAs}</span>
+                      {lastInput.uncertain ? " (please check this is what you meant)" : ""}
+                    </span>
+                  )}
                 </div>
               );
             })}
@@ -323,21 +413,66 @@ export function AITutorPanel({
             </button>
           </div>
 
+          {/* Voice status (screen readers are told about every change) */}
+          <div aria-live="polite" data-testid="voice-status" className="px-3 pt-2 bg-white border-t border-slate-100 text-[11px] min-h-[18px]">
+            {recog.state === "listening" && (
+              <span className="text-emerald-700 font-semibold flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" aria-hidden="true" />
+                Listening{recog.interim ? `: ${recog.interim}` : "... speak now"}
+              </span>
+            )}
+            {recog.state === "starting" && <span className="text-slate-500">Starting the microphone...</span>}
+            {recog.state === "processing" && <span className="text-slate-500">Got it.</span>}
+            {tts.speaking && recog.state === "idle" && <span className="text-emerald-700">Speaking... tap the microphone to interrupt.</span>}
+            {recog.state === "idle" && !tts.speaking && recog.problem && <span className="text-amber-700">{recog.problem}</span>}
+            {recog.state === "idle" && !tts.speaking && !recog.problem && inputQuery && draftChannelRef.current === "voice" && (
+              <span className="text-slate-600">Check what I heard, fix it if needed, then press Send.</span>
+            )}
+          </div>
+
+          {recog.support.recognition && !noticeSeen && (
+            <div data-testid="voice-notice" className="mx-3 mb-1 p-2 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-600 flex items-start gap-2">
+              <span className="flex-1">Voice uses your browser's speech service to turn your voice into text. Tuklas AI receives and saves only the text, never the recording.</span>
+              <button type="button" onClick={() => { setNoticeSeen(true); writePref("tuklas_voice_notice", "1"); }} className="font-bold text-emerald-700 shrink-0">OK</button>
+            </div>
+          )}
+
           {/* Chat Input */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
               if (inputQuery.trim().length > 0 && !loading) {
-                requestTutorHelp("LEVEL_1_HINT", inputQuery);
+                const ch = draftChannelRef.current;
+                draftChannelRef.current = "text";
+                recog.stop();
+                requestTutorHelp("LEVEL_1_HINT", inputQuery, ch);
               }
             }}
-            className="p-3 bg-white border-t border-slate-100 flex items-center gap-2"
+            className="p-3 pt-1.5 bg-white flex items-center gap-2"
           >
+            {recog.support.recognition ? (
+              <button
+                type="button"
+                onClick={toggleMic}
+                disabled={loading || recog.blocked}
+                aria-label={recog.state === "listening" ? "Stop listening" : tts.speaking ? "Interrupt the tutor and speak" : "Speak your answer"}
+                aria-pressed={recog.state === "listening"}
+                data-testid="mic-button"
+                className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 border transition-colors disabled:opacity-40 ${
+                  recog.state === "listening" ? "bg-red-50 border-red-300 text-red-600" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {recog.blocked ? <MicOff className="w-4 h-4" /> : recog.state === "listening" ? <Square className="w-3.5 h-3.5" /> : <Mic className="w-4 h-4" />}
+              </button>
+            ) : (
+              <span data-testid="voice-unavailable" className="sr-only">{recog.support.recognitionProblem}</span>
+            )}
             <input
               type="text"
               value={inputQuery}
-              onChange={(e) => setInputQuery(e.target.value)}
-              placeholder="Ask a question or explain your thinking..."
+              onChange={(e) => { draftChannelRef.current = "text"; if (tts.speaking) tts.cancel(); setInputQuery(e.target.value); }}
+              placeholder={recog.state === "listening" ? "Listening..." : "Ask a question or explain your thinking..."}
+              aria-label="Message to the tutor"
               maxLength={1000}
               disabled={loading}
               className="flex-1 text-xs sm:text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all placeholder:text-slate-400 disabled:opacity-50"
@@ -355,6 +490,31 @@ export function AITutorPanel({
               )}
             </Button>
           </form>
+
+          {(recog.support.recognition || tts.available) && (
+            <div className="px-3 pb-2.5 bg-white flex items-center gap-3 text-[10px] text-slate-500">
+              {tts.available && (
+                <button type="button" onClick={toggleSpeak} aria-pressed={speakReplies} data-testid="speak-toggle" className="inline-flex items-center gap-1 font-semibold hover:text-slate-800">
+                  {speakReplies ? <Volume2 className="w-3 h-3 text-emerald-600" /> : <VolumeX className="w-3 h-3" />}
+                  <span>{speakReplies ? "Reading replies aloud" : "Read replies aloud"}</span>
+                </button>
+              )}
+              {recog.support.recognition && tts.available && (
+                <button type="button" onClick={toggleHandsFree} aria-pressed={handsFree} data-testid="handsfree-toggle" className="inline-flex items-center gap-1 font-semibold hover:text-slate-800">
+                  <span>{handsFree ? "Voice conversation: on" : "Voice conversation"}</span>
+                </button>
+              )}
+              {recog.support.recognition && (
+                <label className="ml-auto inline-flex items-center gap-1">
+                  <span className="sr-only">Speaking language</span>
+                  <select value={voiceLang} onChange={(e) => chooseLang(e.target.value as VoiceLang)} data-testid="voice-lang" className="bg-transparent border border-slate-200 rounded-md px-1 py-0.5">
+                    <option value="en">English</option>
+                    <option value="fil">Filipino</option>
+                  </select>
+                </label>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

@@ -65,7 +65,7 @@ export function parseSpokenNumber(raw: string): number | undefined {
 export function findNumberInText(text: string): number | undefined {
   const norm = normalizeMath(text).toLowerCase();
   // "negative 12", "minus five", "-12", "12"
-  const re = /((?:negative|minus|negatibo|positive|plus|positibo)\s+)?(\d+(?:\.\d+)?|(?:lab(?:in|ing|im)-?(?:isa|dalawa|tatlo|apat|lima|anim|pito|walo|siyam)|dalawampu|tatlumpu|apatnapu|limampu|animnapu|pitumpu|walumpu|siyamnapu)|(?:isa|dalawa|tatlo|apat|lima|anim|pito|walo|siyam|sampu)|(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[\s-](?:one|two|three|four|five|six|seven|eight|nine))?))|(?<![\w)])([+-]\d+(?:\.\d+)?)/g;
+  const re = /((?:negative|minus|negatibo|positive|plus|positibo)\s+)?(\d+(?:\.\d+)?|(?:lab(?:in|ing|im)-?(?:isa|dalawa|tatlo|apat|lima|anim|pito|walo|siyam)|dalawampu|tatlumpu|apatnapu|limampu|animnapu|pitumpu|walumpu|siyamnapu)|(?:isa|dalawa|tatlo|apat|lima|anim|pito|walo|siyam|sampu)|(?:thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|eleven|twelve|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[\s-](?:one|two|three|four|five|six|seven|eight|nine)\b)?|zero|one|two|three|four|five|six|seven|eight|nine|ten)\b)|(?<![\w)])([+-]\d+(?:\.\d+)?)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(norm)) !== null) {
     if (m[3]) return parseFloat(m[3]);

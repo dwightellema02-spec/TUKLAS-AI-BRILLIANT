@@ -1908,9 +1908,21 @@ app.post("/api/ai/tutor", async (req: Request, res: Response) => {
       questionId,
       practiceSessionId,
       studentQuery,
+      inputChannel,
       helpLevel,
       studentAnswer,
     } = req.body;
+
+    if (studentQuery !== undefined && studentQuery !== null && typeof studentQuery !== "string") {
+      return res.status(400).json({ error: "studentQuery must be text." });
+    }
+    if (inputChannel !== undefined && inputChannel !== "voice" && inputChannel !== "text") {
+      return res.status(400).json({ error: "inputChannel must be \"voice\" or \"text\"." });
+    }
+    // A spoken turn is one short utterance: a long transcript means the microphone ran on or the engine looped.
+    if (inputChannel === "voice" && typeof studentQuery === "string" && studentQuery.length > 500) {
+      return res.status(400).json({ error: "That recording was too long. Please say it again in a shorter sentence, or type it." });
+    }
 
     const result = await AITutorService.interact({
       studentId: session.userId,
@@ -1919,7 +1931,8 @@ app.post("/api/ai/tutor", async (req: Request, res: Response) => {
       skillId,
       questionId,
       practiceSessionId,
-      studentQuery,
+      studentQuery: studentQuery ?? undefined,
+      inputChannel,
       helpLevel,
       studentAnswer,
     });

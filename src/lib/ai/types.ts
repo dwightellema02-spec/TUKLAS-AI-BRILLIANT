@@ -154,6 +154,8 @@ export interface AITutorInteractParams {
   questionId?: string;
   practiceSessionId?: string;
   studentQuery?: string;
+  /** How the student's message was produced. Voice transcripts are text from the browser's speech recogniser: no audio is ever sent or stored. */
+  inputChannel?: "voice" | "text";
   helpLevel?: AITutorHelpLevel;
   studentAnswer?: any;
 }
@@ -171,8 +173,17 @@ export interface TutorMessageDTO {
   citations?: import("../documents/types").SourceCitation[];
 }
 
+export interface TutorInputInfo {
+  channel: "voice" | "text";
+  /** Present when spoken/word-form maths was rewritten into digits and symbols for understanding (e.g. "-5 + 3"). */
+  understoodAs?: string;
+  /** True when a recogniser homophone was repaired (e.g. "five plus to"), so the student should check it. */
+  uncertain?: boolean;
+}
+
 export interface TutorAPIResponse {
   success: boolean;
+  input?: TutorInputInfo;
   conversationId: string;
   message: TutorMessageDTO;
   /** Phase 23: which pedagogical move was made and how the student's answer was judged. */
