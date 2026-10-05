@@ -2121,12 +2121,70 @@ export const dbService = {
   },
 
   /**
+   * Published curriculum used to build a learning path. With a database configured this reads ONLY
+   * from the database (a failure throws; it never silently serves the demo curriculum). Without one
+   * it uses the in-memory demo curriculum.
+   */
+  async loadPathCurriculum() {
+    type PathLesson = {
+      id: string; title: string; description?: string | null; sequenceOrder: number; estimatedMinutes: number;
+      status: string; prerequisiteLessonId?: string | null; skillIds: string[]; contentBlockCount: number; resourceCount: number;
+    };
+    type PathSkill = { id: string; title: string; difficulty: number; prerequisiteIds: string[] };
+
+    if (!hasValidDatabaseUrl) {
+      const c = fallbackStore.curriculum;
+      return {
+        subject: c.subject.name as string,
+        grade: c.grade.name as string,
+        term: c.term.name as string,
+        unit: { id: c.unit.id as string, title: c.unit.title as string, description: (c.unit.description ?? null) as string | null },
+        lessons: c.lessons
+          .filter((l) => l.status === "PUBLISHED")
+          .sort((a, b) => a.sequenceOrder - b.sequenceOrder)
+          .map((l): PathLesson => ({
+            id: l.id, title: l.title, description: l.description, sequenceOrder: l.sequenceOrder,
+            estimatedMinutes: l.estimatedMinutes, status: l.status, prerequisiteLessonId: l.prerequisiteLessonId,
+            skillIds: l.skillIds, contentBlockCount: l.contentBlocks?.length || 0, resourceCount: l.resources?.length || 0,
+          })),
+        skills: c.skills.map((sk): PathSkill => ({ id: sk.id, title: sk.title, difficulty: sk.difficulty, prerequisiteIds: sk.prerequisiteIds })),
+      };
+    }
+
+    const rows = await prisma.lesson.findMany({
+      where: { status: "PUBLISHED" },
+      orderBy: [{ sequenceOrder: "asc" }, { createdAt: "asc" }],
+      include: {
+        skills: { select: { skillId: true } },
+        _count: { select: { contentBlocks: true, resources: true } },
+        unit: { include: { term: { include: { grade: { include: { subject: true } } } } } },
+      },
+    });
+    const skillRows = await prisma.skill.findMany({ include: { prerequisites: { select: { prerequisiteSkillId: true } } } });
+    const unit = rows[0]?.unit ?? (await prisma.unit.findFirst({ orderBy: { sequenceOrder: "asc" }, include: { term: { include: { grade: { include: { subject: true } } } } } }));
+
+    return {
+      subject: unit?.term.grade.subject.name ?? "",
+      grade: unit?.term.grade.name ?? "",
+      term: unit?.term.name ?? "",
+      unit: { id: unit?.id ?? "", title: unit?.title ?? "", description: unit?.description ?? null },
+      lessons: rows.map((l): PathLesson => ({
+        id: l.id, title: l.title, description: l.description, sequenceOrder: l.sequenceOrder,
+        estimatedMinutes: l.estimatedMinutes, status: l.status, prerequisiteLessonId: l.prerequisiteLessonId,
+        skillIds: l.skills.map((x) => x.skillId), contentBlockCount: l._count.contentBlocks, resourceCount: l._count.resources,
+      })),
+      skills: skillRows.map((sk): PathSkill => ({
+        id: sk.id, title: sk.title, difficulty: sk.difficulty, prerequisiteIds: sk.prerequisites.map((p) => p.prerequisiteSkillId),
+      })),
+    };
+  },
+
+  /**
    * Retrieve Student's Complete Learning Path Progression
    */
   async getStudentLearningPath(userId: string) {
-    const publishedLessons = fallbackStore.curriculum.lessons
-      .filter((l) => l.status === "PUBLISHED")
-      .sort((a, b) => a.sequenceOrder - b.sequenceOrder);
+    const cur = await this.loadPathCurriculum();
+    const publishedLessons = cur.lessons;
 
     // Get student progress
     const progressList: any[] = await this.getStudentProgress(userId);
@@ -2157,17 +2215,17 @@ export const dbService = {
       }
 
       // Check skill prerequisites
-      const lessonSkills = fallbackStore.curriculum.skills.filter((s) =>
-        lesson.skillIds.includes(s.id)
-      );
+      const lessonSkills = cur.skills.filter((s) => lesson.skillIds.includes(s.id));
       for (const skill of lessonSkills) {
         for (const reqSkillId of skill.prerequisiteIds) {
-          const reqSkill = fallbackStore.curriculum.skills.find((s) => s.id === reqSkillId);
+          const reqSkill = cur.skills.find((s) => s.id === reqSkillId);
           const skillProg = progressList.find((p) => p.skillId === reqSkillId);
           if (!skillProg || (skillProg.status !== "COMPLETED" && skillProg.progressPercentage < 100)) {
             // Check if this skill was covered in an already completed lesson
+            // ...or is taught by this very lesson (a skill and its prerequisite can be taught together;
+            // requiring it first would lock the lesson forever).
             const parentCompleted = publishedLessons.some(
-              (pl) => pl.skillIds.includes(reqSkillId) && completedLessonIds.has(pl.id)
+              (pl) => pl.skillIds.includes(reqSkillId) && (pl.id === lesson.id || completedLessonIds.has(pl.id))
             );
             if (!parentCompleted) {
               isLocked = true;
@@ -2215,8 +2273,8 @@ export const dbService = {
           difficulty: s.difficulty,
           prerequisites: s.prerequisiteIds,
         })),
-        contentBlockCount: lesson.contentBlocks?.length || 0,
-        resourceCount: lesson.resources?.length || 0,
+        contentBlockCount: lesson.contentBlockCount,
+        resourceCount: lesson.resourceCount,
       };
     });
 
@@ -2238,13 +2296,13 @@ export const dbService = {
 
     return {
       curriculum: {
-        subject: fallbackStore.curriculum.subject.name,
-        grade: fallbackStore.curriculum.grade.name,
-        term: fallbackStore.curriculum.term.name,
+        subject: cur.subject,
+        grade: cur.grade,
+        term: cur.term,
         unit: {
-          id: fallbackStore.curriculum.unit.id,
-          title: fallbackStore.curriculum.unit.title,
-          description: fallbackStore.curriculum.unit.description,
+          id: cur.unit.id,
+          title: cur.unit.title,
+          description: cur.unit.description,
           totalLessons: totalUnitLessons,
           completedLessons: completedUnitLessons,
           progressPercentage: unitPercentage,
@@ -2306,57 +2364,72 @@ export const dbService = {
       totalBlocks?: number;
     }
   ) {
-    let prog = fallbackStore.progress.find(
-      (p) => p.userId === userId && p.lessonId === lessonId
-    );
-
     const now = new Date();
 
+    // Pure transition shared by both stores. Quality scores start at 0: they are evidence
+    // fields owned by mastery/practice, never invented here.
+    const apply = (prev: { status: string; progressPercentage: number; startedAt?: Date | null; completedAt?: Date | null } | null) => {
+      let status = prev?.status ?? "LEARNING";
+      let pct = prev?.progressPercentage ?? 15;
+      let completedAt = prev?.completedAt ?? null;
+      const startedAt = prev?.startedAt ?? now;
+      if (payload.action === "START") {
+        if (status === "NOT_STARTED") {
+          status = "LEARNING";
+          pct = Math.max(pct, 20);
+        }
+      } else if (payload.action === "UPDATE_BLOCKS") {
+        const total = payload.totalBlocks || 4;
+        const completed = (payload.completedBlockIndex ?? 0) + 1;
+        pct = Math.max(pct, Math.min(100, Math.round((completed / total) * 100)));
+        if (pct >= 100) {
+          status = "COMPLETED";
+          completedAt = completedAt ?? now;
+        } else if (status !== "COMPLETED") {
+          status = "LEARNING";
+        }
+      } else if (payload.action === "COMPLETE") {
+        status = "COMPLETED";
+        pct = 100;
+        completedAt = completedAt ?? now;
+      }
+      return { status, pct, startedAt, completedAt };
+    };
+
+    if (hasValidDatabaseUrl) {
+      // One lesson-progress row per (student, lesson): the primary key is deterministic so concurrent
+      // requests cannot create duplicates.
+      const id = `lp:${userId}:${lessonId}`;
+      const prev = await prisma.studentProgress.findUnique({ where: { id } });
+      const next = apply(prev as any);
+      return prisma.studentProgress.upsert({
+        where: { id },
+        create: {
+          id, userId, lessonId, status: next.status as any, progressPercentage: next.pct,
+          startedAt: next.startedAt, completedAt: next.completedAt, attemptCount: 1, lastActivity: now,
+        },
+        update: {
+          status: next.status as any, progressPercentage: next.pct, startedAt: next.startedAt,
+          completedAt: next.completedAt, lastActivity: now,
+        },
+      });
+    }
+
+    let prog = fallbackStore.progress.find((p) => p.userId === userId && p.lessonId === lessonId);
+    const next = apply(prog ? (prog as any) : null);
     if (!prog) {
       prog = {
-        id: `prg_${Date.now()}`,
-        userId,
-        lessonId,
-        status: "LEARNING",
-        progressPercentage: 15,
-        startedAt: now,
-        understandingScore: 0.5,
-        accuracyScore: 0.5,
-        applicationScore: 0.5,
-        consistencyScore: 0.5,
-        compositeScore: 0.5,
-        attemptCount: 1,
-        lastActivity: now,
+        id: `prg_${Date.now()}`, userId, lessonId, status: "LEARNING", progressPercentage: 15, startedAt: now,
+        understandingScore: 0, accuracyScore: 0, applicationScore: 0, consistencyScore: 0, compositeScore: 0,
+        attemptCount: 1, lastActivity: now,
       };
       fallbackStore.progress.push(prog);
-    } else {
-      prog.lastActivity = now;
-      if (!prog.startedAt) prog.startedAt = now;
     }
-
-    if (payload.action === "START") {
-      if (prog.status === "NOT_STARTED") {
-        prog.status = "LEARNING";
-        prog.progressPercentage = Math.max(prog.progressPercentage, 20);
-      }
-    } else if (payload.action === "UPDATE_BLOCKS") {
-      const total = payload.totalBlocks || 4;
-      const completed = (payload.completedBlockIndex ?? 0) + 1;
-      const percentage = Math.min(100, Math.round((completed / total) * 100));
-
-      prog.progressPercentage = Math.max(prog.progressPercentage, percentage);
-      if (prog.progressPercentage >= 100) {
-        prog.status = "COMPLETED";
-        prog.completedAt = now;
-      } else {
-        prog.status = "LEARNING";
-      }
-    } else if (payload.action === "COMPLETE") {
-      prog.status = "COMPLETED";
-      prog.progressPercentage = 100;
-      prog.completedAt = now;
-    }
-
+    prog.status = next.status as any;
+    prog.progressPercentage = next.pct;
+    prog.startedAt = next.startedAt as any;
+    prog.completedAt = next.completedAt as any;
+    prog.lastActivity = now;
     return prog;
   },
 
@@ -2374,13 +2447,14 @@ export const dbService = {
   }) {
     try {
       if (hasValidDatabaseUrl) {
+        const last = await prisma.lesson.aggregate({ where: { unitId: data.unitId }, _max: { sequenceOrder: true } });
         return await prisma.lesson.create({
           data: {
             title: data.title,
             description: data.description,
             unitId: data.unitId,
             authorId: data.authorId,
-            sequenceOrder: fallbackStore.curriculum.lessons.length + 1,
+            sequenceOrder: (last._max.sequenceOrder ?? 0) + 1,
             status: "DRAFT",
             learningObjectives: data.learningObjectives,
             estimatedMinutes: data.estimatedMinutes || 20,
@@ -2747,21 +2821,13 @@ export const dbService = {
    * Get student progress records
    */
   async getStudentProgress(userId: string) {
-    try {
-      if (hasValidDatabaseUrl) {
-        const records = await prisma.studentProgress.findMany({
-          where: { userId },
-          include: {
-            skill: true,
-            lesson: true,
-          },
-        });
-        if (records.length > 0) return records as any;
-      }
-    } catch (e) {
-      console.warn("Progress query fallback:", e);
+    if (hasValidDatabaseUrl) {
+      // Database mode never mixes in demo progress.
+      return (await prisma.studentProgress.findMany({
+        where: { userId },
+        include: { skill: true, lesson: true },
+      })) as any;
     }
-
     return fallbackStore.progress.filter((p) => p.userId === userId);
   },
 

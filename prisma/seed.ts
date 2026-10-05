@@ -9,7 +9,10 @@ import bcrypt from "bcryptjs";
 const prisma = new PrismaClient();
 
 export async function seedDatabase() {
-  if (process.env.NODE_ENV === "production" && process.env.SEED_DEMO_USERS_IN_PRODUCTION !== "I_UNDERSTAND_THESE_PASSWORDS_ARE_PUBLIC") {
+  // SEED_CURRICULUM_ONLY=true seeds only the MATATAG Grade 7 curriculum (no accounts, no progress),
+  // which is the safe way to initialise a production database.
+  const curriculumOnly = process.env.SEED_CURRICULUM_ONLY === "true";
+  if (!curriculumOnly && process.env.NODE_ENV === "production" && process.env.SEED_DEMO_USERS_IN_PRODUCTION !== "I_UNDERSTAND_THESE_PASSWORDS_ARE_PUBLIC") {
     console.error(
       "Refusing to seed in production: this script creates student/teacher/ADMIN accounts with a publicly known password. " +
         "Use `npx tsx scripts/create-admin.ts` to create the first administrator instead."
@@ -19,43 +22,48 @@ export async function seedDatabase() {
   console.log("🌱 Starting Tuklas AI Phase 2 database seed...");
 
   // 1. Create Default Role Users (Passwords securely hashed with bcrypt)
-  const defaultPassword = await bcrypt.hash("Tuklas2026!", 10);
+  let studentUser: { id: string; email: string } | null = null;
+  let teacherUser: { id: string; email: string } | null = null;
+  if (!curriculumOnly) {
+    const defaultPassword = await bcrypt.hash("Tuklas2026!", 10);
 
-  const studentUser = await prisma.user.upsert({
-    where: { email: "student@tuklas.ai" },
-    update: {},
-    create: {
-      email: "student@tuklas.ai",
-      name: "Juan de la Cruz",
-      passwordHash: defaultPassword,
-      role: UserRole.STUDENT,
-      gradeLevel: 7,
-    },
-  });
+    studentUser = await prisma.user.upsert({
+      where: { email: "student@tuklas.ai" },
+      update: {},
+      create: {
+        email: "student@tuklas.ai",
+        name: "Juan de la Cruz",
+        passwordHash: defaultPassword,
+        role: UserRole.STUDENT,
+        gradeLevel: 7,
+      },
+    });
 
-  const teacherUser = await prisma.user.upsert({
-    where: { email: "teacher@tuklas.ai" },
-    update: {},
-    create: {
-      email: "teacher@tuklas.ai",
-      name: "Maria Santos (Teacher)",
-      passwordHash: defaultPassword,
-      role: UserRole.TEACHER,
-    },
-  });
+    teacherUser = await prisma.user.upsert({
+      where: { email: "teacher@tuklas.ai" },
+      update: {},
+      create: {
+        email: "teacher@tuklas.ai",
+        name: "Maria Santos (Teacher)",
+        passwordHash: defaultPassword,
+        role: UserRole.TEACHER,
+      },
+    });
 
-  const adminUser = await prisma.user.upsert({
-    where: { email: "admin@tuklas.ai" },
-    update: {},
-    create: {
-      email: "admin@tuklas.ai",
-      name: "Tuklas Administrator",
-      passwordHash: defaultPassword,
-      role: UserRole.ADMIN,
-    },
-  });
+    const adminUser = await prisma.user.upsert({
+      where: { email: "admin@tuklas.ai" },
+      update: {},
+      create: {
+        email: "admin@tuklas.ai",
+        name: "Tuklas Administrator",
+        passwordHash: defaultPassword,
+        role: UserRole.ADMIN,
+      },
+    });
 
-  console.log(`✅ Users seeded: Student (${studentUser.email}), Teacher (${teacherUser.email}), Admin (${adminUser.email})`);
+    console.log(`✅ Users seeded: Student (${studentUser.email}), Teacher (${teacherUser.email}), Admin (${adminUser.email})`);
+
+  }
 
   // 2. Create Subject: Mathematics
   const subject = await prisma.subject.upsert({
@@ -125,7 +133,7 @@ export async function seedDatabase() {
     lesson = await prisma.lesson.create({
       data: {
         unitId: unit.id,
-        authorId: teacherUser.id,
+        authorId: teacherUser?.id,
         sequenceOrder: 1,
         title: "Understanding Integers",
         description: "An intuitive introduction to positive and negative integers, real-world models, and number line representations.",
@@ -234,16 +242,16 @@ export async function seedDatabase() {
   }
 
   // 9. Create Student Progress Record
-  await prisma.studentProgress.upsert({
+  if (studentUser) await prisma.studentProgress.upsert({
     where: {
       userId_skillId: {
-        userId: studentUser.id,
+        userId: studentUser!.id,
         skillId: skill1.id,
       },
     },
     update: {},
     create: {
-      userId: studentUser.id,
+      userId: studentUser!.id,
       lessonId: lesson.id,
       skillId: skill1.id,
       status: ProgressStatus.DEVELOPING,

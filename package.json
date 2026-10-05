@@ -22,10 +22,13 @@
     "test:phase24": "AI_PROVIDER=local tsx scripts/test-phase24-taglish-kinds.ts",
     "admin:create": "tsx scripts/create-admin.ts",
     "test:phase25": "AI_PROVIDER=local tsx scripts/test-phase25-classrooms.ts",
-    "test:phase25:pg": "tsx scripts/test-phase25-prisma.ts"
+    "test:phase25:pg": "tsx scripts/test-phase25-prisma.ts",
+    "test:phase26": "AI_PROVIDER=local tsx scripts/test-phase26-progress.ts",
+    "test:phase26:pg": "tsx scripts/test-phase26-prisma.ts"
   },
   "prisma": {
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "seed:curriculum": "SEED_CURRICULUM_ONLY=true tsx prisma/seed.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

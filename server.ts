@@ -862,6 +862,16 @@ app.get("/api/student/learning-path", async (req: Request, res: Response) => {
   }
 });
 
+// A student may only read or change state for a lesson they are currently allowed to open
+// (published, unlocked). Returns an error response and false when not allowed.
+async function ensureLessonAccess(res: Response, userId: string, lessonId: string): Promise<boolean> {
+  const access = await dbService.getLessonAccess(userId, lessonId);
+  if (access.allowed) return true;
+  const notFound = access.reason?.startsWith("Lesson does not exist");
+  res.status(notFound ? 404 : 403).json({ error: access.reason || "This lesson is locked." });
+  return false;
+}
+
 app.get("/api/student/lessons/:id/access", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
@@ -888,6 +898,15 @@ app.post("/api/student/progress", async (req: Request, res: Response) => {
     if (!lessonId || !action) {
       return res.status(400).json({ error: "lessonId and action are required" });
     }
+    if (typeof lessonId !== "string" || !["START", "UPDATE_BLOCKS", "COMPLETE"].includes(action)) {
+      return res.status(400).json({ error: "Invalid lessonId or action" });
+    }
+    for (const n of [completedBlockIndex, totalBlocks]) {
+      if (n !== undefined && (!Number.isInteger(n) || n < 0 || n > 1000)) {
+        return res.status(400).json({ error: "completedBlockIndex and totalBlocks must be small non-negative integers" });
+      }
+    }
+    if (!(await ensureLessonAccess(res, session.userId, lessonId))) return;
 
     const updated = await dbService.updateStudentProgress(session.userId, lessonId, {
       action,
@@ -964,6 +983,7 @@ app.get("/api/student/lessons/:id/session", async (req: Request, res: Response) 
     }
     const userId = session.userId;
     const { id } = req.params;
+    if (!(await ensureLessonAccess(res, userId, id))) return;
 
     const lessonSession = await dbService.getLessonSession(userId, id);
     const attempts = await dbService.getCheckpointAttempts(userId, id);
@@ -989,6 +1009,7 @@ app.post("/api/student/lessons/:id/session", async (req: Request, res: Response)
     const userId = session.userId;
     const { id } = req.params;
     const { currentSectionIndex, completedBlockIds, isCompleted } = req.body;
+    if (!(await ensureLessonAccess(res, userId, id))) return;
 
     const updated = await dbService.saveLessonSession(userId, id, {
       currentSectionIndex,
@@ -1021,6 +1042,7 @@ app.post(["/api/student/lessons/:id/checkpoint", "/api/student/lessons/:id/check
     if (!blockId || answer === undefined) {
       return res.status(400).json({ error: "blockId and answer are required" });
     }
+    if (!(await ensureLessonAccess(res, userId, id))) return;
 
     const attempt = await dbService.submitCheckpointAttempt({
       userId,
