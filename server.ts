@@ -30,7 +30,7 @@ import { TeacherService, TeacherAIService } from "./src/lib/teacher/index.ts";
 import { ClassroomService, ClassroomError } from "./src/lib/classroom/classroom-service.ts";
 import { ClassroomRepo } from "./src/lib/classroom/classroom-repo.ts";
 import { ResearchData, type ResearchScope } from "./src/lib/research/research-data.ts";
-import { AssessmentService, ResearchService, ResearchExporter } from "./src/lib/research/index.ts";
+import { AssessmentService, AssessmentError, ResearchService, ResearchExporter } from "./src/lib/research/index.ts";
 
 dotenv.config();
 
@@ -2988,196 +2988,138 @@ app.get("/api/admin/system-summary", (req: Request, res: Response) => {
 // PHASE 14: ASSESSMENT & RESEARCH ANALYTICS ENDPOINTS
 // -------------------------------------------------------------
 
+function sendAssessmentError(res: Response, error: unknown, fallback: string) {
+  if (error instanceof AssessmentError) return res.status(error.status).json({ error: error.message });
+  if (error instanceof ClassroomError) return res.status(error.status).json({ error: error.message });
+  console.error(fallback, error instanceof Error ? error.message : error);
+  return res.status(500).json({ error: fallback });
+}
+const requireStudent = (req: Request, res: Response): SessionPayload | null => {
+  const session = getSessionFromRequest(req);
+  if (!session) { res.status(401).json({ error: "Unauthorized: Please log in." }); return null; }
+  if (session.role !== "STUDENT") { res.status(403).json({ error: "Forbidden: Only students take assessments." }); return null; }
+  return session;
+};
+
 // Teacher creates assessment
 app.post("/api/teacher/assessments", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const { title, description, type, lessonId, gradeLevel, timeLimitMinutes, passingScorePercent, questions } =
-      req.body;
-
-    const assessment = await AssessmentService.createAssessment(
-      {
-        title,
-        description,
-        type,
-        lessonId,
-        gradeLevel,
-        timeLimitMinutes,
-        passingScorePercent,
-        questions: questions || [],
-      },
-      session.userId,
-      session.role
-    );
-
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const { title, description, type, lessonId, gradeLevel, timeLimitMinutes, passingScorePercent, questions } = req.body ?? {};
+    const assessment = await AssessmentService.createAssessment({ title, description, type, lessonId, gradeLevel, timeLimitMinutes, passingScorePercent, questions }, session.userId, session.role);
     return res.status(201).json({ data: assessment });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to create assessment";
-    return res.status(400).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to create assessment");
   }
 });
 
-// Teacher/Admin lists assessments
+// Teacher/Admin lists their assessments
 app.get("/api/teacher/assessments", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
+    const session = requireStaff(req, res);
+    if (!session) return;
     const { type, status, gradeLevel, lessonId } = req.query;
     const list = await AssessmentService.listAssessments(
-      {
-        type: type as any,
-        status: status as any,
-        gradeLevel: gradeLevel ? Number(gradeLevel) : undefined,
-        lessonId: lessonId as string | undefined,
-      },
-      session.userId,
-      session.role
+      { type: type as any, status: status as any, gradeLevel: gradeLevel ? Number(gradeLevel) : undefined, lessonId: lessonId as string | undefined },
+      session.userId, session.role
     );
-
     return res.json({ data: list });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to list assessments";
-    return res.status(500).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to list assessments");
   }
 });
 
 // Teacher publishes assessment
 app.post("/api/teacher/assessments/:id/publish", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const { id } = req.params;
-    const published = await AssessmentService.publishAssessment(id, session.userId, session.role);
-    return res.json({ data: published });
+    const session = requireStaff(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.publishAssessment(req.params.id, session.userId, session.role) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to publish assessment";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to publish assessment");
   }
 });
 
-// Teacher assigns assessment to class
+// Teacher assigns assessment to one of their classes
 app.post("/api/teacher/assessments/:id/assign", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const { id } = req.params;
-    const { classroomId, studentId, dueDate } = req.body;
-    if (!classroomId) {
-      return res.status(400).json({ error: "classroomId is required to assign assessment." });
-    }
-
-    const result = await AssessmentService.assignAssessment(
-      id,
-      classroomId,
-      { studentId, dueDate },
-      session.userId,
-      session.role
-    );
-
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const { classroomId, studentId, dueDate } = req.body ?? {};
+    const result = await AssessmentService.assignAssessment(req.params.id, classroomId, { studentId, dueDate }, session.userId, session.role);
     return res.json({ data: result });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to assign assessment";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to assign assessment");
   }
 });
 
-// Student lists available published assessments
+// Teacher/Admin: how an assessment went (their own assessments only)
+app.get("/api/teacher/assessments/:id/results", async (req: Request, res: Response) => {
+  try {
+    const session = requireStaff(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.getResults(req.params.id, session.userId, session.role) });
+  } catch (error: unknown) {
+    return sendAssessmentError(res, error, "Failed to load results");
+  }
+});
+
+// Student lists the assessments assigned to them
 app.get("/api/student/assessments", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session) {
-      return res.status(401).json({ error: "Unauthorized: Please log in." });
-    }
-
-    const { type, gradeLevel } = req.query;
-    const list = await AssessmentService.listAssessments(
-      {
-        type: type as any,
-        gradeLevel: gradeLevel ? Number(gradeLevel) : undefined,
-      },
-      session.userId,
-      session.role
-    );
-
-    return res.json({ data: list });
+    const session = requireStudent(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.listForStudent(session.userId) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to retrieve assessments";
-    return res.status(500).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to retrieve assessments");
   }
 });
 
-// Student gets assessment details (answers safely redacted!)
+// Student reads the result of their own graded attempt (declared before /:id so "attempts" is not an id)
+app.get("/api/student/assessments/attempts/:attemptId", async (req: Request, res: Response) => {
+  try {
+    const session = requireStudent(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.getAttemptResult(req.params.attemptId, session.userId) });
+  } catch (error: unknown) {
+    return sendAssessmentError(res, error, "Failed to load the result");
+  }
+});
+
+// Student gets an assigned assessment (answer keys are never included)
 app.get("/api/student/assessments/:id", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session) {
-      return res.status(401).json({ error: "Unauthorized: Please log in." });
-    }
-
-    const { id } = req.params;
-    const assessment = await AssessmentService.getAssessmentForStudent(id, session.userId);
-    return res.json({ data: assessment });
+    const session = requireStudent(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.getAssessmentForStudent(req.params.id, session.userId) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to get assessment";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to get assessment");
   }
 });
 
-// Student starts assessment attempt
+// Student starts (or resumes) an attempt
 app.post("/api/student/assessments/:id/start", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session) {
-      return res.status(401).json({ error: "Unauthorized: Please log in." });
-    }
-
-    const { id } = req.params;
-    const attempt = await AssessmentService.startAssessmentAttempt(id, session.userId);
-    return res.status(201).json({ data: attempt });
+    const session = requireStudent(req, res);
+    if (!session) return;
+    const attempt = await AssessmentService.startAssessmentAttempt(req.params.id, session.userId);
+    return res.status(attempt.resumed ? 200 : 201).json({ data: attempt });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to start assessment attempt";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to start assessment attempt");
   }
 });
 
-// Student submits assessment attempt (Server-Side Deterministic Grading)
+// Student submits an attempt (server-side deterministic grading, once)
 app.post("/api/student/assessments/attempts/:attemptId/submit", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session) {
-      return res.status(401).json({ error: "Unauthorized: Please log in." });
-    }
-
-    const { attemptId } = req.params;
-    const { responses } = req.body;
-
-    if (!Array.isArray(responses)) {
-      return res.status(400).json({ error: "responses must be an array of answers." });
-    }
-
-    const result = await AssessmentService.submitAssessmentAttempt(attemptId, session.userId, responses);
-    return res.json({ data: result });
+    const session = requireStudent(req, res);
+    if (!session) return;
+    const { responses } = req.body ?? {};
+    if (!Array.isArray(responses)) return res.status(400).json({ error: "responses must be an array of answers." });
+    return res.json({ data: await AssessmentService.submitAssessmentAttempt(req.params.attemptId, session.userId, responses) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to submit assessment";
-    const status = message.includes("Forbidden") ? 403 : 400;
-    return res.status(status).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to submit assessment");
   }
 });
 

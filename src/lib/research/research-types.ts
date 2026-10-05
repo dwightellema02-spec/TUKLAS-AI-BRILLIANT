@@ -227,6 +227,10 @@ export interface AssessmentAttemptResultDTO {
   scorePercent: number;
   isPassed: boolean;
   timeTakenMs?: number;
+  /** True when the attempt was submitted after the time limit (it is still graded). */
+  timedOut?: boolean;
+  /** Pre/post tests never reveal which answers were right; `responses` is then empty. */
+  answersHidden?: boolean;
   startedAt: string;
   submittedAt?: string;
   cognitiveBreakdown: Record<CognitiveLevel, { score: number; maxScore: number; accuracy: number }>;

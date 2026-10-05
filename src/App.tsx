@@ -30,6 +30,10 @@ import TeacherClassesPage from "@/app/teacher/classes/page";
 import TeacherClassDetailPage from "@/app/teacher/classes/[classId]/page";
 import TeacherStudentInsightsPage from "@/app/teacher/students/[studentId]/insights/page";
 import TeacherResearchPage from "@/app/teacher/research/page";
+import StudentAssessmentsPage from "@/app/student/assessments/page";
+import StudentAssessmentPage from "@/app/student/assessments/[id]/page";
+import TeacherAssessmentsPage from "@/app/teacher/assessments/page";
+import TeacherAssessmentResultsPage from "@/app/teacher/assessments/[id]/page";
 import AdminPage from "@/app/admin/page";
 import AccountPage from "@/app/account/page";
 import NotFound from "@/app/not-found";
@@ -83,8 +87,15 @@ export default function App() {
     if (normalized === "/teacher/classes") return <TeacherClassesPage onNavigate={navigate} />;
     if (normalized === "/teacher/research") return <TeacherResearchPage onNavigate={navigate} />;
     if (normalized === "/teacher/ai-settings") return <TeacherAISettingsPage onNavigate={navigate} />;
+    if (normalized === "/student/assessments") return <StudentAssessmentsPage onNavigate={navigate} />;
+    if (normalized === "/teacher/assessments") return <TeacherAssessmentsPage onNavigate={navigate} />;
     if (normalized === "/admin") return <AdminPage onNavigate={navigate} />;
     if (normalized === "/account") return <AccountPage onNavigate={navigate} />;
+
+    const studentAssessmentMatch = normalized.match(/^\/student\/assessments\/([^\/]+)$/);
+    if (studentAssessmentMatch) return <StudentAssessmentPage assessmentId={studentAssessmentMatch[1]} onNavigate={navigate} />;
+    const teacherAssessmentMatch = normalized.match(/^\/teacher\/assessments\/([^\/]+)$/);
+    if (teacherAssessmentMatch) return <TeacherAssessmentResultsPage assessmentId={teacherAssessmentMatch[1]} onNavigate={navigate} />;
 
     // Dynamic Route: /student/practice/:practiceSetId
     const studentPracticeMatch = normalized.match(/^\/student\/practice\/([^\/]+)$/);
