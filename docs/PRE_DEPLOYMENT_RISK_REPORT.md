@@ -27,7 +27,7 @@ Date: 2026-10-06. Scope: the code on branch `ccr-d5d3f1ee-004qqa` (built on `mai
 | Real AI | **NOT VERIFIED** (no API key available) |
 
 ### Regression after fixes
-Full regression was still running when this was committed; the final result is recorded in the next commit.
+`tsc`, `build` and every in-memory and PostgreSQL suite (phases 22–44, including the new `test-phase44-hardening.ts`): **43 of 43 steps passed**, run on the code that includes all fixes. The browser journeys were not re-run after these small server-side fixes.
 
 ## 4. The "minor risk" warning
 **WARNING SOURCE NOT FOUND IN LOCAL CODEBASE.** There is no Vercel or Next.js configuration in the repository. If it appeared in a hosting dashboard, the exact text is needed to say what it means. The only warning-like items in the repo are the `npm audit` findings (section 6, item 7) and the hosting-compatibility points below; I am not claiming either is the warning you saw.
