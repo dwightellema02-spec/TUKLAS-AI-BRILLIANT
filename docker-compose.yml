@@ -1,0 +1,63 @@
+# Tuklas AI on one school server: the app, its PostgreSQL database, and a daily backup. (Phase 42)
+#   1. cp .env.production.example .env   and fill it in (AUTH_SECRET: `openssl rand -hex 32`; POSTGRES_PASSWORD; ADMIN_*)
+#   2. docker compose up -d --build
+#   3. put an HTTPS reverse proxy (Caddy / nginx / your host's) in front of port 3000 and set APP_URL to the https address
+# Not exercised by `docker build` in the project's own test environment (its network blocks image downloads): see docs/RUNBOOK.md.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tuklas
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: tuklas
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tuklas -d tuklas"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://tuklas:${POSTGRES_PASSWORD}@db:5432/tuklas
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env}
+      APP_URL: ${APP_URL:-https://tuklas.example.edu}
+      TRUST_PROXY: "true"
+      AI_PROVIDER: ${AI_PROVIDER:-local}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_NAME: ${ADMIN_NAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      DOCUMENT_STORAGE_DIR: /data/documents
+    volumes:
+      - documents:/data/documents
+    stop_grace_period: 20s
+
+  backup:
+    # a copy of the database every night, the newest 14 kept; copy ./backups to another machine regularly (see docs/RUNBOOK.md)
+    image: postgres:16
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://tuklas:${POSTGRES_PASSWORD}@db:5432/tuklas
+      BACKUP_DIR: /backups
+      BACKUP_KEEP: "14"
+    volumes:
+      - ./scripts/backup-db.sh:/backup-db.sh:ro
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "-c", "while true; do sh /backup-db.sh; sleep 86400; done"]
+
+volumes:
+  dbdata:
+  documents:

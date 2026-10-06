@@ -3,6 +3,7 @@ import { useAuth } from "@/lib/auth/auth-context";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { UnitStructureCard } from "@/components/teacher/UnitStructureCard";
 import {
   ArrowLeft,
   ArrowUp,
@@ -58,9 +59,9 @@ export default function TeacherUnitCurriculumPage({
         setCurriculum(cJson.data || []);
 
         // Find current unit
-        const foundUnit = cJson.data?.[0]?.grades?.[0]?.terms?.[0]?.units?.find(
+        const foundUnit = (cJson.data?.[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? []).find(
           (u: any) => u.id === unitId
-        ) || cJson.data?.[0]?.grades?.[0]?.terms?.[0]?.units?.[0];
+        ) || (cJson.data?.[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? [])[0];
 
         if (foundUnit && foundUnit.lessons) {
           // Sort by sequenceOrder
@@ -181,8 +182,8 @@ export default function TeacherUnitCurriculumPage({
   };
 
   const currentUnit =
-    curriculum?.[0]?.grades?.[0]?.terms?.[0]?.units?.find((u: any) => u.id === unitId) ||
-    curriculum?.[0]?.grades?.[0]?.terms?.[0]?.units?.[0];
+    (curriculum?.[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? []).find((u: any) => u.id === unitId) ||
+    (curriculum?.[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? [])[0];
 
   return (
     <div className="py-8 sm:py-12 bg-slate-50 min-h-[calc(100vh-140px)]">
@@ -359,6 +360,7 @@ export default function TeacherUnitCurriculumPage({
 
           {/* Right Column (5 cols): Skill Prerequisites Manager (DAG) */}
           <div className="lg:col-span-5 space-y-6">
+            {currentUnit && <UnitStructureCard unit={currentUnit} onChanged={loadData} />}
             <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
               <div className="flex items-center justify-between mb-4">
                 <div>

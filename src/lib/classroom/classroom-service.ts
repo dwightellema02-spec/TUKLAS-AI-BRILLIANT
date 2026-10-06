@@ -11,7 +11,7 @@
 import { dbService } from "../db";
 import { checkLoginThrottle, clearLoginFailures, recordLoginFailure } from "../auth/login-throttle";
 import { validateEmail } from "../auth/validation";
-import { ClassroomRepo, normalizeJoinCode, type AssignmentRecord, type ClassroomRecord } from "./classroom-repo";
+import { ClassroomRepo, normalizeJoinCode, type AssignmentRecord, type ClassroomRecord, type UnlockRecord } from "./classroom-repo";
 
 export class ClassroomError extends Error {
   constructor(message: string, public readonly status: 400 | 401 | 403 | 404 | 409 | 429) {
@@ -276,12 +276,69 @@ export const ClassroomService = {
     return ClassroomRepo.createAssignment({ classroomId: cls.id, title, description, lessonId, practiceSetId, dueDate, createdById: actor.userId });
   },
 
+  // ----------------------------------------------------------------------------------------
+  // Lesson access (Phase 39): open lessons the course sequence would keep locked
+  // ----------------------------------------------------------------------------------------
+
+  /** Published lessons in course order, each with who it is open for in this class. */
+  async getLessonAccess(actor: Actor, classId: string) {
+    const cls = await this.getManageable(actor, classId);
+    const cur = await dbService.loadPathCurriculum();
+    const unlocks = await ClassroomRepo.listUnlocks(cls.id);
+    return {
+      lessons: cur.lessons.map((l, i) => ({
+        lessonId: l.id,
+        title: l.title,
+        position: i + 1,
+        openForClass: unlocks.some((u) => u.lessonId === l.id && u.studentId === ""),
+        openForStudents: unlocks.filter((u) => u.lessonId === l.id && u.studentId !== "").map((u) => u.studentId),
+      })),
+    };
+  },
+
+  /**
+   * Open or close one lesson for the whole class (no studentId) or for one enrolled student.
+   * Closing only removes the opening: it never undoes progress, and a lesson the sequence already allows stays available.
+   */
+  async setLessonOpen(actor: Actor, classId: string, input: { lessonId?: unknown; studentId?: unknown; open?: unknown }): Promise<UnlockRecord[]> {
+    const cls = await this.getManageable(actor, classId);
+    if (cls.archivedAt) throw new ClassroomError("This class is archived.", 409);
+    if (typeof input.lessonId !== "string" || !input.lessonId) throw new ClassroomError("Choose a lesson.", 400);
+    if (typeof input.open !== "boolean") throw new ClassroomError("open must be true or false.", 400);
+    const lesson = await dbService.getLessonById(input.lessonId);
+    if (!lesson) throw new ClassroomError("Lesson not found", 404);
+    if (lesson.status !== "PUBLISHED") throw new ClassroomError("Only published lessons can be opened for students.", 409);
+    let studentId = "";
+    if (input.studentId !== undefined && input.studentId !== null && input.studentId !== "") {
+      if (typeof input.studentId !== "string") throw new ClassroomError("Invalid student", 400);
+      const enrolled = (await ClassroomRepo.listEnrollments([cls.id])).some((e) => e.studentId === input.studentId);
+      if (!enrolled) throw new ClassroomError("That student is not in this class.", 404);
+      studentId = input.studentId;
+    }
+    if (input.open) await ClassroomRepo.addUnlock(cls.id, lesson.id, studentId, actor.userId);
+    else await ClassroomRepo.removeUnlock(cls.id, lesson.id, studentId);
+    return ClassroomRepo.listUnlocks(cls.id);
+  },
+
+  /** Open every lesson from the start of the course up to and including this one for the whole class (a pace catch-up in one step). */
+  async openLessonsThrough(actor: Actor, classId: string, lessonId: unknown): Promise<UnlockRecord[]> {
+    const cls = await this.getManageable(actor, classId);
+    if (cls.archivedAt) throw new ClassroomError("This class is archived.", 409);
+    if (typeof lessonId !== "string" || !lessonId) throw new ClassroomError("Choose a lesson.", 400);
+    const cur = await dbService.loadPathCurriculum();
+    const idx = cur.lessons.findIndex((l) => l.id === lessonId);
+    if (idx < 0) throw new ClassroomError("Lesson not found or not published.", 404);
+    for (const l of cur.lessons.slice(0, idx + 1)) await ClassroomRepo.addUnlock(cls.id, l.id, "", actor.userId);
+    return ClassroomRepo.listUnlocks(cls.id);
+  },
+
   async listAssignmentsForClass(actor: Actor, classId: string): Promise<AssignmentRecord[]> {
     const cls = await this.getManageable(actor, classId);
     return ClassroomRepo.listAssignments([cls.id]);
   },
 
   async setAssignmentStatus(actor: Actor, assignmentId: string, status: unknown): Promise<AssignmentRecord> {
+    if (!isStaff(actor)) throw new ClassroomError("Forbidden: Teacher or Administrator access required.", 403); // before any validation
     if (status !== "PUBLISHED" && status !== "ARCHIVED") throw new ClassroomError("Status must be PUBLISHED or ARCHIVED", 400);
     const a = await ClassroomRepo.getAssignment(assignmentId);
     if (!a) throw new ClassroomError("Assignment not found", 404);

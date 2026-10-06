@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useAuth, authFetch } from "@/lib/auth/auth-context";
-import { TeacherNav, StudentTable, MasteryDistributionCard } from "@/components/teacher";
+import { TeacherNav, StudentTable, MasteryDistributionCard, LessonAccessCard } from "@/components/teacher";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import {
@@ -36,6 +36,9 @@ export default function TeacherClassDetailPage({
 
   const [lessons, setLessons] = useState<Array<{ id: string; title: string }>>([]);
   const [assignmentLessonId, setAssignmentLessonId] = useState("");
+  const [practiceSets, setPracticeSets] = useState<Array<{ id: string; title: string }>>([]);
+  const [assignmentPracticeId, setAssignmentPracticeId] = useState("");
+  const [assignmentDue, setAssignmentDue] = useState(() => new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10));
   const [assignmentError, setAssignmentError] = useState<string | null>(null);
   const [emailsText, setEmailsText] = useState("");
   const [rosterResults, setRosterResults] = useState<Array<{ email: string; status: string }>>([]);
@@ -55,6 +58,15 @@ export default function TeacherClassDetailPage({
       return null;
     }
     return json;
+  };
+
+  // guardian consent (students under 18): recorded by the teacher; the roster comes from the class detail
+  const [guardianConsent, setGuardianConsent] = useState<Record<string, boolean>>({});
+  useEffect(() => { setGuardianConsent(Object.fromEntries((classData?.students || []).map((s: any) => [s.id, !!s.guardianConsent]))); }, [classData]);
+  const setConsent = async (studentId: string, given: boolean) => {
+    setGuardianConsent((c) => ({ ...c, [studentId]: given }));
+    const json = await callApi(`/api/teacher/students/${studentId}/guardian-consent`, "POST", { given });
+    if (!json) setGuardianConsent((c) => ({ ...c, [studentId]: !given }));
   };
 
   const handleAddStudents = async (e: React.FormEvent) => {
@@ -135,11 +147,23 @@ export default function TeacherClassDetailPage({
       .catch(() => setLessons([]));
   }, []);
 
+  useEffect(() => {
+    authFetch("/api/practice-sets?status=PUBLISHED")
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((j) => setPracticeSets((j.data || []).map((p: any) => ({ id: p.id, title: p.title }))))
+      .catch(() => setPracticeSets([]));
+  }, []);
+
   const handleCreateAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!assignmentTitle.trim()) return;
-    if (!assignmentLessonId) {
-      setAssignmentError("Choose a published lesson to assign.");
+    if (!assignmentLessonId && !assignmentPracticeId) {
+      setAssignmentError("Choose a published lesson or a practice set to assign.");
+      return;
+    }
+    const due = assignmentDue ? new Date(`${assignmentDue}T23:59:00`) : null;
+    if (due && Number.isNaN(due.getTime())) {
+      setAssignmentError("The due date is not valid.");
       return;
     }
 
@@ -152,8 +176,9 @@ export default function TeacherClassDetailPage({
         body: JSON.stringify({
           title: assignmentTitle,
           description: assignmentDesc,
-          lessonId: assignmentLessonId,
-          dueDate: new Date(Date.now() + 86400000 * 7).toISOString(),
+          lessonId: assignmentLessonId || undefined,
+          practiceSetId: assignmentPracticeId || undefined,
+          dueDate: due ? due.toISOString() : undefined,
         }),
       });
 
@@ -161,6 +186,7 @@ export default function TeacherClassDetailPage({
         setAssignmentTitle("");
         setAssignmentDesc("");
         setAssignmentLessonId("");
+        setAssignmentPracticeId("");
         setAssignmentModalOpen(false);
         fetchClassDetail(true);
       } else {
@@ -287,6 +313,8 @@ export default function TeacherClassDetailPage({
               )}
             </div>
 
+            <LessonAccessCard classId={classId} students={(classData.students || []).map((s: any) => ({ id: s.id, name: s.name }))} />
+
             {/* Assignments Section */}
             <div className="bg-white rounded-3xl border border-slate-200/90 p-6 shadow-xs space-y-4">
               <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -346,7 +374,11 @@ export default function TeacherClassDetailPage({
               {(classData.students || []).length > 0 && (
                 <ul data-testid="roster-remove" className="flex flex-wrap gap-2">
                   {(classData.students || []).map((st: any) => (
-                    <li key={st.id}>
+                    <li key={st.id} className="flex items-center gap-2">
+                      <label className="text-[11px] text-slate-600 flex items-center gap-1" title="A parent or guardian's consent for this student is on file">
+                        <input type="checkbox" data-testid={`guardian-${st.id}`} aria-label={`Guardian consent on file for ${st.name}`} checked={!!guardianConsent[st.id]} onChange={(e) => setConsent(st.id, e.target.checked)} />
+                        <span>Guardian consent</span>
+                      </label>
                       <button type="button" onClick={() => handleRemove(st.id, st.name)} aria-label={`Remove ${st.name}`} className="text-[11px] px-2 py-1 rounded-lg border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-200">
                         Remove {st.name}
                       </button>
@@ -406,9 +438,20 @@ export default function TeacherClassDetailPage({
                 <div>
                   <label htmlFor="assignment-lesson" className="font-bold text-slate-700 block mb-1">Lesson</label>
                   <select id="assignment-lesson" value={assignmentLessonId} onChange={(e) => setAssignmentLessonId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs">
-                    <option value="">Select a published lesson...</option>
+                    <option value="">No lesson</option>
                     {lessons.map((l) => <option key={l.id} value={l.id}>{l.title}</option>)}
                   </select>
+                </div>
+                <div>
+                  <label htmlFor="assignment-practice" className="font-bold text-slate-700 block mb-1">Practice set</label>
+                  <select id="assignment-practice" value={assignmentPracticeId} onChange={(e) => setAssignmentPracticeId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs">
+                    <option value="">No practice set</option>
+                    {practiceSets.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="assignment-due" className="font-bold text-slate-700 block mb-1">Due date</label>
+                  <input id="assignment-due" type="date" value={assignmentDue} onChange={(e) => setAssignmentDue(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs" />
                 </div>
                 {assignmentError && <p role="alert" className="text-red-600">{assignmentError}</p>}
                 <div className="flex items-center justify-end gap-2 pt-2">

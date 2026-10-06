@@ -1,3 +1,4 @@
+import { findPracticeSetId } from "@/lib/practice/find-practice";
 import React, { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth/auth-context";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
@@ -125,14 +126,13 @@ export default function StudentLearningPathPage({ onNavigate }: StudentLearningP
     }
   };
 
-  const handleStartAdaptiveActivity = (rec: AdaptiveRecommendationDTO) => {
-    if (rec.recommendedActivityType === "PRACTICE_SET") {
-      const pSetId = rec.recommendedPracticeSetId || rec.recommendedActivityId || "ps_integers_basics";
-      handleNav(`/student/practice/${pSetId}`);
-    } else if (rec.lessonId) {
-      handleNav(`/student/lessons/${rec.lessonId}`);
+  const handleStartAdaptiveActivity = async (rec: AdaptiveRecommendationDTO) => {
+    if (rec.recommendedActivityType === "PRACTICE_SET" || !rec.lessonId) {
+      const pSetId = rec.recommendedPracticeSetId || rec.recommendedActivityId || (await findPracticeSetId(rec.skillId));
+      if (pSetId) handleNav(`/student/practice/${pSetId}`);
+      else window.alert("Your teacher has not published a practice set yet.");
     } else {
-      handleNav("/student/practice/ps_integers_basics");
+      handleNav(`/student/lessons/${rec.lessonId}`);
     }
   };
 
@@ -296,8 +296,10 @@ export default function StudentLearningPathPage({ onNavigate }: StudentLearningP
               onReviewLesson={(lessonId) => {
                 if (lessonId) handleNav(`/student/lessons/${lessonId}`);
               }}
-              onPracticeAgain={(skillId) => {
-                handleNav(`/student/practice/ps_integers_basics`);
+              onPracticeAgain={async (skillId) => {
+                const id = await findPracticeSetId(skillId);
+                if (id) handleNav(`/student/practice/${id}`);
+                else window.alert("Your teacher has not published a practice set yet.");
               }}
             />
           </div>
@@ -377,7 +379,7 @@ export default function StudentLearningPathPage({ onNavigate }: StudentLearningP
                             </Badge>
                           ) : isAvailable ? (
                             <Badge variant="secondary" className="text-[10px]">
-                              Available to Start
+                              {node.openedByTeacher ? "Opened by your teacher" : "Available to Start"}
                             </Badge>
                           ) : (
                             <Badge variant="outline" className="text-[10px] gap-1 text-slate-500">

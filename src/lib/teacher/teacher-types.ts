@@ -30,6 +30,8 @@ export interface StudentListItemDTO {
   name: string;
   email: string;
   gradeLevel: number;
+  /** Whether a teacher/admin has recorded guardian consent for this student. */
+  guardianConsent?: boolean;
   classrooms: Array<{ id: string; name: string }>;
   currentLesson: {
     id: string;
@@ -96,6 +98,11 @@ export interface StudentDetailDTO {
     suggestedRemediation?: string;
   }>;
   adaptiveRecommendations: AdaptiveRecommendationDTO[];
+  /** Latest graded result of each assessment this student took. */
+  assessmentResults: Array<{ assessmentId: string; title: string; type: string; scorePercent: number; isPassed: boolean; submittedAt: string }>;
+  /** Why this student may need support, with the numbers behind it; null when nothing in the evidence calls for it. */
+  support: StudentSupportSignalDTO | null;
+  tutorUse: { conversations: number; studentMessages: number; lastAt: string | null; flaggedConversations: number };
   recentPractice: Array<{
     id: string;
     title: string;
@@ -137,13 +144,53 @@ export interface StudentSupportSignalDTO {
   signalType:
     | "REPEATED_MISTAKES"
     | "LOW_ACCURACY"
+    | "LOW_ASSESSMENT"
     | "INSUFFICIENT_ACTIVITY"
     | "PERSISTENT_DEVELOPING"
-    | "PREREQUISITE_STRUGGLE";
+    | "PREREQUISITE_STRUGGLE"
+    | "TUTOR_FLAGGED"
+    | "NOT_STARTED"
+    | "DECLINING";
   severity: "HIGH" | "MEDIUM" | "LOW";
   details: string;
+  /** Every fact behind the flag, each with its numbers. */
+  evidence?: string[];
   skillTitle?: string;
   suggestedAction: string;
+}
+
+export interface GroupRecommendationDTO {
+  skillId: string;
+  skillTitle: string;
+  students: Array<{ id: string; name: string }>;
+  studentCount: number;
+  withEvidence: number;
+  commonMistake?: { category: string; label: string; count: number };
+  evidence: string;
+  suggestedAction: string;
+}
+
+export interface AssessmentPerformanceDTO {
+  assessmentId: string;
+  title: string;
+  type: string;
+  status: string;
+  assigned: number;
+  completed: number;
+  /** Mean of each student's latest graded score; null when nobody has finished. */
+  meanScorePercent: number | null;
+  passRate: number | null;
+}
+
+export interface LessonPerformanceDTO {
+  lessonId: string;
+  title: string;
+  studentsStarted: number;
+  studentsCompleted: number;
+  totalStudents: number;
+  /** Practice accuracy on this lesson's practice sets; null when there is none. */
+  practiceAccuracy: number | null;
+  practiceQuestions: number;
 }
 
 export interface TeacherActivityItemDTO {
@@ -182,6 +229,15 @@ export interface TeacherDashboardDataDTO {
     count: number;
   }>;
   needsAttention: StudentSupportSignalDTO[];
+  /** Number of students with a signal (the list above is complete, not truncated). */
+  needsAttentionTotal: number;
+  /** Plain-language limits of the evidence behind this view (for example answers not linked to a skill). */
+  dataNotes: string[];
+  groupRecommendations: GroupRecommendationDTO[];
+  assessmentPerformance: AssessmentPerformanceDTO[];
+  lessonPerformance: LessonPerformanceDTO[];
+  /** The class this view is limited to, if any. */
+  classFilter?: { id: string; name: string };
   recentActivity: TeacherActivityItemDTO[];
 }
 

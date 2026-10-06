@@ -142,39 +142,23 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
     }
   };
 
-  // Checkpoint attempt handler
-  const handleCheckpointAttempt = async (
-    blockId: string,
-    answer: string,
-    correct: boolean,
-    feedback: string
-  ) => {
-    // Record in local state
-    setAttemptsMap((prev) => ({
-      ...prev,
-      [blockId]: { answer, isCorrect: correct, feedback },
-    }));
-
-    const updated = completedBlockIds.includes(blockId)
-      ? completedBlockIds
-      : [...completedBlockIds, blockId];
-    setCompletedBlockIds(updated);
-
-    try {
-      await fetch(`/api/student/lessons/${lessonId}/checkpoint`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          blockId,
-          answer,
-          isCorrect: correct,
-          feedback,
-        }),
-      });
-      syncSession(activeSectionIndex, updated);
-    } catch (e) {
-      console.warn("Checkpoint submit error:", e);
+  // Answers are graded by the server; the browser never holds the answer key.
+  const handleSubmitAnswer = async (blockId: string, answer: string) => {
+    const res = await fetch(`/api/student/lessons/${lessonId}/checkpoint`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blockId, answer }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.grading) {
+      throw new Error(json.error || "Could not check your answer. Please try again.");
     }
+    const { isCorrect, feedback, correctAnswer } = json.grading as { isCorrect: boolean; feedback: string; correctAnswer?: string };
+    setAttemptsMap((prev) => ({ ...prev, [blockId]: { answer, isCorrect, feedback } }));
+    const updated = completedBlockIds.includes(blockId) ? completedBlockIds : [...completedBlockIds, blockId];
+    setCompletedBlockIds(updated);
+    syncSession(activeSectionIndex, updated);
+    return { isCorrect, feedback, correctAnswer };
   };
 
   // Navigation handlers
@@ -214,11 +198,33 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  const [completeError, setCompleteError] = useState<string | null>(null);
+
   const handleCompleteLesson = async () => {
-    const allIds = blocks.map((b) => b.id);
-    setCompletedBlockIds(allIds);
-    setIsCompleted(true);
-    await syncSession(activeSectionIndex, allIds, true);
+    setCompleteError(null);
+    try {
+      const res = await fetch(`/api/student/lessons/${lessonId}/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentSectionIndex: activeSectionIndex, completedBlockIds, isCompleted: true }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.status === 409 && Array.isArray(json.missingBlockIds)) {
+        // Send the student to the first question they still have to answer correctly.
+        const idx = blocks.findIndex((b) => json.missingBlockIds.includes(b.id));
+        setCompleteError(json.error || "Some questions still need a correct answer.");
+        if (idx >= 0) setActiveSectionIndex(idx);
+        return;
+      }
+      if (!res.ok) {
+        setCompleteError(json.error || "Could not complete the lesson. Please try again.");
+        return;
+      }
+      setCompletedBlockIds(blocks.map((b) => b.id));
+      setIsCompleted(true);
+    } catch {
+      setCompleteError("Network error. Please try again.");
+    }
   };
 
   // Progress metrics
@@ -414,7 +420,7 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
                       block={currentBlock}
                       isCompleted={completedBlockIds.includes(currentBlock.id)}
                       onComplete={() => markBlockComplete(currentBlock.id)}
-                      onAttemptCheckpoint={handleCheckpointAttempt}
+                      onSubmitAnswer={handleSubmitAnswer}
                       previousAttempt={attemptsMap[currentBlock.id]}
                       onNavigate={handleNav}
                     />
@@ -438,6 +444,7 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
                   <span>Previous</span>
                 </Button>
 
+                {completeError && <p role="alert" className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">{completeError}</p>}
                 <div className="flex items-center gap-2">
                   {activeSectionIndex === totalBlocks - 1 ? (
                     <Button
@@ -485,7 +492,7 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
                     block={block}
                     isCompleted={completedBlockIds.includes(block.id)}
                     onComplete={() => markBlockComplete(block.id)}
-                    onAttemptCheckpoint={handleCheckpointAttempt}
+                    onSubmitAnswer={handleSubmitAnswer}
                     previousAttempt={attemptsMap[block.id]}
                     onNavigate={handleNav}
                   />
@@ -496,6 +503,7 @@ export default function StudentLessonPage({ lessonId, onNavigate }: StudentLesso
                 <div>
                   <h3 className="font-bold text-slate-900 text-sm">Finished All Sections?</h3>
                   <p className="text-xs text-slate-500">Record your progress and advance in your learning path.</p>
+                  {completeError && <p role="alert" className="text-xs text-amber-800 mt-1">{completeError}</p>}
                 </div>
                 <Button variant="primary" onClick={handleCompleteLesson} className="gap-2 bg-emerald-600 hover:bg-emerald-700">
                   <CheckCircle2 className="w-4 h-4" />

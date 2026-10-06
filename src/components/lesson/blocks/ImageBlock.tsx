@@ -52,9 +52,9 @@ export function ImageBlock({ title, content, metadata }: ImageBlockProps) {
         )}
 
         {caption && (
-          <p className="text-xs text-slate-500 mt-3 max-w-lg mx-auto italic">
+          <div className="text-xs text-slate-500 mt-3 max-w-lg mx-auto italic">
             <MathText content={caption} />
-          </p>
+          </div>
         )}
       </div>
     </div>

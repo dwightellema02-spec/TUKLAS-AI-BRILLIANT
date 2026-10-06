@@ -126,6 +126,7 @@ export class MasteryEngine {
           return records.map((r) => this.formatMasteryDTO(r, r.skill.title));
         }
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("Prisma error in getStudentMasteries:", e);
       }
     }
@@ -184,6 +185,7 @@ export class MasteryEngine {
           return this.formatMasteryDTO(rec, rec.skill.title);
         }
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("Prisma error in getExistingSnapshot:", e);
       }
     }
@@ -264,6 +266,7 @@ export class MasteryEngine {
         });
         return saved;
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("Prisma error in saveSkillMasteryRecord:", e);
       }
     }
@@ -320,6 +323,7 @@ export class MasteryEngine {
         });
         return;
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("Prisma error in recordHistoryEntry:", e);
       }
     }

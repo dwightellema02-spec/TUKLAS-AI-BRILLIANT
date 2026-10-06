@@ -2,13 +2,17 @@ import React, { useState } from "react";
 import { HelpCircle, CheckCircle2, AlertCircle, Lightbulb, RefreshCw } from "lucide-react";
 import { MathText } from "@/components/ui/MathText";
 import { Button } from "@/components/ui/Button";
+import type { GradingResult } from "./CheckpointBlock";
 
 export interface QuestionBlockProps {
   blockId: string;
   title?: string;
   content: string; // Question prompt
   metadata?: string; // JSON with question, options[], correctAnswer, explanation, hint
+  /** Local grading (teacher preview, where the answer key is available). */
   onAttempt?: (blockId: string, answer: string, isCorrect: boolean, feedback: string) => void;
+  /** Server grading (students): the answer key never reaches the browser before the student answers. */
+  onSubmitAnswer?: (blockId: string, answer: string) => Promise<GradingResult>;
   previousAttempt?: { answer: string; isCorrect: boolean; feedback?: string };
   readOnly?: boolean;
 }
@@ -19,6 +23,7 @@ export function QuestionBlock({
   content,
   metadata,
   onAttempt,
+  onSubmitAnswer,
   previousAttempt,
   readOnly = false,
 }: QuestionBlockProps) {
@@ -36,28 +41,46 @@ export function QuestionBlock({
     } catch {}
   }
 
-  const question = parsed.question || content || "Evaluate the given expression.";
-  const options = parsed.options || ["Positive", "Negative", "Zero"];
-  const correctAnswer = parsed.correctAnswer || "Negative";
-  const explanation =
-    parsed.explanation ||
-    "Since the value lies to the left of 0 on the number line, it is a negative integer.";
-  const hint = parsed.hint || "Recall that numbers to the left of zero have minus signs.";
+  const question = parsed.question || content;
+  const options = Array.isArray(parsed.options) ? parsed.options : [];
+  const configured = options.length >= 2;
+  const hint = parsed.hint || "";
 
   const [selectedAnswer, setSelectedAnswer] = useState<string>(previousAttempt?.answer || "");
   const [submitted, setSubmitted] = useState<boolean>(!!previousAttempt);
   const [isCorrect, setIsCorrect] = useState<boolean>(previousAttempt?.isCorrect ?? false);
+  const [feedback, setFeedback] = useState<string>(previousAttempt?.feedback ?? parsed.explanation ?? "");
+  const [revealedAnswer, setRevealedAnswer] = useState<string | undefined>(
+    onSubmitAnswer ? (previousAttempt?.isCorrect ? previousAttempt.answer : undefined) : parsed.correctAnswer
+  );
   const [showHint, setShowHint] = useState<boolean>(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = () => {
-    if (!selectedAnswer || readOnly) return;
-    const correct = selectedAnswer.trim().toLowerCase() === correctAnswer.trim().toLowerCase();
-    setIsCorrect(correct);
-    setSubmitted(true);
-
-    if (onAttempt) {
-      onAttempt(blockId, selectedAnswer, correct, explanation);
+  const handleSubmit = async () => {
+    if (!selectedAnswer || readOnly || pending) return;
+    setError(null);
+    if (onSubmitAnswer) {
+      setPending(true);
+      try {
+        const graded = await onSubmitAnswer(blockId, selectedAnswer);
+        setIsCorrect(graded.isCorrect);
+        setFeedback(graded.feedback);
+        setRevealedAnswer(graded.isCorrect ? graded.correctAnswer ?? selectedAnswer : undefined);
+        setSubmitted(true);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not check your answer. Please try again.");
+      } finally {
+        setPending(false);
+      }
+      return;
     }
+    if (parsed.correctAnswer === undefined) return;
+    const correct = selectedAnswer.trim().toLowerCase() === parsed.correctAnswer.trim().toLowerCase();
+    setIsCorrect(correct);
+    setFeedback(parsed.explanation ?? "");
+    setSubmitted(true);
+    if (onAttempt) onAttempt(blockId, selectedAnswer, correct, parsed.explanation ?? "");
   };
 
   return (
@@ -104,11 +127,17 @@ export function QuestionBlock({
           <MathText content={question} />
         </div>
 
+        {!configured && (
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3">
+            This question is not set up yet (it needs at least two answer choices and a correct answer).
+          </p>
+        )}
+
         {/* Options */}
         <div className="space-y-2.5">
           {options.map((opt, idx) => {
             const isSelected = selectedAnswer === opt;
-            const isTarget = opt.trim().toLowerCase() === correctAnswer.trim().toLowerCase();
+            const isTarget = revealedAnswer !== undefined && opt.trim().toLowerCase() === revealedAnswer.trim().toLowerCase();
 
             let style = "border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-800";
             if (submitted) {
@@ -144,14 +173,15 @@ export function QuestionBlock({
         </div>
 
         {!submitted ? (
-          <div className="pt-2">
+          <div className="pt-2 space-y-2">
+            {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
             <Button
               variant="primary"
-              disabled={!selectedAnswer || readOnly}
+              disabled={!selectedAnswer || readOnly || pending || !configured}
               onClick={handleSubmit}
               className="gap-2"
             >
-              <span>Submit Answer</span>
+              <span>{pending ? "Checking..." : "Submit Answer"}</span>
             </Button>
           </div>
         ) : (
@@ -173,7 +203,7 @@ export function QuestionBlock({
                   {isCorrect ? "Correct!" : "Incorrect"}
                 </span>
                 <div className="text-xs sm:text-sm text-slate-700">
-                  <MathText content={explanation} />
+                  <MathText content={feedback} />
                 </div>
               </div>
             </div>

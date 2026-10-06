@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { AlertCircle, HelpCircle, ArrowRight, User, Clock, ShieldAlert } from "lucide-react";
 import type { StudentSupportSignalDTO } from "@/lib/teacher/teacher-types";
 import { Badge } from "@/components/ui/Badge";
@@ -8,7 +8,10 @@ export interface NeedsAttentionPanelProps {
   onSelectStudent: (studentId: string) => void;
 }
 
+const INITIAL = 6;
+
 export function NeedsAttentionPanel({ signals, onSelectStudent }: NeedsAttentionPanelProps) {
+  const [showAll, setShowAll] = useState(false);
   if (signals.length === 0) {
     return (
       <div className="bg-white rounded-3xl border border-slate-200/90 p-6 shadow-xs mb-8">
@@ -21,7 +24,7 @@ export function NeedsAttentionPanel({ signals, onSelectStudent }: NeedsAttention
               All Students Progressing Reliably
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              No students are currently flagged for low accuracy, repeated misconceptions, or prolonged inactivity.
+              Nobody is currently flagged: no low practice or quiz results, repeated mistake patterns, tutor flags, or long silences.
             </p>
           </div>
         </div>
@@ -41,7 +44,7 @@ export function NeedsAttentionPanel({ signals, onSelectStudent }: NeedsAttention
   };
 
   return (
-    <div className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-6 shadow-xs mb-8">
+    <div data-testid="needs-attention" className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-6 shadow-xs mb-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
         <div className="space-y-0.5">
           <div className="flex items-center gap-2">
@@ -55,13 +58,14 @@ export function NeedsAttentionPanel({ signals, onSelectStudent }: NeedsAttention
           </h2>
         </div>
         <p className="text-xs text-slate-500 max-w-sm">
-          Signals indicate areas where timely teacher guidance or remedial practice can accelerate learning.
+          Each flag lists the evidence behind it. Flags are prompts for a conversation, not judgements about the student.
         </p>
       </div>
 
       <div className="divide-y divide-slate-100 pt-2">
-        {signals.map((sig, idx) => (
+        {(showAll ? signals : signals.slice(0, INITIAL)).map((sig, idx) => (
           <div
+            data-testid="attention-row"
             key={`${sig.studentId}_${idx}`}
             onClick={() => onSelectStudent(sig.studentId)}
             className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/80 -mx-2 px-2 rounded-2xl transition-colors cursor-pointer group"
@@ -76,9 +80,9 @@ export function NeedsAttentionPanel({ signals, onSelectStudent }: NeedsAttention
                 </span>
                 {getSeverityBadge(sig.severity)}
               </div>
-              <p className="text-xs text-slate-600">
-                {sig.details}
-              </p>
+              <ul className="text-xs text-slate-600 list-disc pl-4 space-y-0.5">
+                {(sig.evidence && sig.evidence.length > 0 ? sig.evidence : [sig.details]).map((e, i) => <li key={i}>{e}</li>)}
+              </ul>
               <p className="text-[11px] text-teal-700 font-medium">
                 Action: {sig.suggestedAction}
               </p>
@@ -91,6 +95,11 @@ export function NeedsAttentionPanel({ signals, onSelectStudent }: NeedsAttention
           </div>
         ))}
       </div>
+      {signals.length > INITIAL && (
+        <button type="button" data-testid="attention-toggle" onClick={() => setShowAll((v) => !v)} className="mt-3 text-xs font-bold text-blue-600 hover:underline">
+          {showAll ? "Show fewer" : `Show all ${signals.length} students`}
+        </button>
+      )}
     </div>
   );
 }

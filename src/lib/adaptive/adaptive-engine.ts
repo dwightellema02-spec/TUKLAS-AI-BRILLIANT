@@ -29,6 +29,7 @@ export class AdaptiveEngine {
     let targetSkillId = params.skillId;
     let targetLessonId = params.lessonId;
 
+    if (targetSkillId && !(await dbService.getSkillById(targetSkillId))) throw new Error("Skill not found");
     if (!targetSkillId) {
       // Find active or next recommended skill from student's learning path
       const pathData = await dbService.getStudentLearningPath(studentId);
@@ -40,13 +41,14 @@ export class AdaptiveEngine {
       if (activeNode) {
         targetLessonId = activeNode.lessonId;
         const lesson: any = await dbService.getLessonById(activeNode.lessonId);
-        targetSkillId = lesson?.skills?.[0]?.skillId || lesson?.skillIds?.[0] || "skl_01";
-      } else {
-        targetSkillId = "skl_01";
+        targetSkillId = lesson?.skills?.[0]?.skillId || lesson?.skillIds?.[0];
       }
     }
+    // never invent a skill id: a made-up one breaks the database link in a real deployment
+    if (!targetSkillId) targetSkillId = ((await dbService.getSkills()) as any[])[0]?.id;
+    if (!targetSkillId) throw new Error("No skills are available yet, so there is nothing to recommend.");
 
-    const resolvedSkillId = targetSkillId || "skl_01";
+    const resolvedSkillId = targetSkillId;
 
     // 2. Check for existing active, unexpired recommendation (unless forced)
     if (!forceRefresh) {

@@ -6,6 +6,7 @@ import { ContentBlockEditor, ContentBlock } from "@/components/studio/ContentBlo
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { groupSkillsByUnit } from "@/lib/curriculum/skill-label";
 import { LessonStatus, ResourceType } from "@prisma/client";
 import {
   BookOpen,
@@ -641,26 +642,35 @@ export default function TeacherLessonEditorPage({
                 Target MATATAG Skills ({selectedSkillIds.length})
               </h2>
 
-              <div className="space-y-2">
-                {allSkills.map((skill) => {
-                  const isChecked = selectedSkillIds.includes(skill.id);
-                  return (
-                    <div
-                      key={skill.id}
-                      onClick={() => toggleSkill(skill.id)}
-                      className={`p-2.5 rounded-xl border cursor-pointer text-xs flex items-center justify-between transition-colors ${
-                        isChecked
-                          ? "bg-blue-50/80 border-blue-500 font-semibold text-blue-900"
-                          : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                      }`}
-                    >
-                      <span className="truncate pr-2">{skill.title}</span>
-                      <span className="text-[10px] text-slate-400 shrink-0">
-                        Diff {skill.difficulty?.toFixed(1)}
-                      </span>
-                    </div>
-                  );
-                })}
+              <div className="space-y-3">
+                {groupSkillsByUnit(allSkills).map((group) => (
+                  <div key={group.key} className="space-y-1.5" data-testid="skill-group">
+                    <p className="text-[11px] font-bold text-slate-500">{group.label}</p>
+                    {group.skills.map((skill: any) => {
+                      const isChecked = selectedSkillIds.includes(skill.id);
+                      return (
+                        <div
+                          key={skill.id}
+                          role="checkbox"
+                          aria-checked={isChecked}
+                          tabIndex={0}
+                          onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleSkill(skill.id); } }}
+                          onClick={() => toggleSkill(skill.id)}
+                          className={`p-2.5 rounded-xl border cursor-pointer text-xs flex items-center justify-between transition-colors ${
+                            isChecked
+                              ? "bg-blue-50/80 border-blue-500 font-semibold text-blue-900"
+                              : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                          }`}
+                        >
+                          <span className="truncate pr-2">{skill.title}</span>
+                          <span className="text-[10px] text-slate-400 shrink-0">
+                            Diff {skill.difficulty?.toFixed(1)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
             </div>
           </div>

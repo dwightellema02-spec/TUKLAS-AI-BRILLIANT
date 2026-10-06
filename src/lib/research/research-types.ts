@@ -74,19 +74,20 @@ export interface PrePostComparisonResult {
     assessmentId: string;
     title: string;
     totalStudents: number;
-    averageScorePercent: number;
+    /** null when no student has a graded attempt: never a made-up number. */
+    averageScorePercent: number | null;
     completedAt?: string;
   };
   postTest: {
     assessmentId: string;
     title: string;
     totalStudents: number;
-    averageScorePercent: number;
+    averageScorePercent: number | null;
     completedAt?: string;
   };
   comparison: {
-    scoreDifferencePoints: number; // e.g. +14.5 percentage points
-    relativeGrowthPercent: number;
+    scoreDifferencePoints: number | null; // e.g. +14.5 percentage points
+    relativeGrowthPercent: number | null;
     observedTrend: "IMPROVEMENT" | "MAINTAINED" | "DECLINE" | "INSUFFICIENT_DATA";
     description: string;
   };
@@ -164,9 +165,10 @@ export interface InterventionObservationItem {
 export interface TimeSeriesDataPoint {
   date: string; // YYYY-MM-DD
   accuracy: number;
-  understanding: number;
-  application: number;
-  consistency: number;
+  /** Not computed per day (too little evidence per day); kept for compatibility. */
+  understanding: number | null;
+  application: number | null;
+  consistency: number | null;
   attemptCount: number;
   activeStudents: number;
 }
@@ -225,6 +227,10 @@ export interface AssessmentAttemptResultDTO {
   scorePercent: number;
   isPassed: boolean;
   timeTakenMs?: number;
+  /** True when the attempt was submitted after the time limit (it is still graded). */
+  timedOut?: boolean;
+  /** Pre/post tests never reveal which answers were right; `responses` is then empty. */
+  answersHidden?: boolean;
   startedAt: string;
   submittedAt?: string;
   cognitiveBreakdown: Record<CognitiveLevel, { score: number; maxScore: number; accuracy: number }>;

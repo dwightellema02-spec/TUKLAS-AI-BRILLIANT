@@ -27,7 +27,8 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [adminData, setAdminData] = useState<any>(null);
 
-  const [accounts, setAccounts] = useState<Array<{ id: string; name: string; email: string; role: string }>>([]);
+  const [accounts, setAccounts] = useState<Array<{ id: string; name: string; email: string; role: string; disabled?: boolean }>>([]);
+  const [audit, setAudit] = useState<Array<{ id: string; action: string; actorId: string | null; targetId: string | null; createdAt: string }>>([]);
   const [acctForm, setAcctForm] = useState({ name: "", email: "", password: "", role: "TEACHER" });
   const [acctMsg, setAcctMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -47,6 +48,59 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
     }
   };
 
+  const [studentQuery, setStudentQuery] = useState("");
+  const [studentHits, setStudentHits] = useState<any[] | null>(null);
+  const searchStudents = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (studentQuery.trim().length < 3) { setStudentHits(null); setAcctMsg({ ok: false, text: "Type at least 3 characters of the student's email or name." }); return; }
+    const res = await authFetch(`/api/admin/users?role=STUDENT&limit=20&q=${encodeURIComponent(studentQuery.trim())}`);
+    setStudentHits(res.ok ? ((await res.json()).data?.users ?? []) : []);
+  };
+
+  const loadAudit = async () => {
+    try {
+      const res = await authFetch("/api/admin/audit?limit=15");
+      if (res.ok) setAudit(((await res.json()).data?.entries as any[]) || []);
+    } catch {
+      /* leave empty */
+    }
+  };
+
+  const accountAction = async (id: string, action: "disable" | "enable" | "revoke-sessions" | "reset-password", body?: object) => {
+    setAcctMsg(null);
+    const res = await authFetch(`/api/admin/users/${id}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    });
+    const json = await res.json().catch(() => ({}));
+    setAcctMsg({ ok: res.ok, text: res.ok ? json.note || "Done." : json.error || "That action failed" });
+    loadAccounts();
+    loadAudit();
+  };
+
+  const exportAccountData = async (id: string, email: string) => {
+    setAcctMsg(null);
+    const res = await authFetch(`/api/admin/users/${id}/data-export`);
+    if (!res.ok) { setAcctMsg({ ok: false, text: (await res.json().catch(() => ({}))).error || "The export failed" }); return; }
+    const blob = new Blob([JSON.stringify((await res.json()).data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `tuklas-data-${email.replace(/[^a-z0-9]+/gi, "_")}.json`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    setAcctMsg({ ok: true, text: "The data export was downloaded. Treat the file as confidential." });
+    loadAudit();
+  };
+
+  const eraseAccount = async (id: string, email: string) => {
+    const typed = window.prompt(`This permanently erases ${email} and everything linked to the account (progress, answers, tutor conversations). It cannot be undone.\n\nType the email address to confirm:`);
+    if (!typed) return;
+    setAcctMsg(null);
+    const res = await authFetch(`/api/admin/users/${id}/erase`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmEmail: typed }) });
+    const json = await res.json().catch(() => ({}));
+    setAcctMsg({ ok: res.ok, text: res.ok ? "The account and its data were erased." : json.error || "The erasure failed" });
+    loadAccounts();
+    loadAudit();
+  };
+
   const createAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     setAcctMsg(null);
@@ -63,6 +117,7 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
     setAcctMsg({ ok: true, text: `Created ${acctForm.role.toLowerCase()} account for ${acctForm.email}. Share the password with them privately.` });
     setAcctForm({ name: "", email: "", password: "", role: acctForm.role });
     loadAccounts();
+    loadAudit();
   };
 
   const handleBack = () => {
@@ -85,6 +140,7 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
     if (user?.role === "ADMIN") {
       loadAdminData();
       loadAccounts();
+      loadAudit();
     }
   }, [user]);
 
@@ -173,9 +229,48 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
             <Button type="submit" variant="primary" size="sm" className="sm:col-span-2 bg-purple-600 hover:bg-purple-700">Create account</Button>
           </form>
           {acctMsg && <p role="status" className={`text-xs mb-3 ${acctMsg.ok ? "text-emerald-700" : "text-red-600"}`}>{acctMsg.text}</p>}
+          <form onSubmit={searchStudents} className="flex gap-2 text-xs mb-2" data-testid="student-search">
+            <input placeholder="Find a student by email or name (to export or erase their data)" aria-label="Find a student" value={studentQuery} onChange={(e) => setStudentQuery(e.target.value)} className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2" />
+            <Button type="submit" variant="outline" size="sm">Find</Button>
+          </form>
+          {studentHits && (
+            <ul className="text-xs divide-y divide-slate-100 mb-3" data-testid="student-hits">
+              {studentHits.length === 0 && <li className="py-2 text-slate-500">No student matches.</li>}
+              {studentHits.map((a) => (
+                <li key={a.id} data-testid={`account-${a.email}`} className="py-2 flex flex-wrap items-center justify-between gap-2">
+                  <span><b>{a.name}</b> · {a.email}</span>
+                  <span className="flex items-center gap-2">
+                    <button type="button" onClick={() => exportAccountData(a.id, a.email)} className="text-[11px] text-slate-600 hover:text-purple-700 underline" aria-label={`Export data of ${a.email}`}>Export data</button>
+                    <button type="button" onClick={async () => { await eraseAccount(a.id, a.email); searchStudents(); }} className="text-[11px] text-red-600 hover:text-red-800 underline" aria-label={`Erase ${a.email}`}>Erase</button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
           <ul className="text-xs divide-y divide-slate-100">
             {accounts.map((a) => (
-              <li key={a.id} className="py-2 flex justify-between"><span><b>{a.name}</b> · {a.email}</span><Badge variant="default">{a.role}</Badge></li>
+              <li key={a.id} data-testid={`account-${a.email}`} className="py-2 flex flex-wrap items-center justify-between gap-2">
+                <span className={a.disabled ? "text-slate-400 line-through" : ""}><b>{a.name}</b> · {a.email}</span>
+                <span className="flex items-center gap-2">
+                  <Badge variant="default">{a.role}{a.disabled ? " · disabled" : ""}</Badge>
+                  {a.id !== user?.id && (
+                    <>
+                      <button type="button" onClick={() => accountAction(a.id, a.disabled ? "enable" : "disable")} className="text-[11px] text-slate-600 hover:text-purple-700 underline">{a.disabled ? "Enable" : "Disable"}</button>
+                      <button type="button" onClick={() => accountAction(a.id, "revoke-sessions")} className="text-[11px] text-slate-600 hover:text-purple-700 underline">Sign out devices</button>
+                      <button type="button" onClick={() => { const pw = window.prompt(`Temporary password for ${a.email} (8+ characters, a letter and a digit)`); if (pw) accountAction(a.id, "reset-password", { temporaryPassword: pw }); }} className="text-[11px] text-slate-600 hover:text-purple-700 underline">Reset password</button>
+                      <button type="button" onClick={() => exportAccountData(a.id, a.email)} className="text-[11px] text-slate-600 hover:text-purple-700 underline" aria-label={`Export data of ${a.email}`}>Export data</button>
+                      <button type="button" onClick={() => eraseAccount(a.id, a.email)} className="text-[11px] text-red-600 hover:text-red-800 underline" aria-label={`Erase ${a.email}`}>Erase</button>
+                    </>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mt-5 mb-2">Recent security activity</h3>
+          <ul data-testid="audit-list" className="text-[11px] text-slate-600 space-y-1">
+            {audit.length === 0 && <li>Nothing recorded yet.</li>}
+            {audit.map((e) => (
+              <li key={e.id}><span className="font-mono">{e.action}</span> · {new Date(e.createdAt).toLocaleString()}</li>
             ))}
           </ul>
         </div>
@@ -221,37 +316,12 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
                   Connected ({dbStatus?.provider === "neon-postgresql" ? "PostgreSQL / Prisma" : "Prisma / Sandbox Store"})
                 </p>
                 <p className="text-xs text-purple-700 mt-1">
-                  Prisma ORM schema initialized with 8 relational models
+                  Accounts and classes are stored in this database when one is configured
                 </p>
               </div>
             </div>
           </div>
 
-          {/* Database Entity Health Overview */}
-          <div className="border-t border-slate-100 pt-6">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-3 flex items-center gap-2">
-              <Layers className="w-4 h-4 text-purple-600" />
-              <span>Prisma Schema Models Verified (Phase 2):</span>
-            </h2>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              {[
-                { name: "User", count: "3 Default Roles" },
-                { name: "Subject", count: "Mathematics (MATH)" },
-                { name: "Grade", count: "Grade 7" },
-                { name: "Term", count: "Term 1" },
-                { name: "Unit", count: "Numbers & Algebra" },
-                { name: "Lesson", count: "Understanding Integers" },
-                { name: "Competency", count: "M7NS-Ia-1" },
-                { name: "Skill & Prereq", count: "3 Skills (DAG)" },
-              ].map((m) => (
-                <div key={m.name} className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                  <span className="font-semibold text-slate-900 block">{m.name}</span>
-                  <span className="text-[11px] text-slate-500">{m.count}</span>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
       <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />

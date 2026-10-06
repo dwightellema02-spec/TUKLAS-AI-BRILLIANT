@@ -138,7 +138,7 @@ export default function LandingPage({ onNavigate }: LandingPageProps) {
             {/* Top Pill / Status Tag */}
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-xs font-medium mb-6">
               <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse" />
-              <span>Phase 1: Project Foundation</span>
+              <span>Pilot build</span>
               <span className="text-slate-400">•</span>
               <span className="text-teal-700 font-semibold">Grade 7 MATATAG Math</span>
             </div>
@@ -178,7 +178,7 @@ export default function LandingPage({ onNavigate }: LandingPageProps) {
             <div className="mt-10 p-3.5 sm:p-4 rounded-xl bg-slate-100/80 border border-slate-200/80 text-xs text-slate-600 max-w-xl mx-auto flex items-center justify-center gap-2">
               <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
               <span>
-                <strong>Under Active Development:</strong> AI-powered learning features are coming in future development phases.
+                <strong>Pilot build:</strong> the tutor uses a built-in rule-based engine unless an external AI model is configured, and has not yet been tested with real students.
               </span>
             </div>
           </div>
@@ -252,7 +252,7 @@ export default function LandingPage({ onNavigate }: LandingPageProps) {
           ))}
         </div>
         <p className="text-center text-xs text-slate-500 mt-6">
-          * Visual representation of the intended learning flow. Dynamic execution activates in Phase 5 & 6.
+          * The flow a student follows through each lesson.
         </p>
       </Section>
 
@@ -294,7 +294,7 @@ export default function LandingPage({ onNavigate }: LandingPageProps) {
         </div>
         <div className="mt-8 text-center">
           <Badge variant="outline" className="text-slate-500 border-slate-200">
-            Preview of planned curriculum structure. Database persistence initialized in Phase 2 & 3.
+            Term 1 is available now; Terms 2 and 3 are planned.
           </Badge>
         </div>
       </Section>
@@ -313,7 +313,7 @@ export default function LandingPage({ onNavigate }: LandingPageProps) {
               Transform classroom insights with granular mistake analysis.
             </h3>
             <p className="text-slate-400 text-sm sm:text-base leading-relaxed">
-              Teachers will eventually be able to:
+              Teachers can use Tuklas AI to:
             </p>
             <ul className="space-y-3 pt-2">
               {teacherHighlights.map((highlight) => (
@@ -331,7 +331,7 @@ export default function LandingPage({ onNavigate }: LandingPageProps) {
                 onClick={() => handleNav("/teacher")}
                 className="gap-2"
               >
-                <span>View Teacher Platform Blueprint</span>
+                <span>Open Teacher Dashboard</span>
                 <ChevronRight className="w-4 h-4" />
               </Button>
             </div>
@@ -345,7 +345,7 @@ export default function LandingPage({ onNavigate }: LandingPageProps) {
                 <span className="font-semibold text-white text-sm">Classroom Analytics Preview</span>
               </div>
               <Badge variant="warning" className="text-[10px]">
-                Phase 12 Preview
+                Illustration
               </Badge>
             </div>
 
@@ -353,7 +353,7 @@ export default function LandingPage({ onNavigate }: LandingPageProps) {
               <div className="p-3 bg-slate-900/60 rounded-xl border border-slate-700/60">
                 <div className="flex justify-between text-slate-400 mb-1">
                   <span>Class Mastery: Grade 7 - Sampaguita</span>
-                  <span className="text-teal-400 font-semibold">Planned Feature</span>
+                  <span className="text-teal-400 font-semibold">Sample data</span>
                 </div>
                 <div className="w-full bg-slate-700 rounded-full h-2">
                   <div className="bg-teal-500 h-2 rounded-full w-2/3" />
@@ -376,7 +376,7 @@ export default function LandingPage({ onNavigate }: LandingPageProps) {
                   <p className="text-slate-400 text-[11px]">Attach curated educational clips with original practice</p>
                 </div>
                 <Badge variant="outline" className="text-slate-400 border-slate-600">
-                  Phase 13
+                  Available
                 </Badge>
               </div>
             </div>
@@ -392,17 +392,17 @@ export default function LandingPage({ onNavigate }: LandingPageProps) {
               Ready to explore Tuklas AI?
             </h2>
             <p className="text-slate-600 text-sm sm:text-base">
-              The technical foundation is live. Explore the structural blueprints for students, teachers, and administrators.
+              Explore the student, teacher, and administrator experiences.
             </p>
             <div className="pt-4 flex flex-wrap justify-center gap-3">
               <Button variant="primary" onClick={() => handleNav("/student")}>
-                Student Preview
+                Student View
               </Button>
               <Button variant="outline" onClick={() => handleNav("/teacher")}>
-                Teacher Preview
+                Teacher View
               </Button>
               <Button variant="ghost" onClick={() => handleNav("/admin")}>
-                Admin Preview
+                Admin View
               </Button>
             </div>
           </div>

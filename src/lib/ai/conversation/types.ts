@@ -167,6 +167,10 @@ export interface ConversationState {
 }
 
 export interface ResponsePlan {
+  /** Phase 40: topic coaching for the question (polygons, percentages, rates...) when no integer problem could be parsed from it. */
+  coach?: import("./coaching").Coach;
+  /** The question's numeric answer, so a worked example never reuses it. */
+  coachAvoid?: number;
   strategy: TutorStrategy;
   scaffold: number;
   phase: ConversationPhase;

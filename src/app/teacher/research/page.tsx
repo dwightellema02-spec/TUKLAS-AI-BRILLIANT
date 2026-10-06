@@ -43,9 +43,15 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
   const [error, setError] = useState<string | null>(null);
 
   // Filters
-  const [selectedClassroomId, setSelectedClassroomId] = useState<string>("cls_mabini_01");
+  // "" = all of my students. Classes and students come from the signed-in teacher's own data.
+  const [selectedClassroomId, setSelectedClassroomId] = useState<string>("");
   const [selectedGrade, setSelectedGrade] = useState<number>(7);
-  const [selectedStudentId, setSelectedStudentId] = useState<string>("usr_student_01");
+  const [selectedStudentId, setSelectedStudentId] = useState<string>("");
+  const [classes, setClasses] = useState<Array<{ id: string; name: string }>>([]);
+  const [students, setStudents] = useState<Array<{ id: string; name: string }>>([]);
+  const [identifiedExport, setIdentifiedExport] = useState(false);
+  const exportQuery = [selectedClassroomId ? `classroomId=${encodeURIComponent(selectedClassroomId)}` : "", identifiedExport ? "identified=true" : ""].filter(Boolean).join("&");
+  const classQuery = selectedClassroomId ? `classroomId=${encodeURIComponent(selectedClassroomId)}` : "";
 
   // Analytics data
   const [profile, setProfile] = useState<StudentResearchProfile | null>(null);
@@ -68,17 +74,19 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
     setError(null);
     try {
       const [profRes, compRes, diffRes, mistRes, intRes, tsRes] = await Promise.all([
-        fetch(`/api/teacher/research/profile/${selectedStudentId}`),
-        fetch(`/api/teacher/research/comparison?classroomId=${selectedClassroomId}`),
-        fetch(`/api/teacher/research/difficult-skills?grade=${selectedGrade}`),
-        fetch(`/api/teacher/research/mistakes`),
-        fetch(`/api/teacher/research/interventions`),
-        fetch(`/api/teacher/research/time-series`),
+        selectedStudentId ? fetch(`/api/teacher/research/profile/${selectedStudentId}`) : Promise.resolve(null),
+        fetch(`/api/teacher/research/comparison?${classQuery}`),
+        fetch(`/api/teacher/research/difficult-skills?grade=${selectedGrade}&${classQuery}`),
+        fetch(`/api/teacher/research/mistakes?${classQuery}`),
+        fetch(`/api/teacher/research/interventions?${classQuery}`),
+        fetch(`/api/teacher/research/time-series?${classQuery}`),
       ]);
 
-      if (profRes.ok) {
+      if (profRes && profRes.ok) {
         const j = await profRes.json();
         setProfile(j.data);
+      } else {
+        setProfile(null);
       }
       if (compRes.ok) {
         const j = await compRes.json();
@@ -107,6 +115,26 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetch("/api/teacher/classes")
+      .then((r) => (r.ok ? r.json() : { data: [] }))
+      .then((j) => setClasses((j.data || []).map((c: any) => ({ id: c.id, name: c.name }))))
+      .catch(() => setClasses([]));
+  }, []);
+
+  // The student list follows the class filter (all of my students when no class is chosen).
+  useEffect(() => {
+    const url = selectedClassroomId ? `/api/teacher/classes/${selectedClassroomId}` : "/api/teacher/students?limit=100";
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : { data: {} }))
+      .then((j) => {
+        const list = selectedClassroomId ? j.data?.students : j.data?.students;
+        setStudents((list || []).map((st: any) => ({ id: st.id, name: st.name })));
+      })
+      .catch(() => setStudents([]));
+    setSelectedStudentId("");
+  }, [selectedClassroomId]);
 
   useEffect(() => {
     loadResearchData();
@@ -140,7 +168,7 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
           <div>
             <div className="flex items-center gap-2 text-xs">
               <span className="font-bold uppercase tracking-wider text-indigo-700">
-                Phase 14 Empirical Engine
+                Research Analytics
               </span>
               <span aria-hidden="true" className="text-slate-300">·</span>
               <span className="font-medium text-slate-500">
@@ -157,10 +185,14 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
 
           {/* Export Action Buttons */}
           <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-slate-600" title="Off by default: exports use a code instead of the student's name. Turning this on is recorded in the audit log.">
+              <input type="checkbox" data-testid="identified-export" checked={identifiedExport} onChange={(e) => setIdentifiedExport(e.target.checked)} />
+              Include student names (audited)
+            </label>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleExportCsv("/api/teacher/research/export/metrics.csv", "metrics.csv")}
+              onClick={() => handleExportCsv(`/api/teacher/research/export/metrics.csv?${exportQuery}`, "metrics.csv")}
               className="gap-1.5 text-xs text-slate-700 border-slate-300"
             >
               <Download className="w-3.5 h-3.5" />
@@ -169,7 +201,7 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleExportCsv("/api/teacher/research/export/comparison.csv", "comparison.csv")}
+              onClick={() => handleExportCsv(`/api/teacher/research/export/comparison.csv?${exportQuery}`, "comparison.csv")}
               className="gap-1.5 text-xs text-slate-700 border-slate-300"
             >
               <Download className="w-3.5 h-3.5" />
@@ -178,7 +210,7 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleExportCsv("/api/teacher/research/export/attempts.csv", "attempts.csv")}
+              onClick={() => handleExportCsv(`/api/teacher/research/export/attempts.csv?${exportQuery}`, "attempts.csv")}
               className="gap-1.5 text-xs text-indigo-700 border-indigo-200 hover:bg-indigo-50"
             >
               <Download className="w-3.5 h-3.5" />
@@ -204,8 +236,10 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
                 onChange={(e) => setSelectedClassroomId(e.target.value)}
                 className="text-xs font-semibold py-1.5 px-3 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
-                <option value="cls_mabini_01">Grade 7 - Section Mabini</option>
-                <option value="cls_rizal_02">Grade 7 - Section Rizal</option>
+                <option value="">All my students</option>
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
               </select>
             </div>
 
@@ -230,7 +264,10 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
                 onChange={(e) => setSelectedStudentId(e.target.value)}
                 className="text-xs font-semibold py-1.5 px-3 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
-                <option value="usr_student_01">Juan de la Cruz (Primary Sample)</option>
+                <option value="">Choose a student...</option>
+                {students.map((st) => (
+                  <option key={st.id} value={st.id}>{st.name}</option>
+                ))}
               </select>
             </div>
 
@@ -378,7 +415,7 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
               </p>
             </div>
             <div className="text-xs text-slate-500">
-              Cohort: <span className="font-semibold text-slate-800">{comparison?.classroomName || "Section Mabini"}</span>
+              Cohort: <span className="font-semibold text-slate-800">{comparison?.classroomName || (selectedClassroomId ? "" : "All my students")}</span>
             </div>
           </div>
 
@@ -389,13 +426,13 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
                 Baseline (Pre-Test)
               </span>
               <h3 className="text-sm font-bold text-slate-800 mt-1">
-                {comparison?.preTest.title || "Pre-Test: Integers"}
+                {comparison?.preTest.title || "Pre-Test"}
               </h3>
               <div className="text-3xl font-black text-slate-900 mt-2">
-                {comparison ? `${comparison.preTest.averageScorePercent.toFixed(1)}%` : "--%"}
+                {comparison?.preTest.averageScorePercent != null ? `${comparison.preTest.averageScorePercent.toFixed(1)}%` : "No data"}
               </div>
               <p className="text-[11px] text-slate-400 mt-1">
-                Completed by {comparison?.preTest.totalStudents || 1} student(s)
+                Completed by {comparison?.preTest.totalStudents ?? 0} student(s)
               </p>
             </div>
 
@@ -405,15 +442,19 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
                 Observed Pre-to-Post Difference
               </span>
               <div className="text-3xl sm:text-4xl font-black text-teal-900 mt-1">
-                {comparison && comparison.comparison.scoreDifferencePoints > 0
+                {comparison?.comparison.scoreDifferencePoints == null
+                  ? "No data yet"
+                  : comparison.comparison.scoreDifferencePoints > 0
                   ? `+${comparison.comparison.scoreDifferencePoints.toFixed(1)} pts`
-                  : `${comparison?.comparison.scoreDifferencePoints.toFixed(1)} pts`}
+                  : `${comparison.comparison.scoreDifferencePoints.toFixed(1)} pts`}
               </div>
               <p className="text-[11px] text-teal-800 mt-1 max-w-xs">
                 {comparison?.comparison.description || "Comparing cohort baseline..."}
               </p>
               <span className="text-[10px] text-teal-600 font-semibold mt-2">
-                Relative growth: +{comparison?.comparison.relativeGrowthPercent.toFixed(1)}%
+                {comparison?.comparison.relativeGrowthPercent != null && (
+                  <>Relative change: {comparison.comparison.relativeGrowthPercent > 0 ? "+" : ""}{comparison.comparison.relativeGrowthPercent.toFixed(1)}%</>
+                )}
               </span>
             </div>
 
@@ -423,13 +464,13 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
                 Summative (Post-Test)
               </span>
               <h3 className="text-sm font-bold text-slate-800 mt-1">
-                {comparison?.postTest.title || "Post-Test: Integers Mastery"}
+                {comparison?.postTest.title || "Post-Test"}
               </h3>
               <div className="text-3xl font-black text-slate-900 mt-2">
-                {comparison ? `${comparison.postTest.averageScorePercent.toFixed(1)}%` : "--%"}
+                {comparison?.postTest.averageScorePercent != null ? `${comparison.postTest.averageScorePercent.toFixed(1)}%` : "No data"}
               </div>
               <p className="text-[11px] text-slate-400 mt-1">
-                Completed by {comparison?.postTest.totalStudents || 1} student(s)
+                Completed by {comparison?.postTest.totalStudents ?? 0} student(s)
               </p>
             </div>
           </div>
@@ -456,7 +497,7 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
                         <td className="py-2.5 px-3 font-semibold text-slate-900">{s.skillTitle}</td>
                         <td className="py-2.5 px-3">{s.preAccuracy}%</td>
                         <td className="py-2.5 px-3">{s.postAccuracy}%</td>
-                        <td className="py-2.5 px-3 font-bold text-emerald-600">
+                        <td className={`py-2.5 px-3 font-bold ${s.pointChange > 0 ? "text-emerald-600" : s.pointChange < 0 ? "text-rose-600" : "text-slate-500"}`}>
                           {s.pointChange > 0 ? `+${s.pointChange}` : s.pointChange} pts
                         </td>
                       </tr>
@@ -648,13 +689,13 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
                       {(t.accuracy * 100).toFixed(0)}%
                     </td>
                     <td className="py-2.5 px-3 font-bold text-indigo-700">
-                      {(t.understanding * 100).toFixed(0)}%
+                      {t.understanding == null ? "—" : `${(t.understanding * 100).toFixed(0)}%`}
                     </td>
                     <td className="py-2.5 px-3 font-bold text-purple-700">
-                      {(t.application * 100).toFixed(0)}%
+                      {t.application == null ? "—" : `${(t.application * 100).toFixed(0)}%`}
                     </td>
                     <td className="py-2.5 px-3 font-bold text-emerald-700">
-                      {(t.consistency * 100).toFixed(0)}%
+                      {t.consistency == null ? "—" : `${(t.consistency * 100).toFixed(0)}%`}
                     </td>
                     <td className="py-2.5 px-3 text-slate-400">{t.attemptCount} items</td>
                   </tr>

@@ -5,6 +5,7 @@ import {
   GraduationCap,
   BookOpen,
   CheckCircle2,
+  ClipboardCheck,
   BarChart3,
   Sparkles,
   LogOut,
@@ -14,7 +15,7 @@ import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/lib/auth/auth-context";
 
 export interface TeacherNavProps {
-  currentTab: "dashboard" | "students" | "classes" | "lessons" | "practice" | "ai" | "research";
+  currentTab: "dashboard" | "students" | "classes" | "lessons" | "practice" | "ai" | "research" | "assessments";
   onNavigate: (path: string) => void;
   onAskAI?: () => void;
 }
@@ -28,6 +29,7 @@ export function TeacherNav({ currentTab, onNavigate, onAskAI }: TeacherNavProps)
     { id: "classes", label: "Classes", href: "/teacher/classes", icon: GraduationCap },
     { id: "lessons", label: "Lessons", href: "/teacher/lessons", icon: BookOpen },
     { id: "practice", label: "Practice Sets", href: "/teacher/practice-sets", icon: CheckCircle2 },
+    { id: "assessments", label: "Assessments", href: "/teacher/assessments", icon: ClipboardCheck },
     { id: "research", label: "Research Analytics", href: "/teacher/research", icon: BarChart3 },
   ];
 

@@ -10,6 +10,7 @@
 import type { GroundingSource } from "../../documents/types";
 import { fmt } from "./arith";
 import { guessSafe } from "./realizer-util";
+import { exampleFor, slipFor } from "./coaching";
 import { hashString, kindOf, mathText, structureFacts } from "./problems";
 import { checkTutorOutput, type Violation } from "./guards";
 import type { ConversationState, ParsedProblem, ResponsePlan, TutorStrategy } from "./types";
@@ -112,6 +113,13 @@ function ackFor(plan: ResponsePlan, ctx: RealizeContext, seed: number): string {
 
 const lessonName = (ctx: RealizeContext) => ctx.skillTitle || ctx.lessonTitle || "this lesson";
 
+/**
+ * The built-in fallbacks below were written for integer arithmetic (number lines, signs, absolute value). They may only be used when the
+ * conversation really is about integers: a parsed integer problem, or an integer lesson/skill. On any other topic (polygons, percentages,
+ * rates...) they would teach the wrong thing, so the neutral wording is used instead.
+ */
+const integerTopic = (ctx: RealizeContext, p?: ParsedProblem) => !!p || /integer|negative|absolute|opposite|number line/i.test(`${ctx.skillTitle ?? ""} ${ctx.lessonTitle ?? ""}`);
+
 function decomposeQuestions(p: ParsedProblem): string[] {
   const k = kindOf(p);
   if (k === "ABS") {
@@ -210,7 +218,7 @@ function firstStepQuestion(p?: ParsedProblem): string {
 }
 
 function smallestStep(p?: ParsedProblem): string {
-  if (!p) return "Just this one thing: can you name any negative number?";
+  if (!p) return "Just this one thing: what numbers or facts does the problem give you?";
   switch (kindOf(p)) {
     case "EQUATION": return `Just this one thing: is ${p.variable ?? "x"} being added to or subtracted from something?`;
     case "COMPARE": return `Just this one thing: on a number line, does ${wrap(p.a)} sit to the left or to the right of 0?`;
@@ -232,12 +240,67 @@ function realizeDraft(plan: ResponsePlan, ctx: RealizeContext, seed: number): Dr
   return ctx.state.language === "TL" ? tagalogLayer(plan, ctx, seed, draft) : draft;
 }
 
+/** Coaching moves built from the question's topic pack (see coaching.ts). Returns undefined for moves the generic code handles. */
+function realizeCoached(plan: ResponsePlan, ctx: RealizeContext, lead: (text: string) => string): Draft | undefined {
+  const c = plan.coach!;
+  const state = ctx.state;
+  const stepFor = (strategy: TutorStrategy) => {
+    const done = state.hintsGiven.filter((h) => h.strategy === strategy).length;
+    return Math.min(done, c.steps.length - 1);
+  };
+  switch (plan.strategy) {
+    case "ACTIVATE_PRIOR":
+    case "REVIEW_KEY_IDEAS": {
+      const first = lead(c.idea.message);
+      return state.recentTutorMessages.includes(first) ? { message: lead(c.check.message), question: c.check.question } : { message: first, question: c.idea.question };
+    }
+    case "DECOMPOSE_STEPS": {
+      const idx = stepFor("DECOMPOSE_STEPS");
+      const prefix = plan.intent === "REASONING" ? "Let's build on that one small step at a time." : "Let's take it one small step at a time.";
+      return { message: lead(prefix), question: `Step ${idx + 1}: ${c.steps[idx]}` };
+    }
+    case "VISUAL_NUMBER_LINE":
+      return { message: lead(`Try making a quick sketch or a small table of what you know. ${c.context.message}`), question: c.context.question };
+    case "REAL_CONTEXT":
+      return { message: lead(c.context.message), question: c.context.question };
+    case "WORKED_ANALOGOUS": {
+      const attempted = Number(String(plan.evaluation.attempted ?? "").replace(/[^\d.\-]/g, ""));
+      const ex = exampleFor(c, [plan.coachAvoid ?? Number.NaN, plan.evaluation.attempted === undefined ? Number.NaN : attempted]);
+      if (!ex) {
+        const idx = stepFor("DECOMPOSE_STEPS");
+        return { message: lead("Let's take it one small step at a time."), question: `Step ${idx + 1}: ${c.steps[idx]}` };
+      }
+      return {
+        message: lead(`Here's a similar problem with different numbers, worked out: ${ex.problem} ${ex.steps.map((s, i) => `${i + 1}. ${s}`).join(" ")}`),
+        question: "What is the same and what is different in your problem?",
+      };
+    }
+    case "TARGET_MISCONCEPTION": {
+      const attempted = Number(String(plan.evaluation.attempted ?? "").replace(/[^\d.\-]/g, ""));
+      const hit = slipFor(c, plan.evaluation.attempted === undefined ? undefined : attempted);
+      return hit ? { message: lead(hit.message), question: hit.question } : { message: lead(c.check.message), question: c.check.question };
+    }
+    case "EMPATHIZE_AND_SHRINK":
+      return { message: lead("It's okay to feel stuck here; this topic is tricky for many people, and you're still trying. Let's make it really small."), question: `Just this one thing: ${c.steps[0].charAt(0).toLowerCase()}${c.steps[0].slice(1)}` };
+    case "REDIRECT_TO_THINKING":
+      return { message: lead("I know it's tempting to just ask for the answer. I'd rather help you find it, so you can do the next one on your own."), question: c.steps[0] };
+    default:
+      return undefined;
+  }
+}
+
 function realizeDraftEN(plan: ResponsePlan, ctx: RealizeContext, seed: number): Draft {
   const p = plan.activeProblem;
   const ack = ackFor(plan, ctx, seed);
   const lead = (text: string) => [ack, text].filter(Boolean).join(" ");
   const state = ctx.state;
   const top = ctx.sources[0];
+
+  // Phase 40: a question the integer engine cannot parse (polygons, percentages, rates...) is coached from its topic pack.
+  if (plan.coach && !p && !(plan.strategy === "REVIEW_KEY_IDEAS" && top)) {
+    const coached = realizeCoached(plan, ctx, lead);
+    if (coached) return coached;
+  }
 
   switch (plan.strategy) {
     case "OPEN_PROBLEM":
@@ -268,6 +331,12 @@ function realizeDraftEN(plan: ResponsePlan, ctx: RealizeContext, seed: number): 
       if (p && kindOf(p) !== "BINARY") {
         const pq = priorQuestion(p);
         return { message: lead(pq.message), question: pq.question };
+      }
+      if (!integerTopic(ctx, p)) {
+        return {
+          message: lead(`Let's go back to the basics of ${lessonName(ctx)}.`),
+          question: pickVariant(["What does the problem tell you, and what is it asking you to find?", "Which idea from the lesson do you think applies here, and why?"], seed, (q) => state.lastTutorQuestion === q),
+        };
       }
       const variants: Draft[] = [
         { message: lead("Let's go back to a basic idea. A negative number is a number to the left of zero on the number line, and the absolute value of a number is its distance from zero."), question: p ? `What is the absolute value of ${wrap(p.a)}, and what does that tell us about where it sits?` : "In your own words, what does the absolute value of a number tell us?" },
@@ -308,6 +377,7 @@ function realizeDraftEN(plan: ResponsePlan, ctx: RealizeContext, seed: number): 
     }
     case "REAL_CONTEXT": {
       const st = p ? story(p) : undefined;
+      if (!st && !integerTopic(ctx, p)) return { message: lead("Try connecting this to everyday life, such as money, travel or measuring something."), question: "Can you think of a real situation where you would use this idea?" };
       if (!st) return { message: lead("Think of temperatures: above zero is warm, below zero is freezing, and combining them is about which one is bigger."), question: "If it is 5 degrees below zero and warms up by 3 degrees, is it still below zero?" };
       return { message: lead(st.text), question: st.question };
     }
@@ -376,6 +446,7 @@ function realizeDraftEN(plan: ResponsePlan, ctx: RealizeContext, seed: number): 
         const excerpt = bestSentences(top.text, plan.studentQuote ?? "", 2, 320);
         return { message: lead(`Here is the key idea from ${top.origin === "TEACHER_NOTE" ? "your teacher's note" : `"${top.title}"`} (${top.sectionLabel}): "${excerpt}"`), question: "In your own words, what is the main idea, and where might you use it?", citedSourceIds: [top.sourceId] };
       }
+      if (!integerTopic(ctx, p)) return { message: lead(`Let's recap ${lessonName(ctx)}.`), question: "In your own words, what is the main idea, and which part feels least clear to you?" };
       return { message: lead(`Let's recap ${lessonName(ctx)}: numbers have a size and a sign, and the sign tells us direction from zero.`), question: "Which part of that feels least clear to you?" };
     }
     case "REDIRECT_TO_THINKING":

@@ -76,7 +76,7 @@ export function Navbar({ currentPath = "/", onNavigate }: NavbarProps) {
                 <Database className="w-3 h-3 text-slate-500" />
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 <span>
-                  {dbStatus?.provider === "neon-postgresql" ? "Neon PostgreSQL" : "Sandbox DB"}
+                  {dbStatus?.provider === "neon-postgresql" ? "Database connected" : "Demo data (not saved)"}
                 </span>
               </div>
             </div>
@@ -119,9 +119,14 @@ export function Navbar({ currentPath = "/", onNavigate }: NavbarProps) {
                 <div className="flex items-center gap-2.5 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-1.5">
                   <div className="flex items-center gap-1.5">
                     {getRoleIcon()}
-                    <span className="text-xs font-semibold text-slate-800 max-w-[120px] truncate">
+                    <a
+                      href="/account"
+                      onClick={(e) => handleLinkClick(e, "/account")}
+                      title="My account"
+                      className="text-xs font-semibold text-slate-800 max-w-[120px] truncate hover:underline"
+                    >
                       {user.name}
-                    </span>
+                    </a>
                   </div>
                   <Badge variant="secondary" className="text-[10px] py-0">
                     {user.role}
@@ -161,6 +166,12 @@ export function Navbar({ currentPath = "/", onNavigate }: NavbarProps) {
 
             {/* Mobile Menu Button */}
             <div className="flex md:hidden items-center gap-2">
+              {!user && (
+                <Button variant="primary" size="sm" onClick={() => setAuthModalOpen(true)}className="gap-1.5">
+                  <LogIn className="w-4 h-4" />
+                  <span>Sign In</span>
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
@@ -180,7 +191,7 @@ export function Navbar({ currentPath = "/", onNavigate }: NavbarProps) {
             {user ? (
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
                 <div>
-                  <p className="text-xs font-semibold text-slate-900">{user.name}</p>
+                  <a href="/account" onClick={(e) => handleLinkClick(e, "/account")} className="text-xs font-semibold text-slate-900 hover:underline">{user.name}</a>
                   <p className="text-[11px] text-slate-500">{user.email}</p>
                 </div>
                 <div className="flex items-center gap-2">

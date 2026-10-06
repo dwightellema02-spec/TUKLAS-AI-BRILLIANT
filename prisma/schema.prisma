@@ -142,6 +142,16 @@ model User {
   passwordHash String
   role         UserRole @default(STUDENT)
   gradeLevel   Int? // Optional grade (e.g. 7 for Grade 7 student)
+  /// Bumped to revoke every session token issued before (password change, "sign out everywhere", admin action).
+  sessionVersion Int       @default(0)
+  /// When set the account cannot sign in and existing sessions stop working.
+  disabledAt     DateTime?
+  /// Phase 43: the privacy notice this person accepted (version + time). Null = not accepted yet (admin-created or older accounts see it on next sign-in).
+  privacyNoticeVersion String?
+  privacyAcceptedAt    DateTime?
+  /// Phase 43: a teacher or administrator recorded that the student's parent/guardian consent is on file (students under 18).
+  guardianConsentAt         DateTime?
+  guardianConsentRecordedBy String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -219,6 +229,8 @@ model Unit {
   sequenceOrder Int
   title         String // e.g. "Numbers and Algebraic Expressions"
   description   String?
+  /// Phase 41: who added it (null = shipped with the platform: any teacher may edit it, like lessons without an author)
+  createdById   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -352,6 +364,7 @@ model Competency {
   code          String // e.g. "M7NS-Ia-1"
   statement     String // DepEd MATATAG Competency statement
   sequenceOrder Int
+  createdById   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -368,6 +381,7 @@ model Skill {
   description   String?
   sequenceOrder Int
   difficulty    Float    @default(1.0) // 1.0 to 5.0
+  createdById   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -933,9 +947,28 @@ model Classroom {
   enrollments           ClassroomEnrollment[]
   assignments           Assignment[]
   assessmentAssignments AssessmentAssignment[]
+  lessonUnlocks         LessonUnlock[]
 
   @@index([teacherId])
   @@index([gradeLevel])
+}
+
+/// Phase 39: a teacher opens a lesson that the course sequence would still keep locked, for a whole class (studentId = "")
+/// or for one student of the class. The lesson must still be published; the student's own progress is never altered.
+model LessonUnlock {
+  id          String   @id @default(uuid())
+  classroomId String
+  lessonId    String
+  /// "" = every student of the class; otherwise one student's id
+  studentId   String   @default("")
+  createdById String
+  createdAt   DateTime @default(now())
+
+  classroom Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+
+  @@unique([classroomId, lessonId, studentId])
+  @@index([classroomId])
+  @@index([studentId])
 }
 
 model ClassroomEnrollment {
@@ -1115,4 +1148,23 @@ model ResearchMetricRecord {
   @@index([skillId])
   @@index([lessonId])
   @@index([calculatedAt])
+}
+
+// -------------------------------------------------------------
+// PHASE 30: AUDIT LOG (who did what to which account / answer key)
+// -------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String? // null for system events or failed sign-ins
+  action     String // e.g. "admin.user.disable", "auth.password.change"
+  targetType String? // "user" | "lesson" | "block" ...
+  targetId   String?
+  detail     String? // small JSON string, never secrets
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@index([action])
 }

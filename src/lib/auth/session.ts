@@ -11,6 +11,8 @@ export interface SessionPayload {
   email: string;
   name: string;
   role: UserRole;
+  /** Session version the token was issued under; a token is honoured only while it matches the account's current version. */
+  sv?: number;
   createdAt: number;
   expiresAt: number;
 }
@@ -43,6 +45,7 @@ export function createSessionToken(user: {
   email: string;
   name: string;
   role: UserRole;
+  sessionVersion?: number;
 }): string {
   const now = Date.now();
   const payload: SessionPayload = {
@@ -50,6 +53,7 @@ export function createSessionToken(user: {
     email: user.email,
     name: user.name,
     role: user.role,
+    sv: user.sessionVersion ?? 0,
     createdAt: now,
     expiresAt: now + SESSION_DURATION_MS,
   };
@@ -66,7 +70,9 @@ export function verifySessionToken(token: string): SessionPayload | null {
     if (!encodedPayload || !signature) return null;
 
     const expectedSignature = signData(encodedPayload);
-    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+    const given = Buffer.from(signature);
+    const expected = Buffer.from(expectedSignature);
+    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
       return null;
     }
 

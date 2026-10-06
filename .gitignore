@@ -6,6 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+!.env.production.example
 storage/
 eval-output/
 data/users-persistence.json
+backups/

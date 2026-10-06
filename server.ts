@@ -8,9 +8,10 @@ import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
-import { dbService, fallbackStore } from "./src/lib/db.ts";
+import { dbService, fallbackStore, LessonIncompleteError, hasValidDatabaseUrl, prisma } from "./src/lib/db.ts";
 import { hashPassword, verifyPassword } from "./src/lib/auth/password.ts";
 import { createSessionToken, verifySessionToken, SessionPayload } from "./src/lib/auth/session.ts";
+import { gradeChoiceAnswer, toStudentBlockView } from "./src/lib/lesson/block-grading.ts";
 import { validateEmail, validatePassword, validateNewPassword, validateName, validateRole } from "./src/lib/auth/validation.ts";
 import { checkLoginThrottle, recordLoginFailure, clearLoginFailures } from "./src/lib/auth/login-throttle.ts";
 import { canUserAccessPath } from "./src/lib/auth/rbac.ts";
@@ -27,41 +28,243 @@ import { MasteryEngine } from "./src/lib/mastery/index.ts";
 import { StudentDashboardService } from "./src/lib/dashboard/index.ts";
 import { TeacherService, TeacherAIService } from "./src/lib/teacher/index.ts";
 import { ClassroomService, ClassroomError } from "./src/lib/classroom/classroom-service.ts";
-import { AssessmentService, ResearchService, ResearchExporter } from "./src/lib/research/index.ts";
+import { StructureService, StructureError } from "./src/lib/curriculum/structure-service.ts";
+import { PrivacyService, PrivacyError } from "./src/lib/privacy/privacy-service.ts";
+import { PRIVACY_NOTICE_VERSION, buildPrivacyNotice, privacySettingsFromEnv } from "./src/config/privacy-notice.ts";
+import { pseudonymFor } from "./src/lib/privacy/pseudonym.ts";
+import { ClassroomRepo } from "./src/lib/classroom/classroom-repo.ts";
+import { ResearchData, type ResearchScope } from "./src/lib/research/research-data.ts";
+import { AssessmentService, AssessmentError, ResearchService, ResearchExporter } from "./src/lib/research/index.ts";
 
 dotenv.config();
 
 const app = express();
+// set when SIGTERM arrives (see startServer): from then on every answer carries "Connection: close" so clients stop reusing the socket
+let shuttingDown = false;
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  // decided when the answer is written, not when the request arrived: a request already in flight when SIGTERM comes must get it too
+  const writeHead = res.writeHead.bind(res) as (...a: unknown[]) => Response;
+  res.writeHead = ((...a: unknown[]) => { if (shuttingDown) res.setHeader("Connection", "close"); return writeHead(...a); }) as typeof res.writeHead;
+  next();
+});
 if (process.env.TRUST_PROXY === "true") app.set("trust proxy", 1);
 
 // A real bcrypt hash of a random value, used to equalise timing for unknown emails.
 const DUMMY_PASSWORD_HASH = "$2b$10$CwTycUXWue0Thq9StjUM0uJ8y3wRZBZl4kG5K2D9wH5g8h4mJrJ1e";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const isProd = process.env.NODE_ENV === "production";
+const APP_VERSION: string = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "package.json"), "utf-8")).version;
+
+// Without a PostgreSQL database the app serves the in-memory DEMO accounts, whose password is public.
+// A production server must therefore either have a database or be started in an explicitly acknowledged demo mode.
+const DEMO_MODE_ACK = "I_UNDERSTAND_DEMO_ACCOUNTS_ARE_PUBLIC";
+if (isProd && !hasValidDatabaseUrl && process.env.ALLOW_DEMO_MODE !== DEMO_MODE_ACK) {
+  console.error(
+    "Refusing to start in production without a PostgreSQL DATABASE_URL: the in-memory demo accounts have a public password. " +
+      `For a throwaway demo only, set ALLOW_DEMO_MODE=${DEMO_MODE_ACK}.`
+  );
+  process.exit(1);
+}
+if (isProd && !hasValidDatabaseUrl) {
+  console.warn("WARNING: DEMO MODE. Public demo accounts are enabled and all data is lost on restart. Do not put real student data here.");
+}
 
 app.use(express.json());
 
-// Helper to extract session from Cookie or Bearer header
-function getSessionFromRequest(req: Request): SessionPayload | null {
-  const cookieHeader = req.headers.cookie;
-  let token: string | undefined;
+// ---- Security headers ----
+const ALLOW_EMBEDDING = process.env.ALLOW_EMBEDDING === "true";
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), geolocation=()");
+  if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store"); // API answers can contain personal data
+  if (isProd) {
+    if (!ALLOW_EMBEDDING) res.setHeader("X-Frame-Options", "DENY");
+    // Scripts only from this site (no inline or eval), so an injected <script> cannot run. Styles allow inline because the
+    // app sets some element styles; images may come from any https site (teacher-supplied pictures, video thumbnails);
+    // videos are embedded from YouTube only. CSP_REPORT_ONLY=true reports violations without blocking.
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: https:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+      "media-src 'self' https:",
+      "frame-src https://www.youtube-nocookie.com https://www.youtube.com",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      ALLOW_EMBEDDING ? "frame-ancestors *" : "frame-ancestors 'none'",
+    ].join("; ");
+    res.setHeader(process.env.CSP_REPORT_ONLY === "true" ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy", csp);
+  }
+  if (isProd && (req.secure || req.headers["x-forwarded-proto"] === "https")) {
+    res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+  }
+  next();
+});
 
+// ---- Rate limits (in-memory, per process) ----
+const rateBuckets = new Map<string, number[]>();
+function rateCheck(key: string, limit: number, windowMs: number): { ok: boolean; retryAfter: number } {
+  const now = Date.now();
+  const hits = (rateBuckets.get(key) ?? []).filter((t) => now - t < windowMs);
+  if (hits.length >= limit) {
+    rateBuckets.set(key, hits);
+    return { ok: false, retryAfter: Math.max(1, Math.ceil((hits[0] + windowMs - now) / 1000)) };
+  }
+  hits.push(now);
+  rateBuckets.set(key, hits);
+  if (rateBuckets.size > 20000) for (const [k, v] of rateBuckets) if (!v.length || now - v[v.length - 1] > windowMs) rateBuckets.delete(k);
+  return { ok: true, retryAfter: 0 };
+}
+/** Returns false (after sending 429) when the key is over its limit. */
+function allowRate(res: Response, key: string, limit: number, windowMs: number): boolean {
+  const r = rateCheck(key, limit, windowMs);
+  if (!r.ok) {
+    res.setHeader("Retry-After", String(r.retryAfter));
+    res.status(429).json({ error: "Too many requests. Please wait a moment and try again." });
+  }
+  return r.ok;
+}
+// Request ceilings (Phase 42). A school's students all reach the server from ONE address, so a per-address ceiling alone throttled a class of 45
+// (470 of 1,670 requests refused in the load test). Now: signed-in requests are limited per ACCOUNT (a runaway tab or script is stopped
+// without touching anyone else), with only a very high ceiling on the shared address; requests with no valid session (the sign-in and
+// registration floods this exists for) keep the strict per-address ceiling. Enabled in production; 0 turns a limit off.
+//   API_RATE_LIMIT_PER_MINUTE                (anonymous, per address)           default 1200
+//   API_RATE_LIMIT_USER_PER_MINUTE           (signed in, per account)           default 600
+//   API_RATE_LIMIT_SIGNED_IN_IP_PER_MINUTE   (signed in, per shared address)    default 20000
+const API_LIMIT = Number(process.env.API_RATE_LIMIT_PER_MINUTE ?? (isProd ? 1200 : 0));
+const USER_LIMIT = Number(process.env.API_RATE_LIMIT_USER_PER_MINUTE ?? (isProd ? 600 : 0));
+const SIGNED_IN_IP_LIMIT = Number(process.env.API_RATE_LIMIT_SIGNED_IN_IP_PER_MINUTE ?? (isProd ? 20000 : 0));
+// (the request ceilings are applied below, after the session has been read)
+
+// Internal details (database errors, file paths, stack traces) must not reach the browser: replace them, keep the log.
+const INTERNAL_ERROR = /prisma|invalid `|unique constraint|foreign key|econn|enotfound|etimedout|sqlstate|\bat [\w.<>]+ \(|\/home\/|node_modules|postgres(ql)?:\/\//i;
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const original = res.json.bind(res);
+  res.json = ((body: any) => {
+    if (res.statusCode >= 500 && body && typeof body.error === "string" && INTERNAL_ERROR.test(body.error)) {
+      console.error(`INTERNAL ERROR ${req.method} ${req.path}: ${body.error.slice(0, 500)}`);
+      body = { ...body, error: "Something went wrong on our side. Please try again later." };
+    }
+    return original(body);
+  }) as typeof res.json;
+  next();
+});
+
+// ---- CSRF defence for cookie-authenticated requests ----
+// Layer 1: the session cookie is SameSite=Lax (see cookieOptions). Layer 2 (this): state-changing /api requests that
+// a browser marks as cross-site, or whose Origin is not this site (or ALLOWED_ORIGINS), are refused. Requests that
+// carry an Authorization header are exempt: a forged cross-site form or fetch cannot set that header.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
+app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+  if (req.headers.authorization?.startsWith("Bearer ")) return next();
+  const origin = req.headers.origin as string | undefined;
+  const fetchSite = req.headers["sec-fetch-site"] as string | undefined;
+  const host = String((process.env.TRUST_PROXY === "true" && req.headers["x-forwarded-host"]) || req.headers.host || "");
+  let allowed = true;
+  if (origin !== undefined) {
+    try { allowed = new URL(origin).host === host || ALLOWED_ORIGINS.includes(origin); } catch { allowed = false; }
+  } else if (fetchSite === "cross-site") {
+    allowed = false;
+  }
+  if (!allowed) {
+    console.warn(`CSRF BLOCKED ${req.method} ${req.path} origin=${origin ?? "-"} site=${fetchSite ?? "-"}`);
+    return res.status(403).json({ error: "Cross-site request blocked." });
+  }
+  return next();
+});
+
+// Helper to extract session from Cookie or Bearer header
+// ---- Sessions ----
+// The signed token only proves who issued it. On EVERY API request the account is looked up and the token is honoured
+// only if the account still exists, is enabled, and the token's session version is current. The role/name/email used
+// by the routes are the account's CURRENT ones, so a role change or a revocation takes effect immediately.
+const SESSION_KEY = "__tuklasSession";
+
+function readSessionToken(req: Request): string | undefined {
+  const cookieHeader = req.headers.cookie;
   if (cookieHeader) {
     const cookies = Object.fromEntries(
       cookieHeader.split(";").map((c) => {
         const [k, ...v] = c.trim().split("=");
-        return [k, decodeURIComponent(v.join("="))];
+        try { return [k, decodeURIComponent(v.join("="))]; } catch { return [k, ""]; }
       })
     );
-    token = cookies["tuklas_session"];
+    if (cookies["tuklas_session"]) return cookies["tuklas_session"];
   }
+  if (req.headers.authorization?.startsWith("Bearer ")) return req.headers.authorization.split("Bearer ")[1];
+  return undefined;
+}
 
-  if (!token && req.headers.authorization?.startsWith("Bearer ")) {
-    token = req.headers.authorization.split("Bearer ")[1];
+app.use(async (req: Request, _res: Response, next: NextFunction) => {
+  (req as any)[SESSION_KEY] = null;
+  try {
+    const token = readSessionToken(req);
+    const payload = token ? verifySessionToken(token) : null;
+    if (payload) {
+      const state = await dbService.getAuthState(payload.userId);
+      if (state && !state.disabled && state.sessionVersion === (payload.sv ?? 0)) {
+        (req as any)[SESSION_KEY] = { ...payload, role: state.role, email: state.email, name: state.name, privacyOk: state.privacyNoticeVersion === PRIVACY_NOTICE_VERSION, guardianConsent: state.guardianConsent } as SessionPayload;
+      }
+    }
+  } catch (e) {
+    if (hasValidDatabaseUrl) console.error("Session check failed (treated as signed out):", e instanceof Error ? e.message : e);
   }
+  next();
+});
 
-  if (!token) return null;
-  return verifySessionToken(token);
+// Phase 43: until a person has accepted the current privacy notice they can do nothing but read it, accept it, download their data and sign out.
+// On in production (and when REQUIRE_PRIVACY_ACCEPTANCE=true); off in development so the sandbox and the older test suites keep working.
+const REQUIRE_PRIVACY_ACCEPTANCE = process.env.REQUIRE_PRIVACY_ACCEPTANCE ? process.env.REQUIRE_PRIVACY_ACCEPTANCE === "true" : isProd;
+const REQUIRE_GUARDIAN_CONSENT = process.env.REQUIRE_GUARDIAN_CONSENT === "true";
+const PRIVACY_EXEMPT = /^\/(auth\/|privacy-notice$|me\/data-export$|health$|ready$)/;
+app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+  const session = getSessionFromRequest(req) as (SessionPayload & { privacyOk?: boolean }) | null;
+  if (REQUIRE_PRIVACY_ACCEPTANCE && session && session.privacyOk === false && !PRIVACY_EXEMPT.test(req.path)) {
+    return res.status(403).json({ error: "Please read and accept the privacy notice first.", code: "PRIVACY_NOT_ACCEPTED" });
+  }
+  return next();
+});
+
+// Applied here, after the session middleware, because the ceiling depends on who is signed in.
+app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+  if (req.path === "/health" || req.path === "/ready") return next();
+  const session = getSessionFromRequest(req);
+  const ip = req.ip ?? "unknown";
+  if (session) {
+    if (USER_LIMIT && !allowRate(res, `user:${session.userId}`, USER_LIMIT, 60_000)) return;
+    if (SIGNED_IN_IP_LIMIT && !allowRate(res, `ipauth:${ip}`, SIGNED_IN_IP_LIMIT, 60_000)) return;
+    return next();
+  }
+  if (API_LIMIT && !allowRate(res, `ip:${ip}`, API_LIMIT, 60_000)) return;
+  return next();
+});
+
+function getSessionFromRequest(req: Request): SessionPayload | null {
+  return ((req as any)[SESSION_KEY] as SessionPayload | null) ?? null;
+}
+
+// Cookie policy: HttpOnly always; Secure on https/production; SameSite=Lax unless COOKIE_SAMESITE says otherwise
+// (set it to "none" only if the app must work inside a cross-site iframe; the Origin check below still applies).
+function cookieOptions(req: Request) {
+  const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
+  const configured = (process.env.COOKIE_SAMESITE || "lax").toLowerCase();
+  const sameSite = (["lax", "strict", "none"].includes(configured) ? configured : "lax") as "lax" | "strict" | "none";
+  return { httpOnly: true, secure: isHttps || isProd || sameSite === "none", sameSite, path: "/" };
+}
+
+function issueSession(req: Request, res: Response, user: { id: string; email: string; name: string; role: any; sessionVersion?: number }): string {
+  const token = createSessionToken({ id: user.id, email: user.email, name: user.name, role: user.role, sessionVersion: user.sessionVersion ?? 0 });
+  res.cookie("tuklas_session", token, { ...cookieOptions(req), maxAge: 1000 * 60 * 60 * 24 * 7 });
+  return token;
+}
+
+function clearSessionCookie(req: Request, res: Response) {
+  res.clearCookie("tuklas_session", cookieOptions(req));
 }
 
 // -------------------------------------------------------------
@@ -71,7 +274,9 @@ function getSessionFromRequest(req: Request): SessionPayload | null {
 app.post("/api/auth/register", async (req: Request, res: Response) => {
   try {
     console.log("AUTH REGISTER START");
-    const { name, email, password, gradeLevel } = req.body;
+    const { name, email, password, gradeLevel, acceptPrivacy } = req.body;
+    // (a client that does not send it still gets an account when enforcement is off; the web app then shows the notice before anything else)
+    if (acceptPrivacy !== true && REQUIRE_PRIVACY_ACCEPTANCE) return res.status(400).json({ success: false, error: "Please read and accept the privacy notice to create an account.", code: "PRIVACY_NOT_ACCEPTED" });
 
     const validatedEmail = validateEmail(email);
     const validatedPass = validateNewPassword(password);
@@ -83,7 +288,7 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
     // Check existing user by normalized email
     const existing = await dbService.findUserByEmail(validatedEmail);
     if (existing) {
-      console.log("AUTH REGISTER DUPLICATE REJECTED:", validatedEmail);
+      console.log("AUTH REGISTER DUPLICATE REJECTED");
       return res.status(409).json({ success: false, error: "An account with this email already exists" });
     }
 
@@ -94,25 +299,13 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
       passwordHash,
       role: assignedRole,
       gradeLevel: typeof gradeLevel === "number" ? gradeLevel : 7,
+      ...(acceptPrivacy === true ? { privacyNoticeVersion: PRIVACY_NOTICE_VERSION } : {}),
     });
     console.log("AUTH REGISTER DATABASE INSERT SUCCESS - userId:", user.id);
 
-    const token = createSessionToken({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-    });
+    const token = issueSession(req, res, user as any);
     console.log("AUTH SESSION CREATED");
 
-    const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
-    res.cookie("tuklas_session", token, {
-      httpOnly: true,
-      secure: isHttps || isProd,
-      sameSite: isHttps || isProd ? "none" : "lax",
-      path: "/",
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-    });
 
     return res.status(201).json({
       success: true,
@@ -162,25 +355,18 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
       console.log("AUTH LOGIN REJECTED: Incorrect password");
       return res.status(401).json({ success: false, error: "Invalid email or password" });
     }
+    if ((user as any).disabledAt) {
+      // Same answer as a wrong password: do not reveal which accounts exist or are disabled.
+      recordLoginFailure(throttleKeys);
+      await dbService.recordAudit({ actorId: user.id, action: "auth.login.blocked_disabled", targetType: "user", targetId: user.id, ip: req.ip });
+      return res.status(401).json({ success: false, error: "Invalid email or password" });
+    }
     clearLoginFailures([throttleKeys[0]]);
     console.log("AUTH LOGIN PASSWORD CHECK SUCCESS");
 
-    const token = createSessionToken({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-    });
+    const token = issueSession(req, res, user as any);
     console.log("AUTH SESSION CREATED");
 
-    const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
-    res.cookie("tuklas_session", token, {
-      httpOnly: true,
-      secure: isHttps || isProd,
-      sameSite: isHttps || isProd ? "none" : "lax",
-      path: "/",
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-    });
 
     return res.json({
       success: true,
@@ -199,64 +385,127 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/auth/logout", (_req: Request, res: Response) => {
-  const isHttps = _req.secure || _req.headers["x-forwarded-proto"] === "https";
-  res.clearCookie("tuklas_session", {
-    path: "/",
-    secure: isHttps || isProd,
-    sameSite: isHttps || isProd ? "none" : "lax",
-  });
+app.post("/api/auth/logout", (req: Request, res: Response) => {
+  clearSessionCookie(req, res);
   return res.json({ success: true, message: "Logged out successfully" });
+});
+
+// Revokes every session of the signed-in user (all devices, including a stolen token); the user signs in again.
+app.post("/api/auth/logout-all", async (req: Request, res: Response) => {
+  const session = getSessionFromRequest(req);
+  if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+  await dbService.revokeSessions(session.userId);
+  await dbService.recordAudit({ actorId: session.userId, action: "auth.sessions.revoke_all", targetType: "user", targetId: session.userId, ip: req.ip });
+  clearSessionCookie(req, res);
+  return res.json({ success: true, message: "Signed out everywhere. Sign in again to continue." });
 });
 
 app.get("/api/auth/me", async (req: Request, res: Response) => {
   const session = getSessionFromRequest(req);
   if (!session) {
+    clearSessionCookie(req, res);
     return res.status(401).json({ success: false, user: null, error: "No active session" });
   }
-  console.log("AUTH SESSION VERIFIED");
-
-  // Verify against database that user still exists
-  const user = await dbService.findUserById(session.userId);
-  if (!user) {
-    const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
-    res.clearCookie("tuklas_session", {
-      path: "/",
-      secure: isHttps || isProd,
-      sameSite: isHttps || isProd ? "none" : "lax",
-    });
-    return res.status(401).json({ success: false, user: null, error: "User record not found" });
-  }
-
-  return res.json({
-    success: true,
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-    },
-  });
+  // The session middleware already checked the account (exists, enabled, current session version).
+  const state = await PrivacyService.getState(session.userId).catch(() => null);
+  return res.json({ success: true, user: { id: session.userId, email: session.email, name: session.name, role: session.role }, privacy: state ? { ...state, required: REQUIRE_PRIVACY_ACCEPTANCE } : null });
 });
+
+// ---- Phase 43: privacy ----
+const privacyRoute = (fn: (actor: { userId: string; role: string }, req: Request, res: Response) => Promise<unknown>, fallback: string, okStatus = 200) =>
+  async (req: Request, res: Response) => {
+    try {
+      const session = getSessionFromRequest(req);
+      if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+      const data = await fn(actorOf(session), req, res);
+      if (res.headersSent) return;
+      return res.status(okStatus).json({ data });
+    } catch (error: unknown) {
+      if (error instanceof PrivacyError) return res.status(error.status).json({ error: error.message });
+      console.error(fallback, error);
+      return res.status(500).json({ error: fallback });
+    }
+  };
+// the notice itself is public (it is shown before an account exists)
+app.get("/api/privacy-notice", (_req: Request, res: Response) => res.json({ data: buildPrivacyNotice(privacySettingsFromEnv()) }));
+app.post("/api/auth/accept-privacy", privacyRoute(async (a) => { await PrivacyService.acceptNotice(a.userId); return PrivacyService.getState(a.userId); }, "Failed to record acceptance"));
+app.post("/api/teacher/students/:studentId/guardian-consent", privacyRoute((a, req) => PrivacyService.setGuardianConsent(a, req.params.studentId, req.body?.given), "Failed to record guardian consent"));
+// access to one's own data: a file the person can keep
+app.get("/api/me/data-export", privacyRoute(async (a, _req, res) => {
+  const data = await PrivacyService.exportUserData(a.userId);
+  await dbService.recordAudit({ actorId: a.userId, action: "privacy.export.self", targetType: "user", targetId: a.userId, ip: undefined });
+  res.setHeader("Content-Disposition", `attachment; filename="tuklas-my-data-${Date.now()}.json"`);
+  res.json({ data });
+}, "Failed to export data"));
+app.get("/api/admin/users/:userId/data-export", privacyRoute(async (a, req, res) => {
+  if (a.role !== "ADMIN") throw new PrivacyError("Forbidden: Administrator access required.", 403);
+  const data = await PrivacyService.exportUserData(req.params.userId);
+  await dbService.recordAudit({ actorId: a.userId, action: "privacy.export.admin", targetType: "user", targetId: req.params.userId });
+  res.setHeader("Content-Disposition", `attachment; filename="tuklas-data-${Date.now()}.json"`);
+  res.json({ data });
+}, "Failed to export data"));
+app.post("/api/admin/users/:userId/erase", privacyRoute(async (a, req) => {
+  const r = await PrivacyService.eraseUser(a, req.params.userId, req.body?.confirmEmail);
+  // the record names no one: the account no longer exists, and the log must not keep the personal data that was just erased
+  await dbService.recordAudit({ actorId: a.userId, action: "privacy.erase", targetType: "user", targetId: req.params.userId, detail: { role: r.role } });
+  return { erased: true };
+}, "Failed to erase the account"));
 
 // -------------------------------------------------------------
 // API: DATABASE & CURRICULUM VERIFICATION ROUTES
 // -------------------------------------------------------------
 
+// Liveness: the process answers. Public, so it says nothing about the database beyond "connected or not" (connection errors can name hosts).
 app.get("/api/health", async (_req: Request, res: Response) => {
   const status = await dbService.getStatus();
   return res.json({
     status: "ok",
-    database: status,
+    database: { connected: status.connected, provider: status.provider },
     timestamp: new Date().toISOString(),
-    version: "0.2.0-phase2",
+    version: APP_VERSION,
   });
 });
 
-app.get("/api/curriculum", async (_req: Request, res: Response) => {
+// Readiness (Phase 42): the app can do its job. The database answers and every migration has finished (none failed half-way).
+// 503 means "do not send traffic yet"; the reason is logged, not returned.
+app.get("/api/ready", async (_req: Request, res: Response) => {
+  const notReady = (why: string) => { console.error(`NOT READY: ${why}`); return res.status(503).json({ ready: false }); };
+  if (!hasValidDatabaseUrl) return res.json({ ready: true, mode: "demo" });
   try {
-    const curriculum = await dbService.getCurriculum();
-    return res.json({ data: curriculum });
+    await prisma.$queryRaw`SELECT 1`;
+    const rows = await prisma.$queryRawUnsafe<Array<{ migration_name: string; finished_at: Date | null; rolled_back_at: Date | null }>>(
+      `SELECT migration_name, finished_at, rolled_back_at FROM _prisma_migrations ORDER BY started_at`
+    ).catch(() => null);
+    if (rows === null) return notReady("no migration history (run `npm run db:migrate`)");
+    const broken = rows.filter((r) => !r.finished_at && !r.rolled_back_at);
+    if (broken.length > 0) return notReady(`unfinished migration(s): ${broken.map((b) => b.migration_name).join(", ")}`);
+    return res.json({ ready: true });
+  } catch (e) {
+    return notReady(`database unreachable: ${e instanceof Error ? e.message.slice(0, 200) : "unknown"}`);
+  }
+});
+
+app.get("/api/curriculum", async (req: Request, res: Response) => {
+  try {
+    const curriculum: any = await dbService.getCurriculum();
+    const session = getSessionFromRequest(req);
+    const staff = !!session && (session.role === "TEACHER" || session.role === "ADMIN");
+    if (staff) return res.json({ data: curriculum });
+    // Anyone else (students, signed-out visitors) sees only published lessons, with answer keys removed.
+    const clean = (curriculum as any[]).map((subject) => ({
+      ...subject,
+      grades: (subject.grades ?? []).map((g: any) => ({
+        ...g,
+        terms: (g.terms ?? []).map((t: any) => ({
+          ...t,
+          units: (t.units ?? []).map((u: any) => ({
+            ...u,
+            lessons: (u.lessons ?? []).filter((l: any) => l.status === "PUBLISHED").map((l: any) => toStudentLessonView(l)),
+          })),
+        })),
+      })),
+    }));
+    return res.json({ data: clean });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load curriculum";
     return res.status(500).json({ error: message });
@@ -274,7 +523,7 @@ app.get("/api/lessons", async (req: Request, res: Response) => {
     const status = staff ? (req.query.status as LessonStatus | undefined) : ("PUBLISHED" as LessonStatus);
     const unitId = req.query.unitId as string | undefined;
     const lessons = await dbService.getLessons({ status, unitId });
-    return res.json({ data: lessons });
+    return res.json({ data: staff ? lessons : lessons.map((l: any) => toStudentLessonView(l)) });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load lessons";
     return res.status(500).json({ error: message });
@@ -283,15 +532,14 @@ app.get("/api/lessons", async (req: Request, res: Response) => {
 
 app.get("/api/lessons/:id", async (req: Request, res: Response) => {
   try {
+    const session = getSessionFromRequest(req);
+    if (!session) {
+      return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    }
     const { id } = req.params;
     const lesson = await dbService.getLessonById(id);
     if (!lesson) {
       return res.status(404).json({ error: "Lesson not found" });
-    }
-
-    const session = getSessionFromRequest(req);
-    if (!session) {
-      return res.status(401).json({ error: "Unauthorized: Please sign in." });
     }
     const staff = session.role === "TEACHER" || session.role === "ADMIN";
     // Non-staff roles can only view PUBLISHED lessons
@@ -371,7 +619,7 @@ app.put("/api/lessons/:id", async (req: Request, res: Response) => {
     return res.json({ data: updated });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to update lesson";
-    return res.status(500).json({ error: message });
+    return res.status(/^Invalid (sections|skills)/.test(message) ? 400 : 500).json({ error: message });
   }
 });
 
@@ -401,6 +649,7 @@ app.post("/api/lessons/:id/status", async (req: Request, res: Response) => {
       return res.status(400).json({ error: result.error });
     }
 
+    await dbService.recordAudit({ actorId: session.userId, action: "lesson.status", targetType: "lesson", targetId: id, detail: { to: targetStatus }, ip: req.ip });
     return res.json({ data: result.lesson });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to transition lesson status";
@@ -438,6 +687,9 @@ app.delete("/api/lessons/:id", async (req: Request, res: Response) => {
 
 app.get("/api/youtube/search", async (req: Request, res: Response) => {
   try {
+    const staff = requireStaff(req, res);
+    if (!staff) return;
+    if (!allowRate(res, `yt:${staff.userId}`, 30, 60_000)) return;
     const { query, grade, term, limit } = req.query;
     const response = await YouTubeService.searchVideos({
       query: query as string,
@@ -454,6 +706,9 @@ app.get("/api/youtube/search", async (req: Request, res: Response) => {
 
 app.post("/api/youtube/validate", async (req: Request, res: Response) => {
   try {
+    const staff = requireStaff(req, res);
+    if (!staff) return;
+    if (!allowRate(res, `yt:${staff.userId}`, 30, 60_000)) return;
     const { url } = req.body;
     const result = await YouTubeService.validateAndPreview(url);
     if (!result.isValid) {
@@ -474,6 +729,7 @@ app.post("/api/lessons/:id/video", async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
+    await dbService.assertCanEditLesson(id, session.role, session.userId);
     const { title, url, youtubeId, notes, metadata, channelName, thumbnailUrl, description, duration } = req.body;
 
     if (!url && !youtubeId) {
@@ -509,7 +765,7 @@ app.post("/api/lessons/:id/video", async (req: Request, res: Response) => {
     return res.status(201).json({ data: resource });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to attach video resource";
-    const status = message.includes("Forbidden") ? 403 : 500;
+    const status = ownershipStatus(message) ?? 500;
     return res.status(status).json({ error: message });
   }
 });
@@ -532,15 +788,17 @@ app.delete("/api/lessons/:id/video/:resourceId", async (req: Request, res: Respo
 });
 
 // Students must not see storage keys, content hashes, uploader ids or raw extraction diagnostics.
-function toStudentLessonView<T extends { resources?: unknown[] }>(lesson: T): T {
-  if (!lesson.resources) return lesson;
-  return {
-    ...lesson,
-    resources: lesson.resources.map((r) => {
+function toStudentLessonView<T extends { resources?: unknown[]; contentBlocks?: any[] }>(lesson: T): T {
+  const view: any = { ...lesson };
+  if (lesson.resources) {
+    view.resources = lesson.resources.map((r) => {
       const { storagePath, contentHash, addedBy, extractionError, charCount, ...safe } = r as Record<string, unknown>;
       return safe;
-    }),
-  };
+    });
+  }
+  // Questions and checkpoints: the correct answer and explanation stay on the server until graded.
+  if (lesson.contentBlocks) view.contentBlocks = lesson.contentBlocks.map((b) => toStudentBlockView(b));
+  return view;
 }
 
 // -------------------------------------------------------------
@@ -741,6 +999,8 @@ app.post("/api/lessons/:id/resources/:resourceId/generate-questions", async (req
       return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
     }
     const lesson = await dbService.assertCanEditLesson(req.params.id, session.role, session.userId);
+    // Each call can cost money with an external model.
+    if (!allowRate(res, `genq:${session.userId}`, 6, 10 * 60_000)) return;
     const resource = lesson.resources?.find((r: any) => r.id === req.params.resourceId);
     if (!resource) return res.status(404).json({ error: "Resource not found on this lesson." });
     if (resource.extractionStatus !== "EXTRACTED" && resource.extractionStatus !== "TRUNCATED") {
@@ -862,6 +1122,16 @@ app.get("/api/student/learning-path", async (req: Request, res: Response) => {
   }
 });
 
+// A student may only read or change state for a lesson they are currently allowed to open
+// (published, unlocked). Returns an error response and false when not allowed.
+async function ensureLessonAccess(res: Response, userId: string, lessonId: string): Promise<boolean> {
+  const access = await dbService.getLessonAccess(userId, lessonId);
+  if (access.allowed) return true;
+  const notFound = access.reason?.startsWith("Lesson does not exist");
+  res.status(notFound ? 404 : 403).json({ error: access.reason || "This lesson is locked." });
+  return false;
+}
+
 app.get("/api/student/lessons/:id/access", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
@@ -888,6 +1158,15 @@ app.post("/api/student/progress", async (req: Request, res: Response) => {
     if (!lessonId || !action) {
       return res.status(400).json({ error: "lessonId and action are required" });
     }
+    if (typeof lessonId !== "string" || !["START", "UPDATE_BLOCKS", "COMPLETE"].includes(action)) {
+      return res.status(400).json({ error: "Invalid lessonId or action" });
+    }
+    for (const n of [completedBlockIndex, totalBlocks]) {
+      if (n !== undefined && (!Number.isInteger(n) || n < 0 || n > 1000)) {
+        return res.status(400).json({ error: "completedBlockIndex and totalBlocks must be small non-negative integers" });
+      }
+    }
+    if (!(await ensureLessonAccess(res, session.userId, lessonId))) return;
 
     const updated = await dbService.updateStudentProgress(session.userId, lessonId, {
       action,
@@ -897,6 +1176,9 @@ app.post("/api/student/progress", async (req: Request, res: Response) => {
 
     return res.json({ data: updated });
   } catch (error: unknown) {
+    if (error instanceof LessonIncompleteError) {
+      return res.status(409).json({ error: error.message, missingBlockIds: error.missingBlockIds });
+    }
     const message = error instanceof Error ? error.message : "Failed to update progress";
     return res.status(500).json({ error: message });
   }
@@ -913,6 +1195,14 @@ app.post("/api/units/:unitId/reorder-lessons", async (req: Request, res: Respons
     const { orderedLessonIds } = req.body;
     if (!Array.isArray(orderedLessonIds)) {
       return res.status(400).json({ error: "orderedLessonIds must be an array of strings" });
+    }
+    // The order of a unit is shared by every teacher in it, so a teacher may reorder only a unit whose lessons
+    // they all authored; otherwise an administrator does it.
+    if (session.role !== "ADMIN") {
+      const lessonsInUnit: any[] = (await dbService.getLessons({ unitId })) as any[];
+      if (lessonsInUnit.some((l) => l.authorId && l.authorId !== session.userId)) {
+        return res.status(403).json({ error: "Forbidden: This unit contains another teacher's lessons. Ask an administrator to reorder it." });
+      }
     }
 
     const result = await dbService.reorderLessons(unitId, orderedLessonIds, session.role);
@@ -939,6 +1229,11 @@ app.post("/api/skills/:skillId/prerequisites", async (req: Request, res: Respons
     if (!Array.isArray(prerequisiteSkillIds)) {
       return res.status(400).json({ error: "prerequisiteSkillIds must be an array of strings" });
     }
+    // In database mode the skills live in the database: validate there (the check below only knows the in-memory demo skills).
+    if (hasValidDatabaseUrl) {
+      await StructureService.setPrerequisites(actorOf(session), skillId, prerequisiteSkillIds);
+      return res.json({ success: true });
+    }
 
     const result = await dbService.updateSkillPrerequisites(skillId, prerequisiteSkillIds, session.role);
     if (!result.success) {
@@ -947,10 +1242,38 @@ app.post("/api/skills/:skillId/prerequisites", async (req: Request, res: Respons
 
     return res.json({ success: true });
   } catch (error: unknown) {
+    if (error instanceof StructureError) return res.status(error.status).json({ error: error.message });
     const message = error instanceof Error ? error.message : "Failed to update skill prerequisites";
     return res.status(500).json({ error: message });
   }
 });
+
+// -------------------------------------------------------------
+// PHASE 41: curriculum structure (units, competencies, skills) added by teachers
+// -------------------------------------------------------------
+const structureRoute = (fn: (actor: { userId: string; role: string }, req: Request) => Promise<unknown>, fallback: string, okStatus = 200) =>
+  async (req: Request, res: Response) => {
+    try {
+      const session = getSessionFromRequest(req);
+      if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+      const data = await fn(actorOf(session), req);
+      return data === undefined ? res.json({ success: true }) : res.status(okStatus).json({ data });
+    } catch (error: unknown) {
+      if (error instanceof StructureError) return res.status(error.status).json({ error: error.message });
+      console.error(fallback, error);
+      return res.status(500).json({ error: fallback });
+    }
+  };
+app.post("/api/units", structureRoute((a, req) => StructureService.createUnit(a, req.body ?? {}), "Failed to create unit", 201));
+app.post("/api/terms/:termNumber/reorder-units", structureRoute(async (a, req) => { await StructureService.reorderUnits(a, req.params.termNumber, req.body?.orderedUnitIds); }, "Failed to reorder units"));
+app.put("/api/units/:unitId", structureRoute((a, req) => StructureService.updateUnit(a, req.params.unitId, req.body ?? {}), "Failed to update unit"));
+app.delete("/api/units/:unitId", structureRoute(async (a, req) => { await StructureService.deleteUnit(a, req.params.unitId); }, "Failed to delete unit"));
+app.post("/api/units/:unitId/competencies", structureRoute((a, req) => StructureService.createCompetency(a, req.params.unitId, req.body ?? {}), "Failed to create competency", 201));
+app.put("/api/competencies/:id", structureRoute((a, req) => StructureService.updateCompetency(a, req.params.id, req.body ?? {}), "Failed to update competency"));
+app.delete("/api/competencies/:id", structureRoute(async (a, req) => { await StructureService.deleteCompetency(a, req.params.id); }, "Failed to delete competency"));
+app.post("/api/competencies/:id/skills", structureRoute((a, req) => StructureService.createSkill(a, req.params.id, req.body ?? {}), "Failed to create skill", 201));
+app.put("/api/skills/:id", structureRoute((a, req) => StructureService.updateSkill(a, req.params.id, req.body ?? {}), "Failed to update skill"));
+app.delete("/api/skills/:id", structureRoute(async (a, req) => { await StructureService.deleteSkill(a, req.params.id); }, "Failed to delete skill"));
 
 // -------------------------------------------------------------
 // PHASE 5: INTERACTIVE LESSON SESSIONS & CHECKPOINTS
@@ -964,6 +1287,7 @@ app.get("/api/student/lessons/:id/session", async (req: Request, res: Response) 
     }
     const userId = session.userId;
     const { id } = req.params;
+    if (!(await ensureLessonAccess(res, userId, id))) return;
 
     const lessonSession = await dbService.getLessonSession(userId, id);
     const attempts = await dbService.getCheckpointAttempts(userId, id);
@@ -989,10 +1313,27 @@ app.post("/api/student/lessons/:id/session", async (req: Request, res: Response)
     const userId = session.userId;
     const { id } = req.params;
     const { currentSectionIndex, completedBlockIds, isCompleted } = req.body;
+    if (!(await ensureLessonAccess(res, userId, id))) return;
+
+    // The server, not the browser, decides which questions are done: a block that must be answered counts as
+    // completed only if the student has answered it correctly. Other blocks (reading, video) are self-reported.
+    const lessonNow: any = await dbService.getLessonById(id);
+    const blockIds: string[] = ((lessonNow?.contentBlocks || []) as any[]).map((b) => b.id);
+    const status = await dbService.getLessonCompletionStatus(userId, id);
+    const gradable = new Set(status.required);
+    const claimed: string[] = Array.isArray(completedBlockIds) ? completedBlockIds.filter((x: unknown) => typeof x === "string") : [];
+    const safeCompleted = Array.from(new Set([...claimed.filter((b) => blockIds.includes(b) && !gradable.has(b)), ...status.correct]));
+
+    if (isCompleted && status.missing.length > 0) {
+      return res.status(409).json({
+        error: `Answer ${status.missing.length} remaining question${status.missing.length === 1 ? "" : "s"} correctly to complete this lesson.`,
+        missingBlockIds: status.missing,
+      });
+    }
 
     const updated = await dbService.saveLessonSession(userId, id, {
       currentSectionIndex,
-      completedBlockIds,
+      completedBlockIds: Array.isArray(completedBlockIds) ? safeCompleted : undefined,
       isCompleted,
     });
 
@@ -1016,27 +1357,64 @@ app.post(["/api/student/lessons/:id/checkpoint", "/api/student/lessons/:id/check
     }
     const userId = session.userId;
     const { id } = req.params;
-    const { blockId, answer, isCorrect, feedback } = req.body;
+    // Correctness is decided here, from the stored answer key. Any isCorrect / feedback sent by the
+    // client is ignored.
+    const { blockId, answer } = req.body ?? {};
 
-    if (!blockId || answer === undefined) {
+    if (typeof blockId !== "string" || !blockId || answer === undefined) {
       return res.status(400).json({ error: "blockId and answer are required" });
     }
+    if (!(await ensureLessonAccess(res, userId, id))) return;
+
+    const lesson = await dbService.getLessonById(id);
+    const block = lesson?.contentBlocks?.find((b: any) => b.id === blockId);
+    if (!block) return res.status(404).json({ error: "Question not found in this lesson." });
+
+    const graded = gradeChoiceAnswer(block as any, answer);
+    if (!graded.ok) return res.status(graded.status).json({ error: graded.error });
 
     const attempt = await dbService.submitCheckpointAttempt({
       userId,
       lessonId: id,
       blockId,
-      answer,
-      isCorrect: Boolean(isCorrect),
-      feedback,
+      answer: graded.chosen,
+      isCorrect: graded.isCorrect,
+      feedback: graded.feedback,
     });
 
-    return res.json({ data: attempt });
+    return res.json({
+      data: attempt,
+      grading: { isCorrect: graded.isCorrect, feedback: graded.feedback, correctAnswer: graded.correctAnswer },
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to record checkpoint attempt";
     return res.status(500).json({ error: message });
   }
 });
+
+// ---- Ownership: a teacher may change only what they authored; admins may change anything. ----
+const ownershipStatus = (message: string): number | null =>
+  message.includes("Forbidden") ? 403 : /not found/i.test(message) ? 404 : null;
+
+async function requireOwnedQuestion(res: Response, session: SessionPayload, questionId: string): Promise<boolean> {
+  const q: any = await dbService.getQuestionById(questionId);
+  if (!q) { res.status(404).json({ error: "Question not found." }); return false; }
+  if (session.role !== "ADMIN" && q.createdById && q.createdById !== session.userId) {
+    res.status(403).json({ error: "Forbidden: You are not authorized to modify another teacher's question." });
+    return false;
+  }
+  return true;
+}
+
+async function requireOwnedPracticeSet(res: Response, session: SessionPayload, setId: string): Promise<boolean> {
+  const set: any = await dbService.getPracticeSetById(setId);
+  if (!set) { res.status(404).json({ error: "Practice set not found." }); return false; }
+  if (session.role !== "ADMIN" && set.createdById && set.createdById !== session.userId) {
+    res.status(403).json({ error: "Forbidden: You are not authorized to modify another teacher's practice set." });
+    return false;
+  }
+  return true;
+}
 
 app.post("/api/lessons/:id/blocks", async (req: Request, res: Response) => {
   try {
@@ -1046,6 +1424,7 @@ app.post("/api/lessons/:id/blocks", async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
+    await dbService.assertCanEditLesson(id, session.role, session.userId);
     const { type, title, content, metadata } = req.body;
 
     if (!type || !content) {
@@ -1059,10 +1438,11 @@ app.post("/api/lessons/:id/blocks", async (req: Request, res: Response) => {
       metadata,
     });
 
+    await dbService.recordAudit({ actorId: session.userId, action: "block.create", targetType: "block", targetId: (block as any)?.id, detail: { lessonId: id, type } , ip: req.ip });
     return res.status(201).json({ data: block });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to add block";
-    return res.status(500).json({ error: message });
+    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1074,6 +1454,7 @@ app.put("/api/lessons/:id/blocks/:blockId", async (req: Request, res: Response) 
     }
 
     const { id, blockId } = req.params;
+    await dbService.assertCanEditLesson(id, session.role, session.userId);
     const { type, title, content, metadata } = req.body;
 
     const block = await dbService.updateContentBlock(id, blockId, {
@@ -1083,10 +1464,12 @@ app.put("/api/lessons/:id/blocks/:blockId", async (req: Request, res: Response) 
       metadata,
     });
 
+    // Answer keys live in block metadata: record that they changed (never the content itself).
+    await dbService.recordAudit({ actorId: session.userId, action: "block.update", targetType: "block", targetId: blockId, detail: { lessonId: id, fields: Object.keys({ type, title, content, metadata }).filter((k) => ({ type, title, content, metadata } as any)[k] !== undefined) }, ip: req.ip });
     return res.json({ data: block });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to update block";
-    return res.status(500).json({ error: message });
+    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1098,12 +1481,14 @@ app.delete("/api/lessons/:id/blocks/:blockId", async (req: Request, res: Respons
     }
 
     const { id, blockId } = req.params;
+    await dbService.assertCanEditLesson(id, session.role, session.userId);
     await dbService.deleteContentBlock(id, blockId);
+    await dbService.recordAudit({ actorId: session.userId, action: "block.delete", targetType: "block", targetId: blockId, detail: { lessonId: id }, ip: req.ip });
 
     return res.json({ success: true });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to delete block";
-    return res.status(500).json({ error: message });
+    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1115,6 +1500,7 @@ app.post("/api/lessons/:id/reorder-blocks", async (req: Request, res: Response) 
     }
 
     const { id } = req.params;
+    await dbService.assertCanEditLesson(id, session.role, session.userId);
     const { orderedBlockIds } = req.body;
 
     if (!Array.isArray(orderedBlockIds)) {
@@ -1125,12 +1511,13 @@ app.post("/api/lessons/:id/reorder-blocks", async (req: Request, res: Response) 
     return res.json(result);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to reorder blocks";
-    return res.status(500).json({ error: message });
+    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
-app.get("/api/skills", async (_req: Request, res: Response) => {
+app.get("/api/skills", async (req: Request, res: Response) => {
   try {
+    if (!getSessionFromRequest(req)) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const skills = await dbService.getSkills();
     return res.json({ data: skills });
   } catch (error: unknown) {
@@ -1147,9 +1534,10 @@ app.get("/api/skills", async (_req: Request, res: Response) => {
 app.get("/api/questions", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const isStaff = session && (session.role === "TEACHER" || session.role === "ADMIN");
 
-    const { skillId, lessonId, difficulty, status, type, search, source } = req.query;
+    const { skillId, lessonId, difficulty, status, type, search, source, noSkill } = req.query;
 
     // Students can ONLY view published questions
     const effectiveStatus = isStaff ? (status as any) : "PUBLISHED";
@@ -1162,19 +1550,40 @@ app.get("/api/questions", async (req: Request, res: Response) => {
       type: type as any,
       search: search as string,
       source: source as any,
+      noSkill: isStaff && noSkill === "true",
     });
 
     // If student, redact answers
     const payload = isStaff
       ? questions
-      : questions.map((q) => dbService.getQuestionById(q.id, true));
+      : await Promise.all(questions.map((q) => dbService.getQuestionById(q.id, true)));
 
-    return res.json({ data: await Promise.resolve(payload) });
+    return res.json({ data: payload });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to fetch questions";
     return res.status(500).json({ error: message });
   }
 });
+
+/**
+ * A question's skill decides whether its answers count towards mastery, difficult-skill analysis and recommendations.
+ * An unknown skill id is refused (it would otherwise fail later as a database error); a question attached to a lesson but
+ * given no skill inherits the lesson's first skill; a question with no skill at all is allowed but flagged in the question bank.
+ */
+async function resolveQuestionSkill(skillId: unknown, lessonId: unknown): Promise<{ skillId: string | null; inherited: boolean }> {
+  if (skillId !== undefined && skillId !== null && skillId !== "") {
+    if (typeof skillId !== "string") throw Object.assign(new Error("skillId must be text."), { status: 400 });
+    if (!(await dbService.getSkillById(skillId))) throw Object.assign(new Error("That skill does not exist."), { status: 400 });
+    return { skillId, inherited: false };
+  }
+  if (typeof lessonId === "string" && lessonId) {
+    const lesson: any = await dbService.getLessonById(lessonId);
+    const inherited = lesson?.skills?.[0]?.skillId ?? lesson?.skills?.[0]?.skill?.id ?? lesson?.skillIds?.[0] ?? null;
+    if (inherited) return { skillId: inherited, inherited: true };
+  }
+  return { skillId: null, inherited: false };
+}
+const skillErrorStatus = (e: unknown) => (e && typeof e === "object" && (e as any).status === 400 ? 400 : null);
 
 // Create question (Teacher/Admin only)
 app.post("/api/questions", async (req: Request, res: Response) => {
@@ -1204,11 +1613,14 @@ app.post("/api/questions", async (req: Request, res: Response) => {
     if (!type || !prompt) {
       return res.status(400).json({ error: "Question type and prompt are required." });
     }
+    // Attaching a question to a lesson is editing that lesson.
+    if (lessonId) await dbService.assertCanEditLesson(lessonId, session.role, session.userId);
 
+    const skill = await resolveQuestionSkill(skillId, lessonId);
     const question = await dbService.createQuestion(
       {
         lessonId,
-        skillId,
+        skillId: skill.skillId ?? undefined,
         type,
         prompt,
         explanation,
@@ -1228,7 +1640,7 @@ app.post("/api/questions", async (req: Request, res: Response) => {
     return res.status(201).json({ data: question });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to create question";
-    return res.status(500).json({ error: message });
+    return res.status(skillErrorStatus(error) ?? ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1236,6 +1648,7 @@ app.post("/api/questions", async (req: Request, res: Response) => {
 app.get("/api/questions/:id", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const isStaff = session && (session.role === "TEACHER" || session.role === "ADMIN");
 
     const { id } = req.params;
@@ -1266,11 +1679,14 @@ app.patch("/api/questions/:id", async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
+    if (!(await requireOwnedQuestion(res, session, id))) return;
+    // a skill that is being set must exist; clearing it (null) is allowed; leaving it out changes nothing
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, "skillId") && req.body.skillId) await resolveQuestionSkill(req.body.skillId, undefined);
     const updated = await dbService.updateQuestion(id, req.body, session.userId);
     return res.json({ data: updated });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to update question";
-    return res.status(500).json({ error: message });
+    return res.status(skillErrorStatus(error) ?? 500).json({ error: message });
   }
 });
 
@@ -1282,11 +1698,14 @@ app.put("/api/questions/:id", async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
+    if (!(await requireOwnedQuestion(res, session, id))) return;
+    // a skill that is being set must exist; clearing it (null) is allowed; leaving it out changes nothing
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, "skillId") && req.body.skillId) await resolveQuestionSkill(req.body.skillId, undefined);
     const updated = await dbService.updateQuestion(id, req.body, session.userId);
     return res.json({ data: updated });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to update question";
-    return res.status(500).json({ error: message });
+    return res.status(skillErrorStatus(error) ?? 500).json({ error: message });
   }
 });
 
@@ -1299,6 +1718,7 @@ app.delete("/api/questions/:id", async (req: Request, res: Response) => {
     }
 
     const { id } = req.params;
+    if (!(await requireOwnedQuestion(res, session, id))) return;
     await dbService.deleteQuestion(id);
     return res.json({ success: true });
   } catch (error: unknown) {
@@ -1322,6 +1742,7 @@ app.post("/api/questions/:id/status", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid question status." });
     }
 
+    if (!(await requireOwnedQuestion(res, session, id))) return;
     const updated = await dbService.updateQuestionStatus(id, status, session.userId);
     return res.json({ data: updated });
   } catch (error: unknown) {
@@ -1338,6 +1759,7 @@ app.post("/api/questions/:id/status", async (req: Request, res: Response) => {
 app.get("/api/practice-sets", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const isStaff = session && (session.role === "TEACHER" || session.role === "ADMIN");
 
     const { lessonId, skillId, status } = req.query;
@@ -1368,6 +1790,7 @@ app.post("/api/practice-sets", async (req: Request, res: Response) => {
     if (!title) {
       return res.status(400).json({ error: "Practice set title is required." });
     }
+    if (lessonId) await dbService.assertCanEditLesson(lessonId, session.role, session.userId);
 
     const ps = await dbService.createPracticeSet(
       {
@@ -1384,7 +1807,7 @@ app.post("/api/practice-sets", async (req: Request, res: Response) => {
     return res.status(201).json({ data: ps });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to create practice set";
-    return res.status(500).json({ error: message });
+    return res.status(ownershipStatus(message) ?? 500).json({ error: message });
   }
 });
 
@@ -1392,6 +1815,7 @@ app.post("/api/practice-sets", async (req: Request, res: Response) => {
 app.get("/api/practice-sets/:id", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const isStaff = session && (session.role === "TEACHER" || session.role === "ADMIN");
 
     const { id } = req.params;
@@ -1426,6 +1850,7 @@ app.post("/api/practice-sets/:id/questions", async (req: Request, res: Response)
       return res.status(400).json({ error: "questionId is required" });
     }
 
+    if (!(await requireOwnedPracticeSet(res, session, id))) return;
     await dbService.addQuestionToPracticeSet(id, questionId, order);
     const updated = await dbService.getPracticeSetById(id);
     return res.json({ data: updated });
@@ -1444,6 +1869,7 @@ app.delete("/api/practice-sets/:id/questions/:questionId", async (req: Request, 
     }
 
     const { id, questionId } = req.params;
+    if (!(await requireOwnedPracticeSet(res, session, id))) return;
     await dbService.removeQuestionFromPracticeSet(id, questionId);
     return res.json({ success: true });
   } catch (error: unknown) {
@@ -1474,7 +1900,9 @@ app.post("/api/practice/start", async (req: Request, res: Response) => {
     return res.status(201).json({ data: practiceSession });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to start practice session";
-    return res.status(500).json({ error: message });
+    // expected, student-facing conditions are not server faults
+    const status = /not found/i.test(message) ? 404 : /not published|contains no questions/i.test(message) ? 409 : 500;
+    return res.status(status).json({ error: status === 500 ? "Failed to start practice session" : message });
   }
 });
 
@@ -1642,6 +2070,10 @@ app.post("/api/ai/tutor", async (req: Request, res: Response) => {
       return res.status(401).json({ error: "Unauthorized: Please log in to consult the AI Tutor." });
     }
 
+    if (REQUIRE_GUARDIAN_CONSENT && session.role === "STUDENT" && !(session as any).guardianConsent) {
+      return res.status(403).json({ error: "Your teacher needs to record your parent or guardian's consent before you can use the AI tutor.", code: "GUARDIAN_CONSENT_REQUIRED" });
+    }
+
     const {
       conversationId,
       lessonId,
@@ -1649,9 +2081,21 @@ app.post("/api/ai/tutor", async (req: Request, res: Response) => {
       questionId,
       practiceSessionId,
       studentQuery,
+      inputChannel,
       helpLevel,
       studentAnswer,
     } = req.body;
+
+    if (studentQuery !== undefined && studentQuery !== null && typeof studentQuery !== "string") {
+      return res.status(400).json({ error: "studentQuery must be text." });
+    }
+    if (inputChannel !== undefined && inputChannel !== "voice" && inputChannel !== "text") {
+      return res.status(400).json({ error: "inputChannel must be \"voice\" or \"text\"." });
+    }
+    // A spoken turn is one short utterance: a long transcript means the microphone ran on or the engine looped.
+    if (inputChannel === "voice" && typeof studentQuery === "string" && studentQuery.length > 500) {
+      return res.status(400).json({ error: "That recording was too long. Please say it again in a shorter sentence, or type it." });
+    }
 
     const result = await AITutorService.interact({
       studentId: session.userId,
@@ -1660,7 +2104,8 @@ app.post("/api/ai/tutor", async (req: Request, res: Response) => {
       skillId,
       questionId,
       practiceSessionId,
-      studentQuery,
+      studentQuery: studentQuery ?? undefined,
+      inputChannel,
       helpLevel,
       studentAnswer,
     });
@@ -1712,8 +2157,9 @@ app.get("/api/ai/conversations/:id", async (req: Request, res: Response) => {
 });
 
 // Get AI Tutor Teacher Settings
-app.get("/api/ai/settings", async (_req: Request, res: Response) => {
+app.get("/api/ai/settings", async (req: Request, res: Response) => {
   try {
+    if (!getSessionFromRequest(req)) return res.status(401).json({ error: "Unauthorized: Please sign in." });
     const settings = await dbService.getTeacherAISettings();
     return res.json({ data: settings });
   } catch (error: unknown) {
@@ -1775,6 +2221,11 @@ app.get("/api/student/insights/:id", async (req: Request, res: Response) => {
     const insight = await dbService.getMistakeAnalysisById(id, session.userId, session.role);
     if (!insight) {
       return res.status(404).json({ error: "Insight not found or access denied." });
+    }
+    // A teacher may open an insight only for a student in one of their own active classes (administrators: any).
+    if (session.role === "TEACHER" && (insight as any).studentId !== session.userId) {
+      const ok = await TeacherService.isTeacherAuthorizedForStudent(session.userId, (insight as any).studentId, session.role);
+      if (!ok) return res.status(404).json({ error: "Insight not found or access denied." });
     }
 
     return res.json({ data: insight });
@@ -1884,7 +2335,8 @@ app.get("/api/student/adaptive/recommendation", async (req: Request, res: Respon
     return res.json({ data: recommendation });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load adaptive recommendation";
-    return res.status(500).json({ error: message });
+    if (/No skills are available/.test(message)) return res.json({ data: null });
+    return res.status(/not found/i.test(message) ? 404 : 500).json({ error: message });
   }
 });
 
@@ -1908,7 +2360,8 @@ app.post("/api/student/adaptive/recommendation/generate", async (req: Request, r
     return res.json({ data: recommendation });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to generate recommendation";
-    return res.status(500).json({ error: message });
+    if (/No skills are available/.test(message)) return res.json({ data: null });
+    return res.status(/not found/i.test(message) ? 404 : 500).json({ error: message });
   }
 });
 
@@ -2207,12 +2660,13 @@ app.get("/api/teacher/dashboard", async (req: Request, res: Response) => {
       return res.status(403).json({ error: "Forbidden: Teacher or Administrator credentials required." });
     }
 
-    const dashboard = await TeacherService.getTeacherDashboard(session.userId, session.role);
+    const classId = typeof req.query.classId === "string" && req.query.classId ? req.query.classId : undefined;
+    const dashboard = await TeacherService.getTeacherDashboard(session.userId, session.role, { classId });
     return res.json({ data: dashboard });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to load teacher dashboard";
     console.error("Teacher dashboard API error:", error);
-    return res.status(500).json({ error: message });
+    return res.status(message.includes("Forbidden") ? 403 : 500).json({ error: message });
   }
 });
 
@@ -2448,6 +2902,30 @@ app.post("/api/teacher/classes/:classId/assignments", async (req: Request, res: 
   }
 });
 
+// Phase 39: which lessons are open for a class beyond the course sequence
+app.get("/api/teacher/classes/:classId/lesson-access", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    return res.json({ data: await ClassroomService.getLessonAccess(actorOf(session), req.params.classId) });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to load lesson access");
+  }
+});
+
+app.post("/api/teacher/classes/:classId/lesson-access", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const { lessonId, studentId, open, through } = req.body ?? {};
+    if (through === true) await ClassroomService.openLessonsThrough(actorOf(session), req.params.classId, lessonId);
+    else await ClassroomService.setLessonOpen(actorOf(session), req.params.classId, { lessonId, studentId, open });
+    return res.json({ data: await ClassroomService.getLessonAccess(actorOf(session), req.params.classId) });
+  } catch (error) {
+    return sendClassroomError(res, error, "Failed to change lesson access");
+  }
+});
+
 // Teacher asks pedagogical questions to the Teacher AI Assistant
 app.post("/api/teacher/ai-assistant", async (req: Request, res: Response) => {
   try {
@@ -2539,12 +3017,104 @@ app.post("/api/admin/users", async (req: Request, res: Response) => {
       gradeLevel: typeof gradeLevel === "number" ? gradeLevel : role === "STUDENT" ? 7 : undefined,
     });
     // Audit trail (no secrets): who created which account with which role.
-    console.info(`AUDIT admin_create_user actor=${session.userId} target=${user.id} role=${role}`);
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.create", targetType: "user", targetId: user.id, detail: { role }, ip: req.ip });
     return res.status(201).json({ data: { id: user.id, email: user.email, name: user.name, role: user.role } });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to create user";
     return res.status(400).json({ error: message });
   }
+});
+
+// ---- Account controls (administrators only) ----
+const requireAdmin = (req: Request, res: Response): SessionPayload | null => {
+  const session = getSessionFromRequest(req);
+  if (!session || session.role !== "ADMIN") {
+    res.status(403).json({ error: "Forbidden: Administrator role required" });
+    return null;
+  }
+  return session;
+};
+
+async function adminTarget(req: Request, res: Response, session: SessionPayload, opts: { allowSelf?: boolean } = {}) {
+  const target = await dbService.getAuthState(req.params.userId);
+  if (!target) { res.status(404).json({ error: "User not found" }); return null; }
+  if (!opts.allowSelf && target.id === session.userId) {
+    res.status(409).json({ error: "You cannot do this to your own account. Ask another administrator." });
+    return null;
+  }
+  return target;
+}
+
+app.post("/api/admin/users/:userId/disable", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const target = await adminTarget(req, res, session); if (!target) return;
+    if (target.role === "ADMIN" && !target.disabled && (await dbService.countActiveAdmins()) <= 1) {
+      return res.status(409).json({ error: "This is the last active administrator and cannot be disabled." });
+    }
+    await dbService.setUserDisabled(target.id, true);
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.disable", targetType: "user", targetId: target.id, ip: req.ip });
+    return res.json({ success: true });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.post("/api/admin/users/:userId/enable", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const target = await adminTarget(req, res, session, { allowSelf: true }); if (!target) return;
+    await dbService.setUserDisabled(target.id, false); // old sessions stay revoked
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.enable", targetType: "user", targetId: target.id, ip: req.ip });
+    return res.json({ success: true });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.post("/api/admin/users/:userId/revoke-sessions", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const target = await adminTarget(req, res, session, { allowSelf: true }); if (!target) return;
+    await dbService.revokeSessions(target.id);
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.revoke_sessions", targetType: "user", targetId: target.id, ip: req.ip });
+    return res.json({ success: true });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.post("/api/admin/users/:userId/role", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const role = req.body?.role;
+    if (typeof role !== "string" || !["STUDENT", "TEACHER", "ADMIN"].includes(role)) return res.status(400).json({ error: "Role must be STUDENT, TEACHER or ADMIN" });
+    const target = await adminTarget(req, res, session); if (!target) return;
+    if (target.role === "ADMIN" && role !== "ADMIN" && !target.disabled && (await dbService.countActiveAdmins()) <= 1) {
+      return res.status(409).json({ error: "This is the last active administrator and cannot be demoted." });
+    }
+    await dbService.setUserRole(target.id, role as UserRole); // also revokes the user's sessions
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.role", targetType: "user", targetId: target.id, detail: { from: target.role, to: role }, ip: req.ip });
+    return res.json({ success: true });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.post("/api/admin/users/:userId/reset-password", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const target = await adminTarget(req, res, session); if (!target) return;
+    let temp: string;
+    try { temp = validateNewPassword(req.body?.temporaryPassword); } catch (e) { return res.status(400).json({ error: e instanceof Error ? e.message : "Invalid password" }); }
+    await dbService.updateUserPassword(target.id, await hashPassword(temp)); // revokes all their sessions
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.user.reset_password", targetType: "user", targetId: target.id, ip: req.ip });
+    return res.json({ success: true, note: "Give the temporary password to the user privately and ask them to change it after signing in." });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.get("/api/admin/audit", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const result = await dbService.listAudit({
+      limit: req.query.limit ? Number(req.query.limit) : 50,
+      offset: req.query.offset ? Number(req.query.offset) : 0,
+      action: typeof req.query.action === "string" ? req.query.action : undefined,
+    });
+    return res.json({ data: result });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
 });
 
 app.get("/api/admin/users", async (req: Request, res: Response) => {
@@ -2553,9 +3123,10 @@ app.get("/api/admin/users", async (req: Request, res: Response) => {
     if (!session || session.role !== "ADMIN") {
       return res.status(403).json({ error: "Forbidden: Administrator role required" });
     }
-    const role = typeof req.query.role === "string" && (ADMIN_CREATABLE_ROLES as readonly string[]).includes(req.query.role) ? (req.query.role as UserRole) : undefined;
+    const role = typeof req.query.role === "string" && ([...ADMIN_CREATABLE_ROLES, "STUDENT"] as string[]).includes(req.query.role) ? (req.query.role as UserRole) : undefined;
     const result = await dbService.listUsers({
       role,
+      search: typeof req.query.q === "string" ? req.query.q.slice(0, 100) : undefined,
       limit: req.query.limit ? Number(req.query.limit) : 50,
       offset: req.query.offset ? Number(req.query.offset) : 0,
     });
@@ -2589,10 +3160,13 @@ app.post("/api/auth/change-password", async (req: Request, res: Response) => {
     }
     if (currentPassword === validatedNew) return res.status(400).json({ error: "The new password must be different" });
 
-    await dbService.updateUserPassword(user.id, await hashPassword(validatedNew));
+    await dbService.updateUserPassword(user.id, await hashPassword(validatedNew)); // also revokes every older session
     clearLoginFailures([keys[0]]);
-    console.info(`AUDIT password_changed user=${user.id}`);
-    return res.json({ success: true, note: "Existing sessions stay valid until they expire; sign out on other devices." });
+    await dbService.recordAudit({ actorId: user.id, action: "auth.password.change", targetType: "user", targetId: user.id, ip: req.ip });
+    // Keep THIS device signed in with a fresh token; every other device must sign in again.
+    const fresh = await dbService.getAuthState(user.id);
+    const token = issueSession(req, res, { id: user.id, email: user.email, name: user.name, role: user.role, sessionVersion: fresh?.sessionVersion ?? 0 });
+    return res.json({ success: true, token, note: "Password changed. All your other devices have been signed out." });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to change password";
     return res.status(400).json({ error: message });
@@ -2615,200 +3189,174 @@ app.get("/api/admin/system-summary", (req: Request, res: Response) => {
 // PHASE 14: ASSESSMENT & RESEARCH ANALYTICS ENDPOINTS
 // -------------------------------------------------------------
 
+function sendAssessmentError(res: Response, error: unknown, fallback: string) {
+  if (error instanceof AssessmentError) return res.status(error.status).json({ error: error.message });
+  if (error instanceof ClassroomError) return res.status(error.status).json({ error: error.message });
+  console.error(fallback, error instanceof Error ? error.message : error);
+  return res.status(500).json({ error: fallback });
+}
+const requireStudent = (req: Request, res: Response): SessionPayload | null => {
+  const session = getSessionFromRequest(req);
+  if (!session) { res.status(401).json({ error: "Unauthorized: Please log in." }); return null; }
+  if (session.role !== "STUDENT") { res.status(403).json({ error: "Forbidden: Only students take assessments." }); return null; }
+  return session;
+};
+
 // Teacher creates assessment
 app.post("/api/teacher/assessments", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const { title, description, type, lessonId, gradeLevel, timeLimitMinutes, passingScorePercent, questions } =
-      req.body;
-
-    const assessment = await AssessmentService.createAssessment(
-      {
-        title,
-        description,
-        type,
-        lessonId,
-        gradeLevel,
-        timeLimitMinutes,
-        passingScorePercent,
-        questions: questions || [],
-      },
-      session.userId,
-      session.role
-    );
-
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const { title, description, type, lessonId, gradeLevel, timeLimitMinutes, passingScorePercent, questions } = req.body ?? {};
+    const assessment = await AssessmentService.createAssessment({ title, description, type, lessonId, gradeLevel, timeLimitMinutes, passingScorePercent, questions }, session.userId, session.role);
     return res.status(201).json({ data: assessment });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to create assessment";
-    return res.status(400).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to create assessment");
   }
 });
 
-// Teacher/Admin lists assessments
+// Teacher/Admin lists their assessments
 app.get("/api/teacher/assessments", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
+    const session = requireStaff(req, res);
+    if (!session) return;
     const { type, status, gradeLevel, lessonId } = req.query;
     const list = await AssessmentService.listAssessments(
-      {
-        type: type as any,
-        status: status as any,
-        gradeLevel: gradeLevel ? Number(gradeLevel) : undefined,
-        lessonId: lessonId as string | undefined,
-      },
-      session.userId,
-      session.role
+      { type: type as any, status: status as any, gradeLevel: gradeLevel ? Number(gradeLevel) : undefined, lessonId: lessonId as string | undefined },
+      session.userId, session.role
     );
-
     return res.json({ data: list });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to list assessments";
-    return res.status(500).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to list assessments");
   }
 });
 
 // Teacher publishes assessment
 app.post("/api/teacher/assessments/:id/publish", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const { id } = req.params;
-    const published = await AssessmentService.publishAssessment(id, session.userId, session.role);
-    return res.json({ data: published });
+    const session = requireStaff(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.publishAssessment(req.params.id, session.userId, session.role) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to publish assessment";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to publish assessment");
   }
 });
 
-// Teacher assigns assessment to class
+// Teacher archives assessment (students lose access; results stay)
+app.post("/api/teacher/assessments/:id/archive", async (req: Request, res: Response) => {
+  try {
+    const session = requireStaff(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.archiveAssessment(req.params.id, session.userId, session.role) });
+  } catch (error: unknown) {
+    return sendAssessmentError(res, error, "Failed to archive assessment");
+  }
+});
+
+// Teacher assigns assessment to one of their classes
 app.post("/api/teacher/assessments/:id/assign", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const { id } = req.params;
-    const { classroomId, studentId, dueDate } = req.body;
-    if (!classroomId) {
-      return res.status(400).json({ error: "classroomId is required to assign assessment." });
-    }
-
-    const result = await AssessmentService.assignAssessment(
-      id,
-      classroomId,
-      { studentId, dueDate },
-      session.userId,
-      session.role
-    );
-
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const { classroomId, studentId, dueDate } = req.body ?? {};
+    const result = await AssessmentService.assignAssessment(req.params.id, classroomId, { studentId, dueDate }, session.userId, session.role);
     return res.json({ data: result });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to assign assessment";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to assign assessment");
   }
 });
 
-// Student lists available published assessments
+// Teacher/Admin: how an assessment went (their own assessments only)
+app.get("/api/teacher/assessments/:id/results", async (req: Request, res: Response) => {
+  try {
+    const session = requireStaff(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.getResults(req.params.id, session.userId, session.role) });
+  } catch (error: unknown) {
+    return sendAssessmentError(res, error, "Failed to load results");
+  }
+});
+
+// Student lists the assessments assigned to them
 app.get("/api/student/assessments", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session) {
-      return res.status(401).json({ error: "Unauthorized: Please log in." });
-    }
-
-    const { type, gradeLevel } = req.query;
-    const list = await AssessmentService.listAssessments(
-      {
-        type: type as any,
-        gradeLevel: gradeLevel ? Number(gradeLevel) : undefined,
-      },
-      session.userId,
-      session.role
-    );
-
-    return res.json({ data: list });
+    const session = requireStudent(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.listForStudent(session.userId) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to retrieve assessments";
-    return res.status(500).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to retrieve assessments");
   }
 });
 
-// Student gets assessment details (answers safely redacted!)
+// Student reads the result of their own graded attempt (declared before /:id so "attempts" is not an id)
+app.get("/api/student/assessments/attempts/:attemptId", async (req: Request, res: Response) => {
+  try {
+    const session = requireStudent(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.getAttemptResult(req.params.attemptId, session.userId) });
+  } catch (error: unknown) {
+    return sendAssessmentError(res, error, "Failed to load the result");
+  }
+});
+
+// Student gets an assigned assessment (answer keys are never included)
 app.get("/api/student/assessments/:id", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session) {
-      return res.status(401).json({ error: "Unauthorized: Please log in." });
-    }
-
-    const { id } = req.params;
-    const assessment = await AssessmentService.getAssessmentForStudent(id, session.userId);
-    return res.json({ data: assessment });
+    const session = requireStudent(req, res);
+    if (!session) return;
+    return res.json({ data: await AssessmentService.getAssessmentForStudent(req.params.id, session.userId) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to get assessment";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to get assessment");
   }
 });
 
-// Student starts assessment attempt
+// Student starts (or resumes) an attempt
 app.post("/api/student/assessments/:id/start", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session) {
-      return res.status(401).json({ error: "Unauthorized: Please log in." });
-    }
-
-    const { id } = req.params;
-    const attempt = await AssessmentService.startAssessmentAttempt(id, session.userId);
-    return res.status(201).json({ data: attempt });
+    const session = requireStudent(req, res);
+    if (!session) return;
+    const attempt = await AssessmentService.startAssessmentAttempt(req.params.id, session.userId);
+    return res.status(attempt.resumed ? 200 : 201).json({ data: attempt });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to start assessment attempt";
-    const status = message.includes("Forbidden") ? 403 : 500;
-    return res.status(status).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to start assessment attempt");
   }
 });
 
-// Student submits assessment attempt (Server-Side Deterministic Grading)
+// Student submits an attempt (server-side deterministic grading, once)
 app.post("/api/student/assessments/attempts/:attemptId/submit", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session) {
-      return res.status(401).json({ error: "Unauthorized: Please log in." });
-    }
-
-    const { attemptId } = req.params;
-    const { responses } = req.body;
-
-    if (!Array.isArray(responses)) {
-      return res.status(400).json({ error: "responses must be an array of answers." });
-    }
-
-    const result = await AssessmentService.submitAssessmentAttempt(attemptId, session.userId, responses);
-    return res.json({ data: result });
+    const session = requireStudent(req, res);
+    if (!session) return;
+    const { responses } = req.body ?? {};
+    if (!Array.isArray(responses)) return res.status(400).json({ error: "responses must be an array of answers." });
+    return res.json({ data: await AssessmentService.submitAssessmentAttempt(req.params.attemptId, session.userId, responses) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to submit assessment";
-    const status = message.includes("Forbidden") ? 403 : 400;
-    return res.status(status).json({ error: message });
+    return sendAssessmentError(res, error, "Failed to submit assessment");
   }
 });
 
 // Teacher/Admin views research profile for a student (IDOR scoped)
+// ---- Research scope: a teacher sees research data only for students in their own active classes. ----
+async function researchScopeFor(session: SessionPayload, classroomId?: string): Promise<ResearchScope> {
+  if (classroomId) {
+    const cls = await ClassroomService.getManageable(actorOf(session), classroomId); // 403/404 for classes that are not theirs
+    return { studentIds: (await ClassroomRepo.listEnrollments([cls.id])).map((e) => e.studentId) };
+  }
+  if (session.role === "ADMIN") return { studentIds: null };
+  const classes = await ClassroomRepo.listForTeacher(session.userId);
+  const enrollments = await ClassroomRepo.listEnrollments(classes.map((c) => c.id));
+  return { studentIds: Array.from(new Set(enrollments.map((e) => e.studentId))) };
+}
+
+const requireStaff = (req: Request, res: Response): SessionPayload | null => {
+  const session = getSessionFromRequest(req);
+  if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+    res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    return null;
+  }
+  return session;
+};
+
 app.get("/api/teacher/research/profile/:studentId", async (req: Request, res: Response) => {
   try {
     const session = getSessionFromRequest(req);
@@ -2825,172 +3373,167 @@ app.get("/api/teacher/research/profile/:studentId", async (req: Request, res: Re
     const profile = await ResearchService.getStudentResearchProfile(studentId);
     return res.json({ data: profile });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to load student research profile";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to load student research profile");
   }
 });
 
-// Teacher/Admin views Pre-Test vs Post-Test comparison
+// Resolves which pre/post assessments to compare: the ones asked for, else (database mode) the latest PRE_TEST / POST_TEST.
+async function resolveComparisonTests(req: Request): Promise<{ pre: string; post: string }> {
+  let pre = typeof req.query.preTestId === "string" ? req.query.preTestId : "";
+  let post = typeof req.query.postTestId === "string" ? req.query.postTestId : "";
+  if (hasValidDatabaseUrl) {
+    const { prisma } = await import("./src/lib/db.ts");
+    if (!pre) pre = (await prisma.assessment.findFirst({ where: { type: "PRE_TEST" }, orderBy: { createdAt: "desc" }, select: { id: true } }))?.id ?? "";
+    if (!post) post = (await prisma.assessment.findFirst({ where: { type: "POST_TEST" }, orderBy: { createdAt: "desc" }, select: { id: true } }))?.id ?? "";
+  } else {
+    pre = pre || "asm_pre_integers";
+    post = post || "asm_post_integers";
+  }
+  return { pre, post };
+}
+
+const researchError = (res: Response, error: unknown, fallback: string) => {
+  if (error instanceof ClassroomError) return res.status(error.status).json({ error: error.message });
+  const message = error instanceof Error ? error.message : fallback;
+  return res.status(/not found/i.test(message) ? 404 : 500).json({ error: message });
+};
+
+// Teacher/Admin views Pre-Test vs Post-Test comparison (their own students only)
 app.get("/api/teacher/research/comparison", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const preTestId = (req.query.preTestId as string) || "asm_pre_integers";
-    const postTestId = (req.query.postTestId as string) || "asm_post_integers";
-    const classroomId = req.query.classroomId as string | undefined;
-
-    const comparison = await ResearchService.getPrePostComparison(preTestId, postTestId, classroomId);
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const classroomId = typeof req.query.classroomId === "string" ? req.query.classroomId : undefined;
+    const scope = await researchScopeFor(session, classroomId);
+    const classroom = classroomId ? await ClassroomService.getManageable(actorOf(session), classroomId) : undefined;
+    const { pre, post } = await resolveComparisonTests(req);
+    const comparison = await ResearchService.getPrePostComparison(scope, pre, post, classroom ? { id: classroom.id, name: classroom.name } : undefined);
     return res.json({ data: comparison });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to compute pre/post comparison";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to compute pre/post comparison");
   }
 });
 
-// Teacher/Admin views empirical Difficult Skills analysis
 app.get("/api/teacher/research/difficult-skills", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
+    const session = requireStaff(req, res);
+    if (!session) return;
     const gradeLevel = req.query.grade ? Number(req.query.grade) : undefined;
-    const classroomId = req.query.classroomId as string | undefined;
-
-    const difficultSkills = await ResearchService.getDifficultSkills({ gradeLevel, classroomId });
-    return res.json({ data: difficultSkills });
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    return res.json({ data: await ResearchService.getDifficultSkills(scope, { gradeLevel }) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to analyze difficult skills";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to analyze difficult skills");
   }
 });
 
-// Teacher/Admin views aggregate Mistake Analytics
 app.get("/api/teacher/research/mistakes", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const mistakes = await ResearchService.getMistakeAnalytics();
-    return res.json({ data: mistakes });
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    return res.json({ data: await ResearchService.getMistakeAnalytics(scope) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to load mistake analytics";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to load mistake analytics");
   }
 });
 
-// Teacher/Admin views Intervention Observations (strictly non-causal)
+// Intervention observations (strictly non-causal)
 app.get("/api/teacher/research/interventions", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const observations = await ResearchService.getInterventionObservations();
-    return res.json({ data: observations });
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    return res.json({ data: await ResearchService.getInterventionObservations(scope) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to load intervention observations";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to load intervention observations");
   }
 });
 
-// Teacher/Admin views longitudinal Time Series metrics
 app.get("/api/teacher/research/time-series", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const timeSeries = await ResearchService.getTimeSeriesMetrics();
-    return res.json({ data: timeSeries });
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    return res.json({ data: await ResearchService.getTimeSeriesMetrics(scope) });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to load time series metrics";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to load time series metrics");
   }
 });
 
-// Teacher/Admin exports standardized research metrics CSV
+const MAX_EXPORT_STUDENTS = 300;
+// Research exports carry a code instead of the student's id and name unless the teacher asks for an identified export (`?identified=true`),
+// which is audited. The code is a keyed hash: stable inside this installation, not reversible without the server's secret.
+const wantsIdentified = (req: Request) => req.query.identified === "true";
+const deidentify = <T extends { studentId?: string; studentName?: string }>(rows: T[], identified: boolean): T[] =>
+  identified ? rows : rows.map((r) => ({ ...r, studentId: r.studentId ? pseudonymFor(r.studentId) : r.studentId, studentName: "" }));
+const sendCsv = (res: Response, name: string, csv: string) => {
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${name}_${Date.now()}.csv"`);
+  return res.send(csv);
+};
+
+// Standardised research metrics CSV: one profile per student in scope
 app.get("/api/teacher/research/export/metrics.csv", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    // Export authorized students
-    const profile = await ResearchService.getStudentResearchProfile("usr_student_01");
-    const csvData = ResearchExporter.exportMetricsSummaryCsv([profile]);
-
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="tuklas_research_metrics_${Date.now()}.csv"`);
-    return res.send(csvData);
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    const ids = scope.studentIds ?? (await dbService.listUsers({ limit: 200 })).users.filter((u: any) => u.role === "STUDENT").map((u: any) => u.id);
+    const profiles = [];
+    for (const id of ids.slice(0, MAX_EXPORT_STUDENTS)) profiles.push(await ResearchService.getStudentResearchProfile(id));
+    const identified = wantsIdentified(req);
+    if (identified) await dbService.recordAudit({ actorId: session.userId, action: "research.export.identified", detail: { file: "metrics", students: profiles.length } });
+    return sendCsv(res, "tuklas_research_metrics", ResearchExporter.exportMetricsSummaryCsv(deidentify(profiles as any[], identified) as any));
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to export metrics CSV";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to export metrics CSV");
   }
 });
 
-// Teacher/Admin exports raw question attempt evidence CSV
+// Raw question attempt evidence CSV (students in scope only)
 app.get("/api/teacher/research/export/attempts.csv", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const attempts = fallbackStore.questionAttempts.map((a: any) => {
-      const q = fallbackStore.questions.find((fq: any) => fq.id === a.questionId) || ({} as any);
-      return {
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
+    const rows = await ResearchData.attempts(scope);
+    const names = await ResearchData.students(Array.from(new Set(rows.map((r) => r.studentId))));
+    const identified = wantsIdentified(req);
+    if (identified) await dbService.recordAudit({ actorId: session.userId, action: "research.export.identified", detail: { file: "attempts", rows: rows.length } });
+    const csv = ResearchExporter.exportQuestionAttemptsCsv(
+      deidentify(rows.map((a) => ({
         studentId: a.studentId,
-        studentName: "Juan de la Cruz",
+        studentName: names.get(a.studentId)?.name ?? "",
         questionId: a.questionId,
         skillId: a.skillId,
+        lessonId: a.lessonId,
         attemptNumber: a.attemptNumber,
         isCorrect: a.isCorrect,
-        difficulty: q.difficulty || "MEDIUM",
-        questionType: q.type || "MULTIPLE_CHOICE",
-        cognitiveLevel: q.cognitiveLevel || "PROCEDURAL",
-        timeTakenMs: a.timeTakenMs,
-        hintUsed: !!a.hintUsed,
+        difficulty: a.difficulty,
+        questionType: a.questionType,
+        cognitiveLevel: a.cognitiveLevel,
+        timeTakenMs: a.timeTakenMs ?? undefined,
+        hintUsed: a.hintUsed,
         submittedAt: a.submittedAt,
-      };
-    });
-
-    const csvData = ResearchExporter.exportQuestionAttemptsCsv(attempts);
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="tuklas_question_attempts_${Date.now()}.csv"`);
-    return res.send(csvData);
+      })), identified) as any
+    );
+    return sendCsv(res, "tuklas_question_attempts", csv);
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to export attempts CSV";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to export attempts CSV");
   }
 });
 
-// Teacher/Admin exports Pre/Post comparison CSV
 app.get("/api/teacher/research/export/comparison.csv", async (req: Request, res: Response) => {
   try {
-    const session = getSessionFromRequest(req);
-    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
-      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
-    }
-
-    const comparison = await ResearchService.getPrePostComparison("asm_pre_integers", "asm_post_integers");
-    const csvData = ResearchExporter.exportPrePostComparisonCsv([comparison]);
-
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="tuklas_pre_post_comparison_${Date.now()}.csv"`);
-    return res.send(csvData);
+    const session = requireStaff(req, res);
+    if (!session) return;
+    const classroomId = typeof req.query.classroomId === "string" ? req.query.classroomId : undefined;
+    const scope = await researchScopeFor(session, classroomId);
+    const classroom = classroomId ? await ClassroomService.getManageable(actorOf(session), classroomId) : undefined;
+    const { pre, post } = await resolveComparisonTests(req);
+    const comparison = await ResearchService.getPrePostComparison(scope, pre, post, classroom ? { id: classroom.id, name: classroom.name } : undefined);
+    return sendCsv(res, "tuklas_pre_post_comparison", ResearchExporter.exportPrePostComparisonCsv([comparison]));
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to export comparison CSV";
-    return res.status(500).json({ error: message });
+    return researchError(res, error, "Failed to export comparison CSV");
   }
 });
 
@@ -3008,6 +3551,9 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
+    // An address under /api that no route handles is an error for the caller, not a page: without this the single-page fallback below
+    // answered it with index.html and a 200 (which also hid a route that had gone missing).
+    app.use("/api", (_req: Request, res: Response) => res.status(404).json({ error: "Not found" }));
     // Production static serving
     const distPath = path.resolve(import.meta.dirname, "dist");
     app.use(express.static(distPath));
@@ -3016,10 +3562,34 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`🚀 Tuklas AI Server running on http://0.0.0.0:${PORT}`);
   });
+
+  // Phase 42: a deploy or restart sends SIGTERM. Stop taking new connections, let requests in flight finish, close the database, exit.
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} received: shutting down (finishing requests in flight)...`);
+    const force = setTimeout(() => { console.error("Shutdown took too long: exiting."); process.exit(1); }, 10_000);
+    force.unref();
+    server.close(async () => {
+      try { if (hasValidDatabaseUrl) await prisma.$disconnect(); } catch { /* closing anyway */ }
+      console.log("Shut down cleanly.");
+      process.exit(0);
+    });
+    // keep-alive connections that sit idle would hold the shutdown open; close them after a short grace so a request that was just being
+    // sent on one is still read (answers carry "Connection: close" from now on, so clients stop reusing them)
+    setTimeout(() => (server as any).closeIdleConnections?.(), 1000).unref();
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
+
+// A promise nobody awaited must not take the whole classroom offline: log it and carry on. Anything else is a bug whose state we cannot trust:
+// log, then exit so the platform restarts a clean process.
+process.on("unhandledRejection", (reason) => console.error("UNHANDLED REJECTION:", reason instanceof Error ? reason.stack ?? reason.message : reason));
+process.on("uncaughtException", (err) => { console.error("UNCAUGHT EXCEPTION:", err.stack ?? err.message); setTimeout(() => process.exit(1), 100); });
 
 startServer().catch((err) => {
   console.error("Failed to start server:", err);

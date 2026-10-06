@@ -1,3 +1,4 @@
+import { TEMPLATE_MARK } from "@/lib/lesson/template-mark";
 import React, { useState } from "react";
 import { BlockType } from "@prisma/client";
 import { Button } from "@/components/ui/Button";
@@ -62,67 +63,53 @@ export function ContentBlockEditor({ blocks, onChange }: ContentBlockEditorProps
     let defaultContent = "";
     let defaultMeta: any = {};
 
+    // Templates are neutral on purpose: they used to be integer examples (with a valid answer key), which would have been published
+    // into any lesson the teacher forgot to edit. Every template carries TEMPLATE_MARK, and a lesson with it left in cannot be published.
     switch (type) {
       case "TEXT":
         defaultTitle = "Concept Explanation";
-        defaultContent = "Explain the mathematical concept here. You can use LaTeX math like $a + b$ or $$\\mathbb{Z}$$.";
+        defaultContent = `${TEMPLATE_MARK} Explain the concept here. You can use math like $a + b$.`;
         break;
       case "IMAGE":
         defaultTitle = "Concept Illustration";
-        defaultContent = "Description or caption for the diagram.";
-        defaultMeta = { url: "", alt: "Mathematical illustration", caption: "" };
+        defaultContent = `${TEMPLATE_MARK} Describe the picture for the student.`;
+        defaultMeta = { url: "", alt: "Illustration", caption: "" };
         break;
       case "VIDEO":
-        defaultTitle = "Curated Video Resource";
-        defaultContent = "Watch this video to strengthen your intuition.";
-        defaultMeta = { youtubeId: "oxkHZZpP2oQ", url: "https://www.youtube.com/watch?v=oxkHZZpP2oQ" };
+        defaultTitle = "Video";
+        defaultContent = `${TEMPLATE_MARK} Say why the student should watch this video.`;
         break;
       case "EXAMPLE":
         defaultTitle = "Worked Example";
-        defaultContent = "Problem: Evaluate -3 + 5\n\nSteps:\n1. Start at -3 on the number line.\n2. Move 5 units to the right.\n\nAnswer: 2";
-        defaultMeta = {
-          problem: "Find: -3 + 5",
-          steps: ["Start at -3 on the number line.", "Move 5 units to the right."],
-          answer: "2",
-        };
+        defaultContent = `Problem: ${TEMPLATE_MARK}\n\nSteps:\n1. ${TEMPLATE_MARK}\n\nAnswer: ${TEMPLATE_MARK}`;
+        defaultMeta = { problem: TEMPLATE_MARK, steps: [TEMPLATE_MARK], answer: TEMPLATE_MARK };
         break;
       case "CHECKPOINT":
         defaultTitle = "Quick Check";
-        defaultContent = "Which number is greater?";
-        defaultMeta = {
-          question: "Which number is greater?",
-          options: ["-5", "-2", "-8"],
-          correctAnswer: "-2",
-          explanation: "-2 is farther to the right on the number line.",
-        };
+        defaultContent = TEMPLATE_MARK;
+        defaultMeta = { question: TEMPLATE_MARK, options: ["", ""], correctAnswer: "", explanation: "" };
         break;
       case "QUESTION":
         defaultTitle = "Check Your Understanding";
-        defaultContent = "Solve the given integer problem.";
-        defaultMeta = {
-          question: "What is the opposite of -7?",
-          options: ["+7", "-7", "0"],
-          correctAnswer: "+7",
-          explanation: "The opposite of -a is +a. Hence, the opposite of -7 is +7.",
-          hint: "Think about moving to the opposite side of zero.",
-        };
+        defaultContent = TEMPLATE_MARK;
+        defaultMeta = { question: TEMPLATE_MARK, options: ["", ""], correctAnswer: "", explanation: "", hint: "" };
         break;
       case "INTERACTIVE":
-        defaultTitle = "Integer Number Line Explorer";
-        defaultContent = "Explore how signed numbers move along the horizontal axis.";
+        defaultTitle = "Number Line Explorer";
+        defaultContent = `${TEMPLATE_MARK} Say what the student should explore on the number line.`;
         break;
       case "HINT":
         defaultTitle = "Helpful Tip";
-        defaultContent = "Remember that on a number line, numbers increase as you move right and decrease as you move left.";
+        defaultContent = `${TEMPLATE_MARK} Give the student a helpful tip.`;
         break;
       case "PRACTICE":
         defaultTitle = "Targeted Practice";
-        defaultContent = "Apply your knowledge to standard MATATAG exercises.";
-        defaultMeta = { skillName: "Integer Operations", questionCount: 5, difficulty: "Level 1" };
+        defaultContent = `${TEMPLATE_MARK} Tell the student what the practice covers.`;
+        defaultMeta = { skillName: "", questionCount: 5, difficulty: "Mixed" };
         break;
       case "SUMMARY":
         defaultTitle = "What You Learned";
-        defaultContent = "• Key Point 1: ...\n• Key Point 2: ...";
+        defaultContent = `${TEMPLATE_MARK}\n• Key point 1\n• Key point 2`;
         break;
     }
 
@@ -301,7 +288,7 @@ export function ContentBlockEditor({ blocks, onChange }: ContentBlockEditorProps
                           type="text"
                           value={block.title || ""}
                           onChange={(e) => handleUpdate(index, { title: e.target.value })}
-                          placeholder="e.g. 1. Introduction to Integers"
+                          placeholder="e.g. 1. Introduction to the topic"
                           className="w-full text-xs p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
                         />
                       </div>
@@ -389,7 +376,7 @@ export function ContentBlockEditor({ blocks, onChange }: ContentBlockEditorProps
                               const opts = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
                               handleUpdateMeta(index, "options", opts);
                             }}
-                            placeholder="-5, -2, -8"
+                            placeholder="e.g. 12, 15, 18"
                             className="w-full text-xs p-2 rounded-lg border border-slate-200 bg-white"
                           />
                         </div>
@@ -400,7 +387,7 @@ export function ContentBlockEditor({ blocks, onChange }: ContentBlockEditorProps
                               type="text"
                               value={parsedMeta.correctAnswer || ""}
                               onChange={(e) => handleUpdateMeta(index, "correctAnswer", e.target.value)}
-                              placeholder="-2"
+                              placeholder="e.g. 15"
                               className="w-full text-xs p-2 rounded-lg border border-slate-200 bg-white"
                             />
                           </div>

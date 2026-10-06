@@ -1,0 +1,36 @@
+# Tuklas AI — teacher quick-start
+
+For a teacher running a first class. Everything here is done in the app; no technical steps.
+
+## Before the first lesson
+1. **Get your account.** An administrator creates teacher accounts (Admin → Users). You receive an email address and a temporary password. Sign in (top right, **Sign In**), then open **your name → My account** and change the password.
+2. **Make a class.** *Classes → name → Create class.* Open it: the **class code** (six characters) is on the class page. **Copy** it for your students. **Turn code off** once everyone has joined; **New code** if it leaks.
+3. **Check what is there.** *Lessons* lists the published lessons. *Question bank* and *Practice Sets* hold questions; students only ever see published ones.
+
+## Students join (2 minutes)
+Each student: open the site on their phone or laptop → **Sign In → Need a new account? Register here** → on their dashboard type the class code under **Join a class**. You can also add students by email from the class page.
+
+## A simple unit
+1. **Pre-test.** *Assessments → New →* kind **Pre-test**, choose 8–12 questions, **Create draft → Publish → Assign to a class** (pick the class and a due date). A pre-test can be taken **once** and students are **not shown the right answers** (so the post-test stays a fair comparison).
+2. **Lessons and practice.** On the class page choose **Create Assignment** and pick a lesson and/or a practice set and a due date. Students find it under *Assignments* on their dashboard. The AI tutor (and the voice button, on supported phones/browsers) is inside each lesson.
+3. **Post-test.** Same as the pre-test, kind **Post-test**, same or parallel questions.
+4. **Look at the results.** *Assessments → Results* shows who has finished, scores and which questions were hard. When both tests exist, **Compare pre-test and post-test** (class + the two tests) shows averages and the change. It reports an *observed* difference, not proof that the lessons caused it.
+
+## Adding the next lessons (Terms 2 and 3)
+The platform ships Term 1 (Weeks 1-6) and one Term 2 unit (Integers). You add the rest:
+1. **Curriculum → Add a unit.** Pick the term (1, 2 or 3). Use *Move up / Move down* to put the units in order.
+2. Open the unit and add its **competencies and skills** (what students are measured on). You can set prerequisites between skills.
+3. **Create New Lesson**, pick the unit and tick its skills. In the studio add the sections, **replace every "(Replace this text)"** (a lesson with template text cannot be published), then **Save Draft**.
+4. Submit for review, approve, publish. Create questions and a practice set for the lesson's skills.
+5. Students take lessons in course order. If your class is ahead, open the lesson from the class page (*Lesson access*).
+Nothing you add has been checked by anyone else: read it as a student would before publishing.
+
+## Things to know
+- **The tutor guides, it does not give answers.** If a student asks for the answer it asks a question back. You can adjust its behaviour on the AI Settings page (`/teacher/ai-settings`) — note these settings apply to **all teachers on this installation** for now.
+- **Voice** works only in browsers that support speech input (Chrome/Edge on Android and desktop; Safari is partial; Firefox none). If the microphone button is missing, students can type. Only the text is kept, never a recording — but Chrome itself may send the audio to Google to turn it into text (see the pilot checklist).
+- **Archive** an assessment to hide it from students; the results stay.
+- **Lesson order:** students take lessons in course order and cannot start one until the one before is finished. If your class is ahead or behind, open the class page and use **Lesson access**: open a lesson for the whole class, for one student, or use "Open through here" to open everything up to a lesson. Students see "Opened by your teacher". Closing a lesson never removes work a student has already started.
+- **Late work:** due dates are shown to students but nothing is blocked when they pass.
+- **Timed tests** end automatically when time runs out (the answers entered so far are submitted).
+- **A student forgot their password?** An administrator can set a temporary one.
+- **Something looks wrong?** Note what you clicked, the time and your class name, and tell the person who runs the installation.

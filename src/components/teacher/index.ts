@@ -8,3 +8,7 @@ export * from "./TeacherActivityTimeline";
 export * from "./TeacherAIAssistantModal";
 export * from "./StudentTable";
 export * from "./StudentDetailView";
+export * from "./ClassInsightCards";
+export { LessonAccessCard } from "./LessonAccessCard";
+export { AddUnitForm } from "./AddUnitForm";
+export { UnitStructureCard } from "./UnitStructureCard";

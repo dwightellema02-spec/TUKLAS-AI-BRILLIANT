@@ -1,5 +1,6 @@
 // Phase 7: AI Tutor Core Service Orchestrator
 
+import { normalizeSpokenMath } from "../voice/spoken-math";
 import { dbService } from "../db";
 import { buildAITutorContext } from "./context";
 import { buildTutorSystemPrompt, buildTutorUserPrompt } from "./prompts";
@@ -17,8 +18,10 @@ import { evaluateAttempt, resolveExpectedAnswerText } from "./conversation/evalu
 import { parseAnyProblem, findNumberInText } from "./conversation/arith";
 import { observeStudentTurn, parseState, recordTutorTurn, serializeState, summarizeEvaluation, summarizeState } from "./conversation/state";
 import { planResponse } from "./conversation/planner";
-import { checkTutorOutput, type Violation } from "./conversation/guards";
+import { checkTutorOutput, mentionsAnswerValue, type Violation } from "./conversation/guards";
+import { sharesLongRun } from "./untrusted";
 import { realizePlan } from "./conversation/realizer";
+import { coachFor } from "./conversation/coaching";
 import type { ConversationState, ParsedProblem, ResponsePlan } from "./conversation/types";
 
 interface RateLimitRecord {
@@ -81,8 +84,13 @@ export class AITutorService {
   /**
    * Main interaction entrypoint
    */
-  static async interact(params: AITutorInteractParams): Promise<TutorAPIResponse> {
-    const { studentId, studentQuery, questionId, practiceSessionId } = params;
+  static async interact(rawParams: AITutorInteractParams): Promise<TutorAPIResponse> {
+    const { studentId, studentQuery: spokenOrTyped, questionId, practiceSessionId } = rawParams;
+    const channel: "voice" | "text" = rawParams.inputChannel === "voice" ? "voice" : "text";
+    // Spoken or word-form maths ("negative five plus three") is rewritten to digits for understanding; the original text is what is stored and shown.
+    const speech = spokenOrTyped && spokenOrTyped.trim() ? normalizeSpokenMath(spokenOrTyped) : null;
+    const studentQuery = speech?.changed ? speech.text : spokenOrTyped;
+    const params: AITutorInteractParams = { ...rawParams, studentQuery };
 
     // 1. Rate Limit Enforcement
     const rateLimit = this.checkRateLimit(studentId);
@@ -99,7 +107,7 @@ export class AITutorService {
     }
 
     // 3. Input Sanitization & Guard
-    if (studentQuery && studentQuery.length > 1000) {
+    if (spokenOrTyped && spokenOrTyped.length > 1000) {
       throw new Error("Student query exceeds the maximum allowed length of 1000 characters.");
     }
 
@@ -117,8 +125,9 @@ export class AITutorService {
       await dbService.saveAITutorMessage({
         conversationId: conversation.id,
         role: "STUDENT",
-        content: studentQuery.trim(),
+        content: (spokenOrTyped ?? studentQuery).trim(),
         messageType: "QUESTION",
+        metadata: JSON.stringify({ inputChannel: channel, ...(speech?.changed ? { understoodAs: speech.text, uncertain: speech.uncertain } : {}) }),
       });
     }
 
@@ -187,6 +196,7 @@ export class AITutorService {
     return {
       success: true,
       conversationId: conversation.id,
+      input: { channel, ...(speech?.changed ? { understoodAs: speech.text, uncertain: speech.uncertain } : {}) },
       message: {
         id: savedTutorMessage.id,
         role: "TUTOR",
@@ -261,7 +271,10 @@ export class AITutorService {
     );
 
     const state = observeStudentTurn(prevState, signal, evaluation, { problem: activeProblem, source });
+    // Topic coaching (polygons, percentages, rates...) for a lesson question the integer engine cannot parse.
+    const coach = q && !activeProblem ? coachFor({ prompt: q.prompt, skillTitle: context.skill?.title, expectedAnswer: q.expectedAnswer, type: q.type }) : undefined;
     const plan = planResponse({
+      coach,
       state,
       signal,
       evaluation,
@@ -271,6 +284,7 @@ export class AITutorService {
       topicText: [context.curriculum.lessonTitle, context.skill?.title, q?.prompt].filter(Boolean).join(" "),
     });
 
+    if (plan.coach && q?.expectedAnswer !== undefined && Number.isFinite(Number(String(q.expectedAnswer).replace(/,/g, "")))) plan.coachAvoid = Number(String(q.expectedAnswer).replace(/,/g, ""));
     // Non-arithmetic question (e.g. multiple choice about a concept): still protect the expected answer text.
     if (!activeProblem && q && evaluation.kind !== "CORRECT") {
       const text = resolveExpectedAnswerText({ type: q.type, choices: q.choices, expectedAnswer: q.expectedAnswer });
@@ -319,6 +333,12 @@ export class AITutorService {
       }
       const structured = validateTutorOutput(raw.text, context);
       const violations = checkTutorOutput({ message: structured.message, guidingQuestion: structured.guidingQuestion }, turn.plan, turn.state);
+      const shownText = `${structured.message} ${structured.guidingQuestion ?? ""} ${structured.encouragement ?? ""} ${structured.nextStep ?? ""}`;
+      // Screens that apply to model text only (the local realizer is built from the plan, not from free generation)
+      if (!/^local/i.test(raw.provider)) {
+        if (sharesLongRun(shownText, systemPrompt)) violations.push("PROMPT_LEAK");
+        if (!violations.includes("ANSWER_DISCLOSED") && mentionsAnswerValue(shownText, turn.plan)) violations.push("ANSWER_VALUE_MENTIONED");
+      }
       return { raw, structured, violations };
     };
 

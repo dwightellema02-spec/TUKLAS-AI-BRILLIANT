@@ -3,12 +3,22 @@ import { HelpCircle, CheckCircle2, AlertCircle, RefreshCw } from "lucide-react";
 import { MathText } from "@/components/ui/MathText";
 import { Button } from "@/components/ui/Button";
 
+export interface GradingResult {
+  isCorrect: boolean;
+  feedback: string;
+  /** Present only when the student answered correctly. */
+  correctAnswer?: string;
+}
+
 export interface CheckpointBlockProps {
   blockId: string;
   title?: string;
   content: string; // Question prompt or description
   metadata?: string; // JSON with options[], correctAnswer, explanation
+  /** Local grading (teacher preview, where the answer key is available). */
   onAttempt?: (blockId: string, answer: string, isCorrect: boolean, feedback: string) => void;
+  /** Server grading (students): the answer key never reaches the browser before the student answers. */
+  onSubmitAnswer?: (blockId: string, answer: string) => Promise<GradingResult>;
   previousAttempt?: { answer: string; isCorrect: boolean; feedback?: string };
   readOnly?: boolean;
 }
@@ -19,6 +29,7 @@ export function CheckpointBlock({
   content,
   metadata,
   onAttempt,
+  onSubmitAnswer,
   previousAttempt,
   readOnly = false,
 }: CheckpointBlockProps) {
@@ -35,27 +46,45 @@ export function CheckpointBlock({
     } catch {}
   }
 
-  // Fallback defaults for the MATATAG Integers Checkpoint
-  const question = parsed.question || content || "Which number is greater?";
-  const options = parsed.options || ["-5", "-2", "-8"];
-  const correctAnswer = parsed.correctAnswer || "-2";
-  const explanation =
-    parsed.explanation ||
-    "On a horizontal number line, numbers farther to the right are greater. -2 is to the right of -5 and -8, meaning -2 > -5 and -2 > -8.";
+  const question = parsed.question || content;
+  const options = Array.isArray(parsed.options) ? parsed.options : [];
+  const configured = options.length >= 2;
 
   const [selectedOption, setSelectedOption] = useState<string>(previousAttempt?.answer || "");
   const [submitted, setSubmitted] = useState<boolean>(!!previousAttempt);
   const [isCorrect, setIsCorrect] = useState<boolean>(previousAttempt?.isCorrect ?? false);
+  const [feedback, setFeedback] = useState<string>(previousAttempt?.feedback ?? parsed.explanation ?? "");
+  // The answer that may be highlighted: in local mode the key itself; from the server only once found.
+  const [revealedAnswer, setRevealedAnswer] = useState<string | undefined>(
+    onSubmitAnswer ? (previousAttempt?.isCorrect ? previousAttempt.answer : undefined) : parsed.correctAnswer
+  );
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = () => {
-    if (!selectedOption || readOnly) return;
-    const correct = selectedOption.trim() === correctAnswer.trim();
-    setIsCorrect(correct);
-    setSubmitted(true);
-
-    if (onAttempt) {
-      onAttempt(blockId, selectedOption, correct, explanation);
+  const handleSubmit = async () => {
+    if (!selectedOption || readOnly || pending) return;
+    setError(null);
+    if (onSubmitAnswer) {
+      setPending(true);
+      try {
+        const graded = await onSubmitAnswer(blockId, selectedOption);
+        setIsCorrect(graded.isCorrect);
+        setFeedback(graded.feedback);
+        setRevealedAnswer(graded.isCorrect ? graded.correctAnswer ?? selectedOption : undefined);
+        setSubmitted(true);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not check your answer. Please try again.");
+      } finally {
+        setPending(false);
+      }
+      return;
     }
+    if (parsed.correctAnswer === undefined) return;
+    const correct = selectedOption.trim() === parsed.correctAnswer.trim();
+    setIsCorrect(correct);
+    setFeedback(parsed.explanation ?? "");
+    setSubmitted(true);
+    if (onAttempt) onAttempt(blockId, selectedOption, correct, parsed.explanation ?? "");
   };
 
   const handleRetry = () => {
@@ -84,11 +113,17 @@ export function CheckpointBlock({
           <MathText content={question} />
         </div>
 
+        {!configured && (
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3">
+            This question is not set up yet (it needs at least two answer choices and a correct answer).
+          </p>
+        )}
+
         {/* Options Selection */}
         <div className="space-y-2.5">
           {options.map((opt, idx) => {
             const isSelected = selectedOption === opt;
-            const isTargetCorrect = opt.trim() === correctAnswer.trim();
+            const isTargetCorrect = revealedAnswer !== undefined && opt.trim() === revealedAnswer.trim();
 
             let optionStyle =
               "border-slate-200 bg-slate-50 hover:bg-slate-100/80 text-slate-800";
@@ -126,14 +161,15 @@ export function CheckpointBlock({
 
         {/* Action Button */}
         {!submitted ? (
-          <div className="pt-2">
+          <div className="pt-2 space-y-2">
+            {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
             <Button
               variant="primary"
-              disabled={!selectedOption || readOnly}
+              disabled={!selectedOption || readOnly || pending || !configured}
               onClick={handleSubmit}
               className="gap-2"
             >
-              <span>Submit Answer</span>
+              <span>{pending ? "Checking..." : "Submit Answer"}</span>
             </Button>
           </div>
         ) : (
@@ -156,7 +192,7 @@ export function CheckpointBlock({
                   {isCorrect ? "Correct! Excellent reasoning." : "Not quite, but good effort!"}
                 </span>
                 <div className="text-xs sm:text-sm text-slate-700">
-                  <MathText content={explanation} />
+                  <MathText content={feedback} />
                 </div>
               </div>
             </div>

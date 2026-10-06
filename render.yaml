@@ -1,0 +1,19 @@
+# Render blueprint: https://render.com/docs/blueprint-spec
+# Needs a PostgreSQL URL (a free Neon database works): set DATABASE_URL in the Render dashboard.
+services:
+  - type: web
+    name: tuklas-ai
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false          # paste your PostgreSQL connection string
+      - key: AI_PROVIDER
+        value: local         # change to gemini and add GEMINI_API_KEY to use the real model
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TRUST_PROXY
+        value: "true"

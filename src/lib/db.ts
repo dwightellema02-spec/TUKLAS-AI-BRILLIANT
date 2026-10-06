@@ -3,6 +3,16 @@
  * Singleton Prisma Client with Phase 4 Learning Path & Prerequisite Engine and resilient sandbox fallback.
  */
 
+import { isGradableType, parseChoiceBlock } from "./lesson/block-grading";
+import { findUnfinishedBlock, TEMPLATE_MARK } from "./lesson/template-mark";
+
+/** Thrown when a student tries to complete a lesson that still has unanswered questions. */
+export class LessonIncompleteError extends Error {
+  constructor(public missingBlockIds: string[]) {
+    super(`Answer ${missingBlockIds.length} remaining question${missingBlockIds.length === 1 ? "" : "s"} correctly to complete this lesson.`);
+    this.name = "LessonIncompleteError";
+  }
+}
 import fs from "fs";
 import path from "path";
 import {
@@ -257,6 +267,12 @@ export interface SeedDataStore {
     passwordHash: string;
     role: UserRole;
     gradeLevel?: number;
+    sessionVersion?: number;
+    disabledAt?: Date | string | null;
+    privacyNoticeVersion?: string | null;
+    privacyAcceptedAt?: Date | string | null;
+    guardianConsentAt?: Date | string | null;
+    guardianConsentRecordedBy?: string | null;
     createdAt: Date;
     updatedAt: Date;
   }>;
@@ -313,6 +329,8 @@ export interface SeedDataStore {
   classrooms: any[];
   classroomEnrollments: any[];
   assignments: any[];
+  /** Phase 39: teacher lesson openings (mirror of the LessonUnlock table). */
+  lessonUnlocks: Array<{ id: string; classroomId: string; lessonId: string; studentId: string; createdById: string; createdAt: Date }>;
   /** Phase 22: extracted document/note chunks (in-memory fallback mirror of the ResourceChunk table). */
   resourceChunks: Array<import("./documents/types").StoredChunk>;
 }
@@ -1690,6 +1708,7 @@ export const fallbackStore: SeedDataStore = {
     },
   ],
   resourceChunks: [],
+  lessonUnlocks: [],
   assignments: [
     {
       id: "asg_01",
@@ -1771,6 +1790,8 @@ if (useInMemoryAccounts) loadPersistedUsers();
 // UNIFIED DATA REPOSITORY API (Prisma with Safe Fallback)
 // -------------------------------------------------------------
 
+const memoryAuditLog: Array<{ id: string; actorId: string | null; action: string; targetType: string | null; targetId: string | null; detail: string | null; ip: string | null; createdAt: Date }> = [];
+
 export const dbService = {
   /**
    * Check live database connection status safely
@@ -1816,8 +1837,10 @@ export const dbService = {
             grades: {
               include: {
                 terms: {
+                  orderBy: { termNumber: "asc" },
                   include: {
                     units: {
+                      orderBy: { sequenceOrder: "asc" },
                       include: {
                         lessons: {
                           orderBy: { sequenceOrder: "asc" },
@@ -1845,9 +1868,10 @@ export const dbService = {
             },
           },
         });
-        if (subjects.length > 0) return subjects;
+        if (subjects.length > 0 || hasValidDatabaseUrl) return subjects;
       }
     } catch (error) {
+      if (hasValidDatabaseUrl) throw error; // database mode never falls back to demo data
       console.warn("Prisma query failed, utilizing fallback seed data:", error);
     }
 
@@ -1916,9 +1940,10 @@ export const dbService = {
           },
           orderBy: { sequenceOrder: "asc" },
         });
-        if (lessons.length > 0) return lessons;
+        if (lessons.length > 0 || hasValidDatabaseUrl) return lessons;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("Falling back to in-memory lessons:", e);
     }
 
@@ -1974,6 +1999,7 @@ export const dbService = {
         if (lesson) return lesson;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn(`Lesson query for ${id} falling back:`, e);
     }
 
@@ -2024,6 +2050,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("reorderLessons falling back to memory:", e);
     }
 
@@ -2113,6 +2140,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateSkillPrerequisites falling back to in-memory:", e);
     }
 
@@ -2121,12 +2149,92 @@ export const dbService = {
   },
 
   /**
+   * Published curriculum used to build a learning path. With a database configured this reads ONLY
+   * from the database (a failure throws; it never silently serves the demo curriculum). Without one
+   * it uses the in-memory demo curriculum.
+   */
+  async loadPathCurriculum() {
+    type PathLesson = {
+      id: string; title: string; description?: string | null; sequenceOrder: number; estimatedMinutes: number;
+      status: string; prerequisiteLessonId?: string | null; skillIds: string[]; contentBlockCount: number; resourceCount: number;
+    };
+    type PathSkill = { id: string; title: string; difficulty: number; prerequisiteIds: string[] };
+
+    if (!hasValidDatabaseUrl) {
+      const c = fallbackStore.curriculum;
+      return {
+        subject: c.subject.name as string,
+        grade: c.grade.name as string,
+        term: c.term.name as string,
+        unit: { id: c.unit.id as string, title: c.unit.title as string, description: (c.unit.description ?? null) as string | null },
+        lessons: c.lessons
+          .filter((l) => l.status === "PUBLISHED")
+          .sort((a, b) => a.sequenceOrder - b.sequenceOrder)
+          .map((l): PathLesson => ({
+            id: l.id, title: l.title, description: l.description, sequenceOrder: l.sequenceOrder,
+            estimatedMinutes: l.estimatedMinutes, status: l.status, prerequisiteLessonId: l.prerequisiteLessonId,
+            skillIds: l.skillIds, contentBlockCount: l.contentBlocks?.length || 0, resourceCount: l.resources?.length || 0,
+          })),
+        skills: c.skills.map((sk): PathSkill => ({ id: sk.id, title: sk.title, difficulty: sk.difficulty, prerequisiteIds: sk.prerequisiteIds })),
+      };
+    }
+
+    const rows = await prisma.lesson.findMany({
+      where: { status: "PUBLISHED" },
+      // course order: term, then unit, then the lesson's place in its unit (lessons are numbered per unit, so ordering by
+      // sequenceOrder alone would interleave the lessons of different units)
+      orderBy: [{ unit: { term: { termNumber: "asc" } } }, { unit: { sequenceOrder: "asc" } }, { sequenceOrder: "asc" }, { createdAt: "asc" }],
+      include: {
+        skills: { select: { skillId: true } },
+        _count: { select: { contentBlocks: true, resources: true } },
+        unit: { include: { term: { include: { grade: { include: { subject: true } } } } } },
+      },
+    });
+    const skillRows = await prisma.skill.findMany({ include: { prerequisites: { select: { prerequisiteSkillId: true } } } });
+    const unit = rows[0]?.unit ?? (await prisma.unit.findFirst({ orderBy: { sequenceOrder: "asc" }, include: { term: { include: { grade: { include: { subject: true } } } } } }));
+
+    // the path can span several units and terms: name the whole course then, not just the unit of the first lesson
+    const unitIds = new Set(rows.map((r) => r.unitId));
+    const termNames = [...new Map(rows.map((r) => [r.unit.term.termNumber, r.unit.term.name] as const)).entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1]);
+    const multi = unitIds.size > 1;
+    return {
+      subject: unit?.term.grade.subject.name ?? "",
+      grade: unit?.term.grade.name ?? "",
+      term: multi ? termNames.join(" and ") : unit?.term.name ?? "",
+      unit: multi
+        ? { id: unit?.id ?? "", title: `${unit?.term.grade.subject.name ?? ""} ${unit?.term.grade.name ?? ""}`.trim(), description: `${unitIds.size} units, in course order.` }
+        : { id: unit?.id ?? "", title: unit?.title ?? "", description: unit?.description ?? null },
+      lessons: rows.map((l, i): PathLesson => ({
+        // numbered by place in the course, not within its unit (the integers lesson is not "Lesson 1")
+        id: l.id, title: l.title, description: l.description, sequenceOrder: i + 1,
+        estimatedMinutes: l.estimatedMinutes, status: l.status, prerequisiteLessonId: l.prerequisiteLessonId,
+        skillIds: l.skills.map((x) => x.skillId), contentBlockCount: l._count.contentBlocks, resourceCount: l._count.resources,
+      })),
+      skills: skillRows.map((sk): PathSkill => ({
+        id: sk.id, title: sk.title, difficulty: sk.difficulty, prerequisiteIds: sk.prerequisites.map((p) => p.prerequisiteSkillId),
+      })),
+    };
+  },
+
+  /** Ids of lessons a teacher has opened for this student: class-wide ("" student) or for the student, in a class they are enrolled in that is not archived. */
+  async getTeacherOpenedLessonIds(studentId: string): Promise<Set<string>> {
+    if (hasValidDatabaseUrl) {
+      const enr = await prisma.classroomEnrollment.findMany({ where: { studentId, classroom: { archivedAt: null } }, select: { classroomId: true } });
+      if (enr.length === 0) return new Set();
+      const rows = await prisma.lessonUnlock.findMany({ where: { classroomId: { in: enr.map((e) => e.classroomId) }, studentId: { in: ["", studentId] } }, select: { lessonId: true } });
+      return new Set(rows.map((r) => r.lessonId));
+    }
+    const live = new Set((fallbackStore.classrooms as any[]).filter((c) => !c.archivedAt).map((c) => c.id));
+    const mine = new Set((fallbackStore.classroomEnrollments as any[]).filter((e) => e.studentId === studentId && live.has(e.classroomId)).map((e) => e.classroomId));
+    return new Set(fallbackStore.lessonUnlocks.filter((u) => mine.has(u.classroomId) && (u.studentId === "" || u.studentId === studentId)).map((u) => u.lessonId));
+  },
+
+  /**
    * Retrieve Student's Complete Learning Path Progression
    */
   async getStudentLearningPath(userId: string) {
-    const publishedLessons = fallbackStore.curriculum.lessons
-      .filter((l) => l.status === "PUBLISHED")
-      .sort((a, b) => a.sequenceOrder - b.sequenceOrder);
+    const cur = await this.loadPathCurriculum();
+    const publishedLessons = cur.lessons;
 
     // Get student progress
     const progressList: any[] = await this.getStudentProgress(userId);
@@ -2141,6 +2249,9 @@ export const dbService = {
         completedLessonIds.add(p.lessonId);
       }
     });
+
+    // lessons this student's teacher has opened early (for the class or for this student)
+    const teacherOpened = await this.getTeacherOpenedLessonIds(userId);
 
     // Determine state for each lesson
     const pathNodes = publishedLessons.map((lesson, idx) => {
@@ -2157,17 +2268,17 @@ export const dbService = {
       }
 
       // Check skill prerequisites
-      const lessonSkills = fallbackStore.curriculum.skills.filter((s) =>
-        lesson.skillIds.includes(s.id)
-      );
+      const lessonSkills = cur.skills.filter((s) => lesson.skillIds.includes(s.id));
       for (const skill of lessonSkills) {
         for (const reqSkillId of skill.prerequisiteIds) {
-          const reqSkill = fallbackStore.curriculum.skills.find((s) => s.id === reqSkillId);
+          const reqSkill = cur.skills.find((s) => s.id === reqSkillId);
           const skillProg = progressList.find((p) => p.skillId === reqSkillId);
           if (!skillProg || (skillProg.status !== "COMPLETED" && skillProg.progressPercentage < 100)) {
             // Check if this skill was covered in an already completed lesson
+            // ...or is taught by this very lesson (a skill and its prerequisite can be taught together;
+            // requiring it first would lock the lesson forever).
             const parentCompleted = publishedLessons.some(
-              (pl) => pl.skillIds.includes(reqSkillId) && completedLessonIds.has(pl.id)
+              (pl) => pl.skillIds.includes(reqSkillId) && (pl.id === lesson.id || completedLessonIds.has(pl.id))
             );
             if (!parentCompleted) {
               isLocked = true;
@@ -2185,6 +2296,10 @@ export const dbService = {
           lockReasons.push(`Requires completion of "${priorLesson.title}"`);
         }
       }
+
+      // a teacher's opening replaces the sequence/prerequisite lock for this lesson only
+      const openedByTeacher = isLocked && teacherOpened.has(lesson.id);
+      if (openedByTeacher) { isLocked = false; lockReasons.length = 0; }
 
       if (prog?.status === "COMPLETED" || (prog?.progressPercentage || 0) >= 100) {
         state = "COMPLETED";
@@ -2205,6 +2320,7 @@ export const dbService = {
         status: lesson.status,
         state,
         lockReasons: state === "LOCKED" ? lockReasons : [],
+        openedByTeacher,
         progressPercentage: prog?.progressPercentage || 0,
         startedAt: prog?.startedAt,
         completedAt: prog?.completedAt,
@@ -2215,8 +2331,8 @@ export const dbService = {
           difficulty: s.difficulty,
           prerequisites: s.prerequisiteIds,
         })),
-        contentBlockCount: lesson.contentBlocks?.length || 0,
-        resourceCount: lesson.resources?.length || 0,
+        contentBlockCount: lesson.contentBlockCount,
+        resourceCount: lesson.resourceCount,
       };
     });
 
@@ -2238,13 +2354,13 @@ export const dbService = {
 
     return {
       curriculum: {
-        subject: fallbackStore.curriculum.subject.name,
-        grade: fallbackStore.curriculum.grade.name,
-        term: fallbackStore.curriculum.term.name,
+        subject: cur.subject,
+        grade: cur.grade,
+        term: cur.term,
         unit: {
-          id: fallbackStore.curriculum.unit.id,
-          title: fallbackStore.curriculum.unit.title,
-          description: fallbackStore.curriculum.unit.description,
+          id: cur.unit.id,
+          title: cur.unit.title,
+          description: cur.unit.description,
           totalLessons: totalUnitLessons,
           completedLessons: completedUnitLessons,
           progressPercentage: unitPercentage,
@@ -2295,6 +2411,20 @@ export const dbService = {
   },
 
   /**
+   * Which gradable questions of a lesson has this student not yet answered correctly?
+   * Only well-formed questions count (a broken one cannot be answered, so it must not block completion).
+   */
+  async getLessonCompletionStatus(userId: string, lessonId: string) {
+    const lesson: any = await this.getLessonById(lessonId);
+    const required: string[] = ((lesson?.contentBlocks || []) as any[])
+      .filter((b) => isGradableType(b.type) && parseChoiceBlock(b))
+      .map((b) => b.id);
+    const attempts: any[] = (await this.getCheckpointAttempts(userId, lessonId)) as any[];
+    const correct = new Set(attempts.filter((a) => a.isCorrect).map((a) => a.blockId));
+    return { required, correct: required.filter((id) => correct.has(id)), missing: required.filter((id) => !correct.has(id)) };
+  },
+
+  /**
    * Update student progress on a lesson (e.g. Started or Block completion)
    */
   async updateStudentProgress(
@@ -2306,57 +2436,81 @@ export const dbService = {
       totalBlocks?: number;
     }
   ) {
-    let prog = fallbackStore.progress.find(
-      (p) => p.userId === userId && p.lessonId === lessonId
-    );
-
     const now = new Date();
 
+    // A lesson is complete only when every question in it has been answered correctly at least once.
+    let missing: string[] = [];
+    if (payload.action === "COMPLETE" || payload.action === "UPDATE_BLOCKS") {
+      missing = (await this.getLessonCompletionStatus(userId, lessonId)).missing;
+      if (payload.action === "COMPLETE" && missing.length > 0) {
+        throw new LessonIncompleteError(missing);
+      }
+    }
+
+    // Pure transition shared by both stores. Quality scores start at 0: they are evidence
+    // fields owned by mastery/practice, never invented here.
+    const apply = (prev: { status: string; progressPercentage: number; startedAt?: Date | null; completedAt?: Date | null } | null) => {
+      let status = prev?.status ?? "LEARNING";
+      let pct = prev?.progressPercentage ?? 15;
+      let completedAt = prev?.completedAt ?? null;
+      const startedAt = prev?.startedAt ?? now;
+      if (payload.action === "START") {
+        if (status === "NOT_STARTED") {
+          status = "LEARNING";
+          pct = Math.max(pct, 20);
+        }
+      } else if (payload.action === "UPDATE_BLOCKS") {
+        const total = payload.totalBlocks || 4;
+        const completed = (payload.completedBlockIndex ?? 0) + 1;
+        pct = Math.max(pct, Math.min(missing.length > 0 ? 99 : 100, Math.round((completed / total) * 100)));
+        if (pct >= 100) {
+          status = "COMPLETED";
+          completedAt = completedAt ?? now;
+        } else if (status !== "COMPLETED") {
+          status = "LEARNING";
+        }
+      } else if (payload.action === "COMPLETE") {
+        status = "COMPLETED";
+        pct = 100;
+        completedAt = completedAt ?? now;
+      }
+      return { status, pct, startedAt, completedAt };
+    };
+
+    if (hasValidDatabaseUrl) {
+      // One lesson-progress row per (student, lesson): the primary key is deterministic so concurrent
+      // requests cannot create duplicates.
+      const id = `lp:${userId}:${lessonId}`;
+      const prev = await prisma.studentProgress.findUnique({ where: { id } });
+      const next = apply(prev as any);
+      return prisma.studentProgress.upsert({
+        where: { id },
+        create: {
+          id, userId, lessonId, status: next.status as any, progressPercentage: next.pct,
+          startedAt: next.startedAt, completedAt: next.completedAt, attemptCount: 1, lastActivity: now,
+        },
+        update: {
+          status: next.status as any, progressPercentage: next.pct, startedAt: next.startedAt,
+          completedAt: next.completedAt, lastActivity: now,
+        },
+      });
+    }
+
+    let prog = fallbackStore.progress.find((p) => p.userId === userId && p.lessonId === lessonId);
+    const next = apply(prog ? (prog as any) : null);
     if (!prog) {
       prog = {
-        id: `prg_${Date.now()}`,
-        userId,
-        lessonId,
-        status: "LEARNING",
-        progressPercentage: 15,
-        startedAt: now,
-        understandingScore: 0.5,
-        accuracyScore: 0.5,
-        applicationScore: 0.5,
-        consistencyScore: 0.5,
-        compositeScore: 0.5,
-        attemptCount: 1,
-        lastActivity: now,
+        id: `prg_${Date.now()}`, userId, lessonId, status: "LEARNING", progressPercentage: 15, startedAt: now,
+        understandingScore: 0, accuracyScore: 0, applicationScore: 0, consistencyScore: 0, compositeScore: 0,
+        attemptCount: 1, lastActivity: now,
       };
       fallbackStore.progress.push(prog);
-    } else {
-      prog.lastActivity = now;
-      if (!prog.startedAt) prog.startedAt = now;
     }
-
-    if (payload.action === "START") {
-      if (prog.status === "NOT_STARTED") {
-        prog.status = "LEARNING";
-        prog.progressPercentage = Math.max(prog.progressPercentage, 20);
-      }
-    } else if (payload.action === "UPDATE_BLOCKS") {
-      const total = payload.totalBlocks || 4;
-      const completed = (payload.completedBlockIndex ?? 0) + 1;
-      const percentage = Math.min(100, Math.round((completed / total) * 100));
-
-      prog.progressPercentage = Math.max(prog.progressPercentage, percentage);
-      if (prog.progressPercentage >= 100) {
-        prog.status = "COMPLETED";
-        prog.completedAt = now;
-      } else {
-        prog.status = "LEARNING";
-      }
-    } else if (payload.action === "COMPLETE") {
-      prog.status = "COMPLETED";
-      prog.progressPercentage = 100;
-      prog.completedAt = now;
-    }
-
+    prog.status = next.status as any;
+    prog.progressPercentage = next.pct;
+    prog.startedAt = next.startedAt as any;
+    prog.completedAt = next.completedAt as any;
+    prog.lastActivity = now;
     return prog;
   },
 
@@ -2374,13 +2528,14 @@ export const dbService = {
   }) {
     try {
       if (hasValidDatabaseUrl) {
+        const last = await prisma.lesson.aggregate({ where: { unitId: data.unitId }, _max: { sequenceOrder: true } });
         return await prisma.lesson.create({
           data: {
             title: data.title,
             description: data.description,
             unitId: data.unitId,
             authorId: data.authorId,
-            sequenceOrder: fallbackStore.curriculum.lessons.length + 1,
+            sequenceOrder: (last._max.sequenceOrder ?? 0) + 1,
             status: "DRAFT",
             learningObjectives: data.learningObjectives,
             estimatedMinutes: data.estimatedMinutes || 20,
@@ -2398,6 +2553,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("createLesson falling back to in-memory store:", e);
     }
 
@@ -2434,6 +2590,7 @@ export const dbService = {
       estimatedMinutes?: number;
       prerequisiteLessonId?: string;
       contentBlocks?: Array<{
+        id?: string;
         type: BlockType;
         title?: string;
         content: string;
@@ -2445,24 +2602,63 @@ export const dbService = {
   ) {
     try {
       if (hasValidDatabaseUrl) {
-        const updated = await prisma.lesson.update({
-          where: { id },
-          data: {
-            title: data.title,
-            description: data.description,
-            learningObjectives: data.learningObjectives,
-            estimatedMinutes: data.estimatedMinutes,
-            prerequisiteLessonId: data.prerequisiteLessonId,
-          },
-          include: {
-            resources: true,
-            contentBlocks: true,
-            skills: { include: { skill: true } },
-          },
+        // The studio's "Save Draft" sends the whole lesson. Sections and skills used to be dropped here (the call said "saved" and kept
+        // nothing), so a teacher's work was lost. Validate first, then save everything in one transaction.
+        const blocks = data.contentBlocks;
+        if (blocks !== undefined) {
+          if (!Array.isArray(blocks) || blocks.length > 200) throw new Error("Invalid sections: a lesson can have at most 200 sections.");
+          const types = new Set(["TEXT", "IMAGE", "VIDEO", "EXAMPLE", "QUESTION", "INTERACTIVE", "HINT", "CHECKPOINT", "PRACTICE", "SUMMARY"]);
+          for (const b of blocks) {
+            if (!b || typeof b !== "object" || !types.has(b.type)) throw new Error("Invalid sections: unknown section type.");
+            if (typeof b.content !== "string" || b.content.length > 50000) throw new Error("Invalid sections: each section needs text of at most 50,000 characters.");
+            if (b.title !== undefined && b.title !== null && (typeof b.title !== "string" || b.title.length > 200)) throw new Error("Invalid sections: a section title can be at most 200 characters.");
+            if (b.metadata !== undefined && b.metadata !== null && (typeof b.metadata !== "string" || b.metadata.length > 20000)) throw new Error("Invalid sections: section data is too large or not text.");
+          }
+        }
+        let skillIds: string[] | undefined;
+        if (data.skillIds !== undefined) {
+          if (!Array.isArray(data.skillIds) || data.skillIds.some((s) => typeof s !== "string")) throw new Error("Invalid skills: expected a list of skill ids.");
+          skillIds = [...new Set(data.skillIds)];
+          const known = await prisma.skill.count({ where: { id: { in: skillIds } } });
+          if (known !== skillIds.length) throw new Error("Invalid skills: one of the chosen skills does not exist.");
+        }
+        return await prisma.$transaction(async (tx) => {
+          await tx.lesson.update({
+            where: { id },
+            data: {
+              title: data.title,
+              description: data.description,
+              learningObjectives: data.learningObjectives,
+              estimatedMinutes: data.estimatedMinutes,
+              prerequisiteLessonId: data.prerequisiteLessonId,
+            },
+          });
+          if (skillIds !== undefined) {
+            await tx.lessonSkill.deleteMany({ where: { lessonId: id, skillId: { notIn: skillIds } } });
+            const have = new Set((await tx.lessonSkill.findMany({ where: { lessonId: id }, select: { skillId: true } })).map((r) => r.skillId));
+            const add = skillIds.filter((s) => !have.has(s));
+            if (add.length > 0) await tx.lessonSkill.createMany({ data: add.map((skillId) => ({ lessonId: id, skillId })) });
+          }
+          if (blocks !== undefined) {
+            // sections that already exist keep their id (students' answers and progress point at it); new ones are created; removed ones deleted
+            const existing = new Set((await tx.lessonContentBlock.findMany({ where: { lessonId: id }, select: { id: true } })).map((b) => b.id));
+            const keep: string[] = [];
+            for (let i = 0; i < blocks.length; i++) {
+              const b = blocks[i];
+              const fields = { type: b.type, title: b.title ?? null, content: b.content, metadata: b.metadata ?? null, sequenceOrder: i + 1 };
+              if (b.id && existing.has(b.id)) { await tx.lessonContentBlock.update({ where: { id: b.id }, data: fields }); keep.push(b.id); }
+              else keep.push((await tx.lessonContentBlock.create({ data: { lessonId: id, ...fields } })).id);
+            }
+            await tx.lessonContentBlock.deleteMany({ where: { lessonId: id, id: { notIn: keep } } });
+          }
+          return tx.lesson.findUniqueOrThrow({
+            where: { id },
+            include: { resources: true, contentBlocks: { orderBy: { sequenceOrder: "asc" } }, skills: { include: { skill: true } } },
+          });
         });
-        return updated;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateLesson falling back to in-memory:", e);
     }
 
@@ -2486,7 +2682,7 @@ export const dbService = {
         id: `blk_${Date.now()}_${i}`,
         lessonId: id,
         type: b.type,
-        sequenceOrder: b.sequenceOrder || i + 1,
+        sequenceOrder: i + 1, // the position in the list is the order (same as the database path)
         title: b.title,
         content: b.content,
         metadata: b.metadata,
@@ -2537,6 +2733,20 @@ export const dbService = {
       if (userRole !== "ADMIN" && userRole !== "TEACHER") {
         return { success: false, error: "Publishing requires teacher or admin credentials" };
       }
+      // A section still showing the studio's template text would be shown to students as it is.
+      const unfinished = findUnfinishedBlock((lesson.contentBlocks || []) as any[]);
+      if (unfinished) {
+        return { success: false, error: `The section "${unfinished.title}" still has the template text "${TEMPLATE_MARK}". Write your own content or remove the section before publishing.` };
+      }
+      // Students can only be graded on questions that have a usable answer key.
+      for (const b of (lesson.contentBlocks || []) as any[]) {
+        if (isGradableType(b.type) && !parseChoiceBlock(b)) {
+          return {
+            success: false,
+            error: `The ${b.type === "CHECKPOINT" ? "checkpoint" : "question"} "${b.title || "untitled"}" needs at least two different answer choices and a correct answer that is one of them before the lesson can be published.`,
+          };
+        }
+      }
       if (currentStatus !== "APPROVED") {
         return {
           success: false,
@@ -2554,6 +2764,7 @@ export const dbService = {
         return { success: true, lesson: updated };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateLessonStatus falling back to in-memory:", e);
     }
 
@@ -2582,6 +2793,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("deleteLesson falling back to in-memory:", e);
     }
 
@@ -2605,12 +2817,15 @@ export const dbService = {
             prerequisites: {
               include: { prerequisiteSkill: true },
             },
+            // where the skill belongs, so a long list of skills can be told apart
+            competency: { select: { id: true, code: true, unit: { select: { id: true, title: true, term: { select: { termNumber: true } } } } } },
           },
-          orderBy: { sequenceOrder: "asc" },
+          orderBy: [{ competency: { unit: { term: { termNumber: "asc" } } } }, { competency: { unit: { sequenceOrder: "asc" } } }, { competency: { sequenceOrder: "asc" } }, { sequenceOrder: "asc" }],
         });
-        if (skills.length > 0) return skills;
+        if (skills.length > 0 || hasValidDatabaseUrl) return skills;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("Falling back to in-memory skills:", e);
     }
     return fallbackStore.curriculum.skills.sort((a, b) => a.sequenceOrder - b.sequenceOrder);
@@ -2636,6 +2851,7 @@ export const dbService = {
         if (skill) return skill;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getSkillById fallback:", e);
     }
     const skill = fallbackStore.curriculum.skills.find((s) => s.id === id);
@@ -2682,6 +2898,7 @@ export const dbService = {
     passwordHash: string;
     role: UserRole;
     gradeLevel?: number;
+    privacyNoticeVersion?: string;
   }) {
     const cleanEmail = data.email.toLowerCase().trim();
 
@@ -2694,6 +2911,7 @@ export const dbService = {
           passwordHash: data.passwordHash,
           role: data.role,
           gradeLevel: data.gradeLevel,
+          ...(data.privacyNoticeVersion ? { privacyNoticeVersion: data.privacyNoticeVersion, privacyAcceptedAt: new Date() } : {}),
         },
       });
     }
@@ -2705,6 +2923,7 @@ export const dbService = {
       passwordHash: data.passwordHash,
       role: data.role,
       gradeLevel: data.gradeLevel,
+      ...(data.privacyNoticeVersion ? { privacyNoticeVersion: data.privacyNoticeVersion, privacyAcceptedAt: new Date() } : {}),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -2714,32 +2933,121 @@ export const dbService = {
   },
 
   /** Admin user listing. Never returns password hashes. */
-  async listUsers(opts: { role?: UserRole; limit?: number; offset?: number } = {}) {
+  async listUsers(opts: { role?: UserRole; limit?: number; offset?: number; search?: string } = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
     const offset = Math.max(opts.offset ?? 0, 0);
-    const strip = (u: any) => ({ id: u.id, email: u.email, name: u.name, role: u.role, gradeLevel: u.gradeLevel ?? null, createdAt: u.createdAt });
+    const strip = (u: any) => ({ id: u.id, email: u.email, name: u.name, role: u.role, gradeLevel: u.gradeLevel ?? null, disabled: !!u.disabledAt, createdAt: u.createdAt, privacyAccepted: !!u.privacyNoticeVersion, guardianConsent: u.role === "STUDENT" ? !!u.guardianConsentAt : null });
+    const q = (opts.search ?? "").trim();
     if (!useInMemoryAccounts) {
+      const where: any = { ...(opts.role ? { role: opts.role } : {}), ...(q ? { OR: [{ email: { contains: q, mode: "insensitive" } }, { name: { contains: q, mode: "insensitive" } }] } : {}) };
       const [rows, total] = await Promise.all([
-        prisma.user.findMany({ where: opts.role ? { role: opts.role } : {}, orderBy: { createdAt: "desc" }, skip: offset, take: limit }),
-        prisma.user.count({ where: opts.role ? { role: opts.role } : {} }),
+        prisma.user.findMany({ where, orderBy: { createdAt: "desc" }, skip: offset, take: limit }),
+        prisma.user.count({ where }),
       ]);
       return { users: rows.map(strip), total };
     }
-    const all = fallbackStore.users.filter((u) => !opts.role || u.role === opts.role);
+    const ql = q.toLowerCase();
+    const all = fallbackStore.users.filter((u) => (!opts.role || u.role === opts.role) && (!ql || u.email.toLowerCase().includes(ql) || u.name.toLowerCase().includes(ql)));
     return { users: all.slice(offset, offset + limit).map(strip), total: all.length };
   },
 
+  /** Changes the password AND revokes every session issued before (sessionVersion + 1). */
   async updateUserPassword(userId: string, passwordHash: string) {
     if (!useInMemoryAccounts) {
-      const res = await prisma.user.updateMany({ where: { id: userId }, data: { passwordHash } });
+      const res = await prisma.user.updateMany({ where: { id: userId }, data: { passwordHash, sessionVersion: { increment: 1 } } });
       return res.count === 1;
     }
     const u = fallbackStore.users.find((x) => x.id === userId);
     if (!u) return false;
     u.passwordHash = passwordHash;
+    u.sessionVersion = (u.sessionVersion ?? 0) + 1;
     u.updatedAt = new Date();
     savePersistedUsers();
     return true;
+  },
+
+  /** What a session token must still match to be honoured: the account exists, is enabled, and the version is current. */
+  async getAuthState(userId: string) {
+    const u: any = !useInMemoryAccounts
+      ? await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, name: true, role: true, sessionVersion: true, disabledAt: true, privacyNoticeVersion: true, guardianConsentAt: true } })
+      : fallbackStore.users.find((x) => x.id === userId);
+    if (!u) return null;
+    return { id: u.id as string, email: u.email as string, name: u.name as string, role: u.role as UserRole, sessionVersion: (u.sessionVersion ?? 0) as number, disabled: !!u.disabledAt, privacyNoticeVersion: (u.privacyNoticeVersion ?? null) as string | null, guardianConsent: !!u.guardianConsentAt };
+  },
+
+  /** Revokes every session token issued so far for this user. */
+  async revokeSessions(userId: string) {
+    if (!useInMemoryAccounts) {
+      return (await prisma.user.updateMany({ where: { id: userId }, data: { sessionVersion: { increment: 1 } } })).count === 1;
+    }
+    const u = fallbackStore.users.find((x) => x.id === userId);
+    if (!u) return false;
+    u.sessionVersion = (u.sessionVersion ?? 0) + 1;
+    savePersistedUsers();
+    return true;
+  },
+
+  /** Disabling also revokes existing sessions; enabling does not bring them back. */
+  async setUserDisabled(userId: string, disabled: boolean) {
+    if (!useInMemoryAccounts) {
+      return (await prisma.user.updateMany({ where: { id: userId }, data: { disabledAt: disabled ? new Date() : null, sessionVersion: { increment: 1 } } })).count === 1;
+    }
+    const u = fallbackStore.users.find((x) => x.id === userId);
+    if (!u) return false;
+    u.disabledAt = disabled ? new Date() : null;
+    u.sessionVersion = (u.sessionVersion ?? 0) + 1;
+    u.updatedAt = new Date();
+    savePersistedUsers();
+    return true;
+  },
+
+  async setUserRole(userId: string, role: UserRole) {
+    if (!useInMemoryAccounts) {
+      return (await prisma.user.updateMany({ where: { id: userId }, data: { role, sessionVersion: { increment: 1 } } })).count === 1;
+    }
+    const u = fallbackStore.users.find((x) => x.id === userId);
+    if (!u) return false;
+    u.role = role;
+    u.sessionVersion = (u.sessionVersion ?? 0) + 1;
+    u.updatedAt = new Date();
+    savePersistedUsers();
+    return true;
+  },
+
+  async countActiveAdmins() {
+    if (!useInMemoryAccounts) return prisma.user.count({ where: { role: "ADMIN", disabledAt: null } });
+    return fallbackStore.users.filter((u) => u.role === "ADMIN" && !u.disabledAt).length;
+  },
+
+  /** Append-only record of security-relevant actions. Never put secrets in `detail`. */
+  async recordAudit(entry: { actorId?: string | null; action: string; targetType?: string; targetId?: string; detail?: Record<string, unknown>; ip?: string }) {
+    const row = {
+      id: `aud_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      actorId: entry.actorId ?? null, action: entry.action, targetType: entry.targetType ?? null, targetId: entry.targetId ?? null,
+      detail: entry.detail ? JSON.stringify(entry.detail).slice(0, 1000) : null, ip: entry.ip ?? null, createdAt: new Date(),
+    };
+    console.info(`AUDIT ${row.action} actor=${row.actorId ?? "-"} target=${row.targetType ?? "-"}:${row.targetId ?? "-"}`);
+    if (hasValidDatabaseUrl) {
+      await (prisma as any).auditLog.create({ data: { actorId: row.actorId, action: row.action, targetType: row.targetType, targetId: row.targetId, detail: row.detail, ip: row.ip } });
+      return;
+    }
+    memoryAuditLog.push(row);
+    if (memoryAuditLog.length > 2000) memoryAuditLog.shift();
+  },
+
+  async listAudit(opts: { limit?: number; offset?: number; action?: string } = {}) {
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    if (hasValidDatabaseUrl) {
+      const where = opts.action ? { action: { startsWith: opts.action } } : {};
+      const [rows, total] = await Promise.all([
+        (prisma as any).auditLog.findMany({ where, orderBy: { createdAt: "desc" }, skip: offset, take: limit }),
+        (prisma as any).auditLog.count({ where }),
+      ]);
+      return { entries: rows, total };
+    }
+    const all = memoryAuditLog.filter((e) => !opts.action || e.action.startsWith(opts.action)).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return { entries: all.slice(offset, offset + limit), total: all.length };
   },
 
 
@@ -2747,21 +3055,13 @@ export const dbService = {
    * Get student progress records
    */
   async getStudentProgress(userId: string) {
-    try {
-      if (hasValidDatabaseUrl) {
-        const records = await prisma.studentProgress.findMany({
-          where: { userId },
-          include: {
-            skill: true,
-            lesson: true,
-          },
-        });
-        if (records.length > 0) return records as any;
-      }
-    } catch (e) {
-      console.warn("Progress query fallback:", e);
+    if (hasValidDatabaseUrl) {
+      // Database mode never mixes in demo progress.
+      return (await prisma.studentProgress.findMany({
+        where: { userId },
+        include: { skill: true, lesson: true },
+      })) as any;
     }
-
     return fallbackStore.progress.filter((p) => p.userId === userId);
   },
 
@@ -2783,6 +3083,7 @@ export const dbService = {
         if (session) return session;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getLessonSession fallback:", e);
     }
 
@@ -2845,6 +3146,7 @@ export const dbService = {
         return session;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("saveLessonSession fallback:", e);
     }
 
@@ -2923,6 +3225,7 @@ export const dbService = {
         return attempt;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("submitCheckpointAttempt fallback:", e);
     }
 
@@ -2944,15 +3247,14 @@ export const dbService = {
 
     fallbackStore.checkpointAttempts.push(newAttempt);
 
-    // Update session
-    const session = fallbackStore.sessions.find(
-      (s) => s.userId === data.userId && s.lessonId === data.lessonId
-    );
-    if (session) {
-      if (!session.completedBlockIds.includes(data.blockId)) {
-        session.completedBlockIds.push(data.blockId);
+    // Like the database path: a block counts as completed only when answered correctly.
+    if (data.isCorrect) {
+      const session = await this.getLessonSession(data.userId, data.lessonId);
+      if (session && !session.completedBlockIds.includes(data.blockId)) {
+        await this.saveLessonSession(data.userId, data.lessonId, {
+          completedBlockIds: [...session.completedBlockIds, data.blockId],
+        });
       }
-      session.lastActivityAt = now;
     }
 
     return newAttempt;
@@ -2970,6 +3272,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getCheckpointAttempts fallback:", e);
     }
 
@@ -3009,6 +3312,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("addContentBlock fallback:", e);
     }
 
@@ -3057,6 +3361,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateContentBlock fallback:", e);
     }
 
@@ -3087,6 +3392,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("deleteContentBlock fallback:", e);
     }
 
@@ -3122,6 +3428,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("reorderContentBlocks fallback:", e);
     }
 
@@ -3438,7 +3745,7 @@ export const dbService = {
         })) as Row[];
       }
     } catch (e) {
-      if (process.env.NODE_ENV === "production") throw e;
+      if (hasValidDatabaseUrl) throw e;
       console.warn("getLessonChunks fallback:", e);
     }
 
@@ -3485,11 +3792,14 @@ export const dbService = {
     type?: QuestionType;
     search?: string;
     source?: QuestionSource;
+    /** Only questions that are not linked to any skill. */
+    noSkill?: boolean;
   }) {
     try {
       if (hasValidDatabaseUrl) {
         const where: any = {};
         if (filters?.skillId) where.skillId = filters.skillId;
+        if (filters?.noSkill) where.skillId = null;
         if (filters?.lessonId) where.lessonId = filters.lessonId;
         if (filters?.difficulty) where.difficulty = filters.difficulty;
         if (filters?.status) where.status = filters.status;
@@ -3510,11 +3820,13 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getQuestions fallback:", e);
     }
 
     let list = [...fallbackStore.questions];
     if (filters?.skillId) list = list.filter((q) => q.skillId === filters.skillId);
+    if (filters?.noSkill) list = list.filter((q) => !q.skillId);
     if (filters?.lessonId) list = list.filter((q) => q.lessonId === filters.lessonId);
     if (filters?.difficulty) list = list.filter((q) => q.difficulty === filters.difficulty);
     if (filters?.status) list = list.filter((q) => q.status === filters.status);
@@ -3560,6 +3872,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getQuestionById fallback:", e);
     }
 
@@ -3631,6 +3944,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("createQuestion fallback:", e);
     }
 
@@ -3692,6 +4006,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateQuestion fallback:", e);
     }
 
@@ -3726,6 +4041,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("deleteQuestion fallback:", e);
     }
 
@@ -3752,6 +4068,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateQuestionStatus fallback:", e);
     }
 
@@ -3797,6 +4114,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getPracticeSets fallback:", e);
     }
 
@@ -3851,6 +4169,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getPracticeSetById fallback:", e);
     }
 
@@ -3933,6 +4252,7 @@ export const dbService = {
         return this.getPracticeSetById(ps.id);
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("createPracticeSet fallback:", e);
     }
 
@@ -3985,6 +4305,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("addQuestionToPracticeSet fallback:", e);
     }
 
@@ -4023,6 +4344,7 @@ export const dbService = {
         return { success: true };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("removeQuestionFromPracticeSet fallback:", e);
     }
 
@@ -4083,6 +4405,7 @@ export const dbService = {
         return this.getPracticeSession(session.id, studentId);
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("startPracticeSession fallback:", e);
     }
 
@@ -4140,6 +4463,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getPracticeSession fallback:", e);
     }
 
@@ -4222,6 +4546,7 @@ export const dbService = {
         })) as any;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("count attempts fallback:", e);
     }
     if (priorAttempts.length === 0) {
@@ -4275,6 +4600,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("create attempt fallback:", e);
     }
 
@@ -4307,6 +4633,7 @@ export const dbService = {
           });
         }
       } catch (e) {
+        if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
         console.warn("update session question fallback:", e);
       }
 
@@ -4317,11 +4644,16 @@ export const dbService = {
     }
 
     // 7. Update Session score & correct count
-    const allSessionAttempts = fallbackStore.questionAttempts.filter((a) => a.practiceSessionId === sessionId);
-    // Count distinct questions answered correctly
-    const correctQuestionIds = new Set(
-      allSessionAttempts.filter((a) => a.isCorrect).map((a) => a.questionId)
-    );
+    // Count distinct questions answered correctly. In database mode the attempts are rows in PostgreSQL (the in-memory list
+    // only holds sandbox attempts), so read them from there: counting from memory made every real practice session score
+    // at most 1 correct answer.
+    const correctQuestionIds = new Set<string>();
+    if (hasValidDatabaseUrl) {
+      const rows = await prisma.questionAttempt.findMany({ where: { practiceSessionId: sessionId, isCorrect: true }, select: { questionId: true } });
+      rows.forEach((r) => correctQuestionIds.add(r.questionId));
+    } else {
+      fallbackStore.questionAttempts.filter((a) => a.practiceSessionId === sessionId && a.isCorrect).forEach((a) => correctQuestionIds.add(a.questionId));
+    }
     if (validationResult.isCorrect) correctQuestionIds.add(questionId);
 
     const totalQuestions = session.totalQuestions || 1;
@@ -4340,6 +4672,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("update session stats fallback:", e);
     }
 
@@ -4401,6 +4734,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("submitQuestionAttempt fallback:", e);
     }
     if (!attemptRecord) {
@@ -4443,6 +4777,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("completePracticeSession fallback:", e);
     }
 
@@ -4539,6 +4874,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getStudentPracticeHistory fallback:", e);
     }
 
@@ -4601,7 +4937,7 @@ export const dbService = {
         });
       }
     } catch (e) {
-      if (process.env.NODE_ENV === "production") throw e;
+      if (hasValidDatabaseUrl) throw e;
       console.warn("getOrCreateAITutorConversation prisma fallback:", e);
     }
 
@@ -4686,7 +5022,7 @@ export const dbService = {
         return convs.map(describe).filter((f): f is Flag => f !== null);
       }
     } catch (e) {
-      if (process.env.NODE_ENV === "production") throw e;
+      if (hasValidDatabaseUrl) throw e;
       console.warn("getTutorAttentionFlags prisma fallback:", e);
     }
     return fallbackStore.aiConversations
@@ -4695,6 +5031,64 @@ export const dbService = {
       .map(describe)
       .filter((f): f is Flag => f !== null)
       .slice(0, limit);
+  },
+
+  /** Phase 36: how many answers from these students are linked to a skill, and how many are not (skill-level analytics need the link). */
+  async countAttemptsBySkillLink(studentIds: string[]): Promise<{ linked: number; unlinked: number }> {
+    if (studentIds.length === 0) return { linked: 0, unlinked: 0 };
+    if (hasValidDatabaseUrl) {
+      const [linked, unlinked] = await Promise.all([
+        prisma.questionAttempt.count({ where: { studentId: { in: studentIds }, skillId: { not: null } } }),
+        prisma.questionAttempt.count({ where: { studentId: { in: studentIds }, skillId: null } }),
+      ]);
+      return { linked, unlinked };
+    }
+    const mine = fallbackStore.questionAttempts.filter((a: any) => studentIds.includes(a.studentId));
+    return { linked: mine.filter((a: any) => a.skillId).length, unlinked: mine.filter((a: any) => !a.skillId).length };
+  },
+
+  /**
+   * Phase 36: how each student has used the tutor: when, how much, and whether the tutor flagged a conversation for the teacher.
+   * One query for the whole class (not one per student). Reasons mirror getTutorAttentionFlags.
+   */
+  async getTutorActivityForStudents(studentIds: string[]): Promise<Map<string, { lastAt: Date | null; conversations: number; studentMessages: number; flagged: Array<{ updatedAt: Date; reasons: string[] }> }>> {
+    const out = new Map<string, { lastAt: Date | null; conversations: number; studentMessages: number; flagged: Array<{ updatedAt: Date; reasons: string[] }> }>();
+    for (const id of studentIds) out.set(id, { lastAt: null, conversations: 0, studentMessages: 0, flagged: [] });
+    if (studentIds.length === 0) return out;
+    const reasonsOf = (stateJson: string | null): string[] | null => {
+      if (!stateJson) return null;
+      let st: any;
+      try { st = JSON.parse(stateJson); } catch { return null; }
+      if (!st?.needsTeacherAttention) return null;
+      const r: string[] = [];
+      if ((st.frustration ?? 0) >= 2) r.push("showed repeated frustration");
+      if ((st.wrongOnProblem ?? 0) >= 4) r.push(`${st.wrongOnProblem} wrong attempts on one problem`);
+      if ((st.consecutiveConfusion ?? 0) >= 4) r.push(`said they were confused ${st.consecutiveConfusion} times in a row`);
+      if (st.strategyHistory?.some((h: any) => h.strategy === "SUGGEST_TEACHER")) r.push("the tutor suggested asking the teacher");
+      if (r.length === 0) r.push("the tutor flagged the conversation");
+      return r;
+    };
+    const add = (studentId: string, updatedAt: Date, stateJson: string | null, msgCount: number) => {
+      const e = out.get(studentId);
+      if (!e) return;
+      e.conversations += 1;
+      e.studentMessages += msgCount;
+      if (!e.lastAt || updatedAt > e.lastAt) e.lastAt = updatedAt;
+      const reasons = reasonsOf(stateJson);
+      if (reasons) e.flagged.push({ updatedAt, reasons });
+    };
+    if (hasValidDatabaseUrl) {
+      const convs = await prisma.aITutorConversation.findMany({ where: { studentId: { in: studentIds } }, select: { id: true, studentId: true, updatedAt: true, stateJson: true } });
+      const counts = await prisma.aITutorMessage.groupBy({ by: ["conversationId"], where: { role: "STUDENT", conversation: { studentId: { in: studentIds } } }, _count: { _all: true } });
+      const countOf = new Map(counts.map((c) => [c.conversationId, c._count._all]));
+      for (const c of convs) add(c.studentId, c.updatedAt, c.stateJson, countOf.get(c.id) ?? 0);
+      return out;
+    }
+    for (const c of fallbackStore.aiConversations.filter((x: any) => studentIds.includes(x.studentId))) {
+      const n = fallbackStore.aiMessages.filter((m: any) => m.conversationId === c.id && m.role === "STUDENT").length;
+      add(c.studentId, new Date(c.updatedAt), c.stateJson ?? null, n);
+    }
+    return out;
   },
 
   /** Phase 23: persist the tutor's conversation state (strategy history, scaffold, pending problems). */
@@ -4708,7 +5102,7 @@ export const dbService = {
         return res.count === 1;
       }
     } catch (e) {
-      if (process.env.NODE_ENV === "production") throw e;
+      if (hasValidDatabaseUrl) throw e;
       console.warn("saveAITutorConversationState prisma fallback:", e);
     }
     const conv = fallbackStore.aiConversations.find((c) => c.id === conversationId && c.studentId === studentId);
@@ -4736,6 +5130,7 @@ export const dbService = {
         return conv;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getAITutorConversation prisma fallback:", e);
     }
 
@@ -4781,6 +5176,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("saveAITutorMessage prisma fallback:", e);
     }
 
@@ -4820,6 +5216,7 @@ export const dbService = {
         return latest.reverse();
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getAITutorMessages prisma fallback:", e);
     }
 
@@ -4845,6 +5242,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getQuestionAttemptsForStudent prisma fallback:", e);
     }
 
@@ -4877,6 +5275,7 @@ export const dbService = {
         return;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("markHintUsedOnQuestionAttempt prisma fallback:", e);
     }
 
@@ -4960,6 +5359,7 @@ export const dbService = {
         }));
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getDetailedAttemptsForStudent fallback:", e);
     }
 
@@ -5163,6 +5563,7 @@ export const dbService = {
         return this.getMistakeAnalysisById(analysis.id, studentId, "STUDENT");
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("saveMistakeAnalysis prisma fallback:", e);
     }
 
@@ -5268,6 +5669,7 @@ export const dbService = {
         }));
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getMistakeAnalysesForStudent prisma fallback:", e);
     }
 
@@ -5368,6 +5770,7 @@ export const dbService = {
         };
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getMistakeAnalysisById prisma fallback:", e);
     }
 
@@ -5437,6 +5840,7 @@ export const dbService = {
         }
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getLatestMistakeAnalysisForSkill prisma fallback:", e);
     }
 
@@ -5482,6 +5886,7 @@ export const dbService = {
         }
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getSkillPrerequisites prisma fallback:", e);
     }
 
@@ -5537,6 +5942,7 @@ export const dbService = {
         if (rec) return rec;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getActiveAdaptiveRecommendation prisma fallback:", e);
     }
 
@@ -5595,6 +6001,7 @@ export const dbService = {
         if (rec) return rec;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getAdaptiveRecommendationById prisma fallback:", e);
     }
 
@@ -5657,6 +6064,7 @@ export const dbService = {
         return rec;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("createAdaptiveRecommendation prisma fallback:", e);
     }
 
@@ -5707,6 +6115,7 @@ export const dbService = {
         return;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("supersedeActiveRecommendations prisma fallback:", e);
     }
 
@@ -5740,6 +6149,7 @@ export const dbService = {
         return updated;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("updateAdaptiveRecommendationStatus prisma fallback:", e);
     }
 
@@ -5775,6 +6185,7 @@ export const dbService = {
         });
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("createAdaptiveOverrideRecord prisma fallback:", e);
     }
 
@@ -5824,6 +6235,7 @@ export const dbService = {
         return updated;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("applyTeacherOverrideToRecommendation prisma fallback:", e);
     }
 
@@ -5866,6 +6278,7 @@ export const dbService = {
         return list;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getStudentAdaptiveHistory prisma fallback:", e);
     }
 
@@ -5915,6 +6328,7 @@ export const dbService = {
         if (mastery) return mastery;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getSkillMastery prisma fallback:", e);
     }
 
@@ -5952,9 +6366,10 @@ export const dbService = {
           },
           orderBy: { updatedAt: "desc" },
         });
-        if (masteries.length > 0) return masteries;
+        if (masteries.length > 0 || hasValidDatabaseUrl) return masteries;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("getStudentSkillMasteries prisma fallback:", e);
     }
 
@@ -6008,6 +6423,7 @@ export const dbService = {
         return saved;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("saveSkillMastery prisma fallback:", e);
     }
 
@@ -6050,6 +6466,7 @@ export const dbService = {
         return entry;
       }
     } catch (e) {
+      if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
       console.warn("recordSkillMasteryHistory prisma fallback:", e);
     }
 

@@ -33,7 +33,8 @@ export default function TeacherPracticeSetsPage({
   // New Practice Set Form
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [lessonId, setLessonId] = useState("lsn_01");
+  // no lesson by default: a made-up demo lesson id does not exist in a real database
+  const [lessonId, setLessonId] = useState("");
   const [status, setStatus] = useState<PracticeSetStatus>("DRAFT");
   const [saving, setSaving] = useState(false);
 
@@ -73,7 +74,7 @@ export default function TeacherPracticeSetsPage({
         body: JSON.stringify({
           title,
           description,
-          lessonId,
+          lessonId: lessonId || undefined,
           status,
         }),
       });

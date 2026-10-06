@@ -1,0 +1,23 @@
+import crypto from "crypto"; import { spawn } from "child_process";
+const port=4400+Math.floor(Math.random()*90), base=`http://127.0.0.1:${port}`;
+const srv=spawn("npx",["tsx","server.ts"],{env:{...process.env,PORT:String(port),NODE_ENV:"development",AI_PROVIDER:"local",AUTH_SECRET:crypto.randomBytes(32).toString("hex")},stdio:"ignore",detached:true});
+const api=async(m:string,p:string,t?:string,b?:unknown)=>{const r=await fetch(base+p,{method:m,headers:{"Content-Type":"application/json",...(t?{Authorization:`Bearer ${t}`}:{})},body:b?JSON.stringify(b):undefined});const text=await r.text();let j:any={};try{j=JSON.parse(text)}catch{};return{status:r.status,j,text}};
+(async()=>{for(let i=0;i<90;i++){await new Promise(r=>setTimeout(r,500));try{if((await fetch(base+"/api/health")).ok)break}catch{}}
+const T=(await api("POST","/api/auth/login",undefined,{email:"teacher@tuklas.ai",password:"Tuklas2026!"})).j.token;
+const S=(await api("POST","/api/auth/register",undefined,{name:"L",email:`l${Date.now()}@x.test`,password:"Leak-Pass-1"})).j.token;
+const SECRET="SECRETKEY"+Date.now();
+const q=(await api("POST","/api/questions",T,{type:"MULTIPLE_CHOICE",prompt:"LEAKQ",status:"PUBLISHED",explanation:"EXPL"+SECRET,questionData:{choices:[{id:"a",text:"A"},{id:"b",text:"B"}],correctAnswer:"a",note:SECRET}})).j.data.id;
+const ps=(await api("POST","/api/practice-sets",T,{title:"LEAKSET",status:"PUBLISHED",questionIds:[q]})).j.data.id;
+const paths=(o:any,pre=""):string[]=>{const out:string[]=[];const w=(v:any,p:string)=>{if(v&&typeof v==="object"){for(const k of Object.keys(v))w(v[k],p+"."+k)}else if(typeof v==="string"){if(/correctAnswer/.test(v)||v.includes("SECRETKEY"))out.push(p+" (string contains key)")}};w(o,pre);const rec=(v:any,p:string)=>{if(v&&typeof v==="object"){for(const k of Object.keys(v)){if(k==="correctAnswer")out.push(p+"."+k);rec(v[k],p+"."+k)}}};rec(o,pre);return out};
+const show=(l:string,r:any)=>console.log(l.padEnd(34),r.status,paths(r.j).join(" | "),/correctAnswer/.test(r.text)?"LEAKS correctAnswer":"", r.text.includes(SECRET)?"LEAKS secret":"", /EXPL/.test(r.text)?"has explanation":"");
+show("student GET question",await api("GET",`/api/questions/${q}`,S));
+show("anon GET question",await api("GET",`/api/questions/${q}`));
+show("student GET list",await api("GET","/api/questions",S));
+show("student GET practice-set",await api("GET",`/api/practice-sets/${ps}`,S));
+show("anon GET practice-set",await api("GET",`/api/practice-sets/${ps}`));
+const st=await api("POST","/api/practice/start",S,{practiceSetId:ps});show("student practice start",st);
+const sid=st.j.data?.id;show("student practice session",await api("GET",`/api/practice/${sid}`,S));
+show("student answer wrong",await api("POST",`/api/practice/${sid}/answer`,S,{questionId:q,answer:"b"}));
+show("student review before complete",await api("GET",`/api/practice/${sid}/review`,S));
+console.log("--- practice session payload:", JSON.stringify((await api("GET",`/api/practice/${sid}`,S)).j).slice(0,400));
+try{process.kill(-srv.pid!,"SIGTERM")}catch{} process.exit(0)})();

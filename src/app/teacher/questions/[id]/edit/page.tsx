@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth/auth-context";
 import { Button } from "@/components/ui/Button";
+import { skillContext } from "@/lib/curriculum/skill-label";
 import { Badge } from "@/components/ui/Badge";
 import { MathText } from "@/components/ui/MathText";
 import { QuestionType, QuestionDifficulty, QuestionStatus } from "@prisma/client";
@@ -42,7 +43,8 @@ export default function TeacherQuestionEditorPage({
   const [type, setType] = useState<QuestionType>("MULTIPLE_CHOICE");
   const [prompt, setPrompt] = useState("");
   const [skillId, setSkillId] = useState("");
-  const [lessonId, setLessonId] = useState("lsn_01");
+  // new questions start with no lesson: a made-up demo lesson id does not exist in a real database
+  const [lessonId, setLessonId] = useState("");
   const [difficulty, setDifficulty] = useState<QuestionDifficulty>("MEDIUM");
   const [status, setStatus] = useState<QuestionStatus>("DRAFT");
   const [explanation, setExplanation] = useState("");
@@ -102,7 +104,7 @@ export default function TeacherQuestionEditorPage({
         if (sRes.ok) {
           const sJson = await sRes.json();
           setSkills(sJson.data || []);
-          if (!skillId && sJson.data?.length > 0) setSkillId(sJson.data[0].id);
+          // no skill is pre-selected: silently tagging every new question with the first skill would corrupt mastery evidence
         }
         if (lRes.ok) {
           const lJson = await lRes.json();
@@ -234,12 +236,17 @@ export default function TeacherQuestionEditorPage({
       return;
     }
 
+    const effectiveStatus = targetStatus || status;
+    if (!skillId && !lessonId && effectiveStatus === "PUBLISHED" &&
+        !window.confirm("This question has no skill. Students can still answer it, but their answers will not count towards mastery, the difficult-skills view or recommendations. Publish anyway?")) {
+      return;
+    }
+
     setSaving(true);
     setError(null);
     setSuccess(null);
 
     const qData = assembleQuestionData();
-    const effectiveStatus = targetStatus || status;
 
     const payload = {
       type,
@@ -413,16 +420,42 @@ export default function TeacherQuestionEditorPage({
               Assigned Skill
             </label>
             <select
+              data-testid="skill-select"
               value={skillId}
               onChange={(e) => setSkillId(e.target.value)}
               className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
             >
+              <option value="">Choose a skill…</option>
               {skills.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.title}
+                  {s.title}{skillContext(s) ? ` (${skillContext(s)})` : ""}
                 </option>
               ))}
             </select>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mt-3 mb-1.5">
+              Lesson (optional)
+            </label>
+            <select
+              data-testid="lesson-select"
+              value={lessonId}
+              onChange={(e) => setLessonId(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
+            >
+              <option value="">No lesson</option>
+              {/* a teacher can attach questions only to lessons they wrote (the server enforces it); admins to any */}
+              {lessons.filter((l) => user?.role === "ADMIN" || l.authorId === user?.id || l.id === lessonId).map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.title}
+                </option>
+              ))}
+            </select>
+            {!skillId && (
+              <p data-testid="skill-warning" role="note" className="mt-1.5 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                {lessonId
+                  ? "No skill chosen: the lesson's first skill will be used."
+                  : "No skill chosen: answers to this question cannot count towards mastery, difficult skills or recommendations."}
+              </p>
+            )}
           </div>
         </div>
 

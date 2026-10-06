@@ -4,6 +4,7 @@
  */
 
 import { kindOf, problemNumbers } from "./problems";
+import { normalizeSpokenMath } from "../../voice/spoken-math";
 import type { ConversationState, ResponsePlan } from "./types";
 
 export type Violation =
@@ -14,6 +15,8 @@ export type Violation =
   | "TOO_LONG"
   | "MISSING_POSED_PROBLEM"
   | "WRONG_CORRECTNESS_CLAIM"
+  | "PROMPT_LEAK"
+  | "ANSWER_VALUE_MENTIONED"
   | "EMPTY";
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").replace(/\s+/g, " ").trim();
@@ -120,4 +123,30 @@ export function checkTutorOutput(out: GuardInput, plan: ResponsePlan, state: Con
     v.push("WRONG_CORRECTNESS_CLAIM");
   }
   return v;
+}
+
+
+/**
+ * Stricter screen for text that came from a language model (not for the local realizer, which is built from the plan):
+ * the protected answer must not appear AT ALL as a stand-alone value, however it is written (digits, full-width or
+ * mathematical digits, English or Filipino number words, with a sign or "negative"/"minus"). A model that was talked into
+ * the answer does not always use a phrase like "the answer is". Numbers that are part of the problem itself are allowed.
+ * False positives (a worked example whose own result equals the answer) cost one retry, then the plan realizer answers.
+ */
+export function mentionsAnswerValue(text: string, plan: ResponsePlan): boolean {
+  const answer = plan.protectedAnswer;
+  if (answer === undefined || answer === "true" || answer === "false") return false;
+  const value = Number(answer);
+  if (!Number.isFinite(value)) return false;
+  const asDigits = normalizeSpokenMath(text.normalize("NFKC").replace(/−/g, "-").replace(/\$/g, " ").replace(/(^|[\s(=:])-\s+(?=\d)/g, "$1-"), { convertLoneNumbers: true }).text.replace(/[,](?=\d{3}\b)/g, "");
+  const operands = new Set((plan.activeProblem ? problemNumbers(plan.activeProblem) : []).map((n) => String(n)));
+  const re = /(?<![\d.])(-?\d+(?:\.\d+)?)(?![\d])/g;
+  for (const m of asDigits.matchAll(re)) {
+    const n = Number(m[1]);
+    if (n !== value) continue;
+    if (operands.has(String(n)) || operands.has(String(Math.abs(n)))) continue; // part of the problem as given
+    // "-5" written with a space ("- 5") or as a trailing sign is still the same value: matched above by normalisation
+    return true;
+  }
+  return false;
 }
