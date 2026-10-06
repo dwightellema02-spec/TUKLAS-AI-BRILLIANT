@@ -223,6 +223,8 @@ model Unit {
   sequenceOrder Int
   title         String // e.g. "Numbers and Algebraic Expressions"
   description   String?
+  /// Phase 41: who added it (null = shipped with the platform: any teacher may edit it, like lessons without an author)
+  createdById   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -356,6 +358,7 @@ model Competency {
   code          String // e.g. "M7NS-Ia-1"
   statement     String // DepEd MATATAG Competency statement
   sequenceOrder Int
+  createdById   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -372,6 +375,7 @@ model Skill {
   description   String?
   sequenceOrder Int
   difficulty    Float    @default(1.0) // 1.0 to 5.0
+  createdById   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

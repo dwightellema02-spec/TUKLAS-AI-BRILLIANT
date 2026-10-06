@@ -3,6 +3,7 @@ import { useAuth } from "@/lib/auth/auth-context";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { UnitStructureCard } from "@/components/teacher/UnitStructureCard";
 import {
   ArrowLeft,
   ArrowUp,
@@ -359,6 +360,7 @@ export default function TeacherUnitCurriculumPage({
 
           {/* Right Column (5 cols): Skill Prerequisites Manager (DAG) */}
           <div className="lg:col-span-5 space-y-6">
+            {currentUnit && <UnitStructureCard unit={currentUnit} onChanged={loadData} />}
             <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
               <div className="flex items-center justify-between mb-4">
                 <div>

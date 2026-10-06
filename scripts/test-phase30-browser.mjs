@@ -32,6 +32,9 @@ await A.getByPlaceholder("name@school.edu.ph").fill(email);
 await A.getByPlaceholder("••••••••").fill(pw1);
 await A.getByRole("dialog").getByRole("button", { name: /^Sign In$/i }).click();
 await A.waitForFunction(() => document.body.innerText.includes("Account Tester"), null, { timeout: 15000 });
+// sign-in may still be navigating when the name appears: let the page settle before reading storage (this raced about 1 run in 4)
+await A.waitForLoadState("networkidle").catch(() => {});
+await A.waitForTimeout(400);
 const stored = await A.evaluate(() => Object.keys(localStorage).concat(Object.keys(sessionStorage)).filter((k) => /token|session/i.test(k)));
 check(stored.length === 0, `signing in leaves no token in localStorage/sessionStorage (${JSON.stringify(stored)})`);
 const cookies = await ctxA.cookies();

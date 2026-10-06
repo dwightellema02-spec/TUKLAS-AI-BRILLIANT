@@ -28,6 +28,7 @@ import { MasteryEngine } from "./src/lib/mastery/index.ts";
 import { StudentDashboardService } from "./src/lib/dashboard/index.ts";
 import { TeacherService, TeacherAIService } from "./src/lib/teacher/index.ts";
 import { ClassroomService, ClassroomError } from "./src/lib/classroom/classroom-service.ts";
+import { StructureService, StructureError } from "./src/lib/curriculum/structure-service.ts";
 import { ClassroomRepo } from "./src/lib/classroom/classroom-repo.ts";
 import { ResearchData, type ResearchScope } from "./src/lib/research/research-data.ts";
 import { AssessmentService, AssessmentError, ResearchService, ResearchExporter } from "./src/lib/research/index.ts";
@@ -511,7 +512,7 @@ app.put("/api/lessons/:id", async (req: Request, res: Response) => {
     return res.json({ data: updated });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to update lesson";
-    return res.status(500).json({ error: message });
+    return res.status(/^Invalid (sections|skills)/.test(message) ? 400 : 500).json({ error: message });
   }
 });
 
@@ -1121,6 +1122,11 @@ app.post("/api/skills/:skillId/prerequisites", async (req: Request, res: Respons
     if (!Array.isArray(prerequisiteSkillIds)) {
       return res.status(400).json({ error: "prerequisiteSkillIds must be an array of strings" });
     }
+    // In database mode the skills live in the database: validate there (the check below only knows the in-memory demo skills).
+    if (hasValidDatabaseUrl) {
+      await StructureService.setPrerequisites(actorOf(session), skillId, prerequisiteSkillIds);
+      return res.json({ success: true });
+    }
 
     const result = await dbService.updateSkillPrerequisites(skillId, prerequisiteSkillIds, session.role);
     if (!result.success) {
@@ -1129,10 +1135,38 @@ app.post("/api/skills/:skillId/prerequisites", async (req: Request, res: Respons
 
     return res.json({ success: true });
   } catch (error: unknown) {
+    if (error instanceof StructureError) return res.status(error.status).json({ error: error.message });
     const message = error instanceof Error ? error.message : "Failed to update skill prerequisites";
     return res.status(500).json({ error: message });
   }
 });
+
+// -------------------------------------------------------------
+// PHASE 41: curriculum structure (units, competencies, skills) added by teachers
+// -------------------------------------------------------------
+const structureRoute = (fn: (actor: { userId: string; role: string }, req: Request) => Promise<unknown>, fallback: string, okStatus = 200) =>
+  async (req: Request, res: Response) => {
+    try {
+      const session = getSessionFromRequest(req);
+      if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+      const data = await fn(actorOf(session), req);
+      return data === undefined ? res.json({ success: true }) : res.status(okStatus).json({ data });
+    } catch (error: unknown) {
+      if (error instanceof StructureError) return res.status(error.status).json({ error: error.message });
+      console.error(fallback, error);
+      return res.status(500).json({ error: fallback });
+    }
+  };
+app.post("/api/units", structureRoute((a, req) => StructureService.createUnit(a, req.body ?? {}), "Failed to create unit", 201));
+app.post("/api/terms/:termNumber/reorder-units", structureRoute(async (a, req) => { await StructureService.reorderUnits(a, req.params.termNumber, req.body?.orderedUnitIds); }, "Failed to reorder units"));
+app.put("/api/units/:unitId", structureRoute((a, req) => StructureService.updateUnit(a, req.params.unitId, req.body ?? {}), "Failed to update unit"));
+app.delete("/api/units/:unitId", structureRoute(async (a, req) => { await StructureService.deleteUnit(a, req.params.unitId); }, "Failed to delete unit"));
+app.post("/api/units/:unitId/competencies", structureRoute((a, req) => StructureService.createCompetency(a, req.params.unitId, req.body ?? {}), "Failed to create competency", 201));
+app.put("/api/competencies/:id", structureRoute((a, req) => StructureService.updateCompetency(a, req.params.id, req.body ?? {}), "Failed to update competency"));
+app.delete("/api/competencies/:id", structureRoute(async (a, req) => { await StructureService.deleteCompetency(a, req.params.id); }, "Failed to delete competency"));
+app.post("/api/competencies/:id/skills", structureRoute((a, req) => StructureService.createSkill(a, req.params.id, req.body ?? {}), "Failed to create skill", 201));
+app.put("/api/skills/:id", structureRoute((a, req) => StructureService.updateSkill(a, req.params.id, req.body ?? {}), "Failed to update skill"));
+app.delete("/api/skills/:id", structureRoute(async (a, req) => { await StructureService.deleteSkill(a, req.params.id); }, "Failed to delete skill"));
 
 // -------------------------------------------------------------
 // PHASE 5: INTERACTIVE LESSON SESSIONS & CHECKPOINTS

@@ -31,7 +31,7 @@ The PostgreSQL run found the lesson-ordering bug above (a student could not leav
 
 ## Not verified / limits — read before using with a class
 * **Not reviewed by a DepEd curriculum specialist or a teacher.** Wording, difficulty and pacing are unvalidated; a teacher should read each lesson before students use it. Lesson text is English only.
-* **Only Weeks 1–6.** Weeks 7–10 (rational numbers, roots) and Terms 2–3 are not loaded. After Week 6 a student reaches the integers lesson (Term 2) next.
+* **Only Weeks 1–6.** The rest of the course is added by teachers (Phase 41), not shipped. After Week 6 a student reaches the integers lesson (Term 2) next.
 * Lessons are strictly sequential (existing platform behaviour): a student cannot open Week 4 until Week 3 is completed. Phase 39 adds a teacher control to open lessons early.
 * The learning-path header shows the term of the first lesson ("Term 1") even when the path continues into Term 2.
 * **The built-in tutor's coaching is still integer-centred.** Its right/wrong verdict on a practice question comes from the question's stored answer key and is correct on every seeded numeric practice question (tested both ways). But its hints are generic ("let's break it into small steps") and carry no polygon, percent or rate content; real topic-aware coaching for these topics was added in Phase 40.

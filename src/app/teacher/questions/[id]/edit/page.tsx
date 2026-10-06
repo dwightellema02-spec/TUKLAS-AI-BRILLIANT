@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth/auth-context";
 import { Button } from "@/components/ui/Button";
+import { skillContext } from "@/lib/curriculum/skill-label";
 import { Badge } from "@/components/ui/Badge";
 import { MathText } from "@/components/ui/MathText";
 import { QuestionType, QuestionDifficulty, QuestionStatus } from "@prisma/client";
@@ -427,7 +428,7 @@ export default function TeacherQuestionEditorPage({
               <option value="">Choose a skill…</option>
               {skills.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.title}
+                  {s.title}{skillContext(s) ? ` (${skillContext(s)})` : ""}
                 </option>
               ))}
             </select>

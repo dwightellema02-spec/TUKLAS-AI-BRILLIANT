@@ -10,3 +10,5 @@ export * from "./StudentTable";
 export * from "./StudentDetailView";
 export * from "./ClassInsightCards";
 export { LessonAccessCard } from "./LessonAccessCard";
+export { AddUnitForm } from "./AddUnitForm";
+export { UnitStructureCard } from "./UnitStructureCard";

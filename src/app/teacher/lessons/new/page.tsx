@@ -3,6 +3,7 @@ import { useAuth } from "@/lib/auth/auth-context";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { groupSkillsByUnit } from "@/lib/curriculum/skill-label";
 import {
   BookOpen,
   ArrowLeft,
@@ -124,7 +125,7 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
     }
   };
 
-  const units = (curriculum[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? []);
+  const units = (curriculum[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => (t.units ?? []).map((u: any) => ({ ...u, termName: t.name })));
 
   return (
     <div className="py-8 sm:py-12 bg-slate-50 min-h-[calc(100vh-140px)]">
@@ -213,7 +214,7 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
                   >
                     {units.map((u: any) => (
                       <option key={u.id} value={u.id}>
-                        Unit {u.sequenceOrder}: {u.title}
+                        {u.termName} · Unit {u.sequenceOrder}: {u.title}
                       </option>
                     ))}
                   </select>
@@ -292,24 +293,35 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
                 3. Associated MATATAG Skills
               </h2>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {skillsList.map((skill) => {
-                  const isChecked = selectedSkillIds.includes(skill.id);
-                  return (
-                    <div
-                      key={skill.id}
-                      onClick={() => toggleSkill(skill.id)}
-                      className={`p-3 rounded-xl border cursor-pointer text-xs flex items-center justify-between transition-colors ${
-                        isChecked
-                          ? "bg-blue-50/70 border-blue-500 text-blue-900 font-semibold"
-                          : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
-                      }`}
-                    >
-                      <span>{skill.title}</span>
-                      <span className="text-[10px] text-slate-400">Diff {skill.difficulty?.toFixed(1)}</span>
+              <div className="space-y-4">
+                {groupSkillsByUnit(skillsList).map((group) => (
+                  <div key={group.key} className="space-y-2" data-testid="skill-group">
+                    <p className="text-[11px] font-bold text-slate-500">{group.label}</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {group.skills.map((skill: any) => {
+                        const isChecked = selectedSkillIds.includes(skill.id);
+                        return (
+                          <div
+                            key={skill.id}
+                            role="checkbox"
+                            aria-checked={isChecked}
+                            tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleSkill(skill.id); } }}
+                            onClick={() => toggleSkill(skill.id)}
+                            className={`p-3 rounded-xl border cursor-pointer text-xs flex items-center justify-between transition-colors ${
+                              isChecked
+                                ? "bg-blue-50/70 border-blue-500 text-blue-900 font-semibold"
+                                : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+                            }`}
+                          >
+                            <span>{skill.title}</span>
+                            <span className="text-[10px] text-slate-400">Diff {skill.difficulty?.toFixed(1)}</span>
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
             </div>
 

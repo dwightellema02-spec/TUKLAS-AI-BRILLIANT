@@ -16,6 +16,15 @@ Each student: open the site on their phone or laptop → **Sign In → Need a ne
 3. **Post-test.** Same as the pre-test, kind **Post-test**, same or parallel questions.
 4. **Look at the results.** *Assessments → Results* shows who has finished, scores and which questions were hard. When both tests exist, **Compare pre-test and post-test** (class + the two tests) shows averages and the change. It reports an *observed* difference, not proof that the lessons caused it.
 
+## Adding the next lessons (Terms 2 and 3)
+The platform ships Term 1 (Weeks 1-6) and one Term 2 unit (Integers). You add the rest:
+1. **Curriculum → Add a unit.** Pick the term (1, 2 or 3). Use *Move up / Move down* to put the units in order.
+2. Open the unit and add its **competencies and skills** (what students are measured on). You can set prerequisites between skills.
+3. **Create New Lesson**, pick the unit and tick its skills. In the studio add the sections, **replace every "(Replace this text)"** (a lesson with template text cannot be published), then **Save Draft**.
+4. Submit for review, approve, publish. Create questions and a practice set for the lesson's skills.
+5. Students take lessons in course order. If your class is ahead, open the lesson from the class page (*Lesson access*).
+Nothing you add has been checked by anyone else: read it as a student would before publishing.
+
 ## Things to know
 - **The tutor guides, it does not give answers.** If a student asks for the answer it asks a question back. You can adjust its behaviour on the AI Settings page (`/teacher/ai-settings`) — note these settings apply to **all teachers on this installation** for now.
 - **Voice** works only in browsers that support speech input (Chrome/Edge on Android and desktop; Safari is partial; Firefox none). If the microphone button is missing, students can type. Only the text is kept, never a recording — but Chrome itself may send the audio to Google to turn it into text (see the pilot checklist).

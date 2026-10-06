@@ -3,6 +3,7 @@ import { useAuth } from "@/lib/auth/auth-context";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { AddUnitForm } from "@/components/teacher/AddUnitForm";
 import {
   BookOpen,
   ArrowLeft,
@@ -31,25 +32,24 @@ export default function TeacherCurriculumPage({ onNavigate }: TeacherCurriculumP
     else window.location.pathname = path;
   };
 
-  useEffect(() => {
-    async function fetchCurriculum() {
-      try {
-        const res = await fetch("/api/curriculum");
-        if (res.ok) {
-          const json = await res.json();
-          setCurriculum(json.data || []);
-          // Default select first unit if available
-          const firstUnit = json.data?.[0]?.grades?.[0]?.terms?.[0]?.units?.[0];
-          if (firstUnit) setSelectedUnitId(firstUnit.id);
-        }
-      } catch (err) {
-        console.error("Error fetching curriculum:", err);
-      } finally {
-        setLoading(false);
+  const fetchCurriculum = React.useCallback(async (selectId?: string) => {
+    try {
+      const res = await fetch("/api/curriculum");
+      if (res.ok) {
+        const json = await res.json();
+        setCurriculum(json.data || []);
+        // Default select first unit if available (or the unit that was just added)
+        const firstUnit = (json.data?.[0]?.grades?.[0]?.terms ?? []).flatMap((t: any) => t.units ?? [])[0];
+        if (selectId) setSelectedUnitId(selectId);
+        else if (firstUnit) setSelectedUnitId((cur: any) => cur ?? firstUnit.id);
       }
+    } catch (err) {
+      console.error("Error fetching curriculum:", err);
+    } finally {
+      setLoading(false);
     }
-    fetchCurriculum();
   }, []);
+  useEffect(() => { fetchCurriculum(); }, [fetchCurriculum]);
 
   const currentSubject = curriculum[0];
   const currentGrade = currentSubject?.grades?.[0];
@@ -57,6 +57,18 @@ export default function TeacherCurriculumPage({ onNavigate }: TeacherCurriculumP
   const terms: any[] = currentGrade?.terms || [];
   const currentTerm = terms[0];
   const units: any[] = terms.flatMap((t: any) => (t.units || []).map((u: any) => ({ ...u, termName: t.name })));
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const termUnits = (u: any) => units.filter((x: any) => x.termName === u.termName);
+  const canMove = (u: any, d: number) => { const l = termUnits(u); const i = l.findIndex((x: any) => x.id === u.id); return i + d >= 0 && i + d < l.length; };
+  const moveUnit = async (u: any, d: number) => {
+    const l = termUnits(u); const i = l.findIndex((x: any) => x.id === u.id);
+    const ids = l.map((x: any) => x.id); [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
+    const termNumber = Number(String(u.termName).replace(/\D/g, ""));
+    setMoveError(null); setSelectedUnitId(u.id);
+    const res = await fetch(`/api/terms/${termNumber}/reorder-units`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderedUnitIds: ids }) });
+    if (!res.ok) setMoveError((await res.json().catch(() => ({}))).error || "The units could not be reordered");
+    else fetchCurriculum(u.id);
+  };
   const selectedUnit = units.find((u: any) => u.id === selectedUnitId) || units[0];
 
   return (
@@ -151,11 +163,17 @@ export default function TeacherCurriculumPage({ onNavigate }: TeacherCurriculumP
                       </span>
                     </div>
                     <h3 className="font-bold text-sm text-slate-900">{unit.title}</h3>
+                    <div className="flex gap-1 mt-2" onClick={(e) => e.stopPropagation()}>
+                      <button type="button" aria-label={`Move ${unit.title} up`} disabled={!canMove(unit, -1)} onClick={() => moveUnit(unit, -1)} className="px-2 py-0.5 text-[10px] rounded border border-slate-200 text-slate-600 disabled:opacity-30">Move up</button>
+                      <button type="button" aria-label={`Move ${unit.title} down`} disabled={!canMove(unit, 1)} onClick={() => moveUnit(unit, 1)} className="px-2 py-0.5 text-[10px] rounded border border-slate-200 text-slate-600 disabled:opacity-30">Move down</button>
+                    </div>
+                    {moveError && selectedUnit?.id === unit.id && <p role="alert" className="text-[11px] text-red-700 mt-1">{moveError}</p>}
                     <p className="text-xs text-slate-500 mt-1 line-clamp-2">{unit.description}</p>
                   </div>
                 );
               })
             )}
+            <AddUnitForm defaultTerm={Math.min(3, Math.max(1, terms.length + (terms.length < 3 ? 1 : 0)))} onCreated={(u: any) => fetchCurriculum(u?.id)} />
           </div>
 
           {/* Right Column: Selected Unit Details & Lessons */}

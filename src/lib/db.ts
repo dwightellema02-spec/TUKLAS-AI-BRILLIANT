@@ -4,6 +4,7 @@
  */
 
 import { isGradableType, parseChoiceBlock } from "./lesson/block-grading";
+import { findUnfinishedBlock, TEMPLATE_MARK } from "./lesson/template-mark";
 
 /** Thrown when a student tries to complete a lesson that still has unanswered questions. */
 export class LessonIncompleteError extends Error {
@@ -2585,6 +2586,7 @@ export const dbService = {
       estimatedMinutes?: number;
       prerequisiteLessonId?: string;
       contentBlocks?: Array<{
+        id?: string;
         type: BlockType;
         title?: string;
         content: string;
@@ -2596,22 +2598,60 @@ export const dbService = {
   ) {
     try {
       if (hasValidDatabaseUrl) {
-        const updated = await prisma.lesson.update({
-          where: { id },
-          data: {
-            title: data.title,
-            description: data.description,
-            learningObjectives: data.learningObjectives,
-            estimatedMinutes: data.estimatedMinutes,
-            prerequisiteLessonId: data.prerequisiteLessonId,
-          },
-          include: {
-            resources: true,
-            contentBlocks: true,
-            skills: { include: { skill: true } },
-          },
+        // The studio's "Save Draft" sends the whole lesson. Sections and skills used to be dropped here (the call said "saved" and kept
+        // nothing), so a teacher's work was lost. Validate first, then save everything in one transaction.
+        const blocks = data.contentBlocks;
+        if (blocks !== undefined) {
+          if (!Array.isArray(blocks) || blocks.length > 200) throw new Error("Invalid sections: a lesson can have at most 200 sections.");
+          const types = new Set(["TEXT", "IMAGE", "VIDEO", "EXAMPLE", "QUESTION", "INTERACTIVE", "HINT", "CHECKPOINT", "PRACTICE", "SUMMARY"]);
+          for (const b of blocks) {
+            if (!b || typeof b !== "object" || !types.has(b.type)) throw new Error("Invalid sections: unknown section type.");
+            if (typeof b.content !== "string" || b.content.length > 50000) throw new Error("Invalid sections: each section needs text of at most 50,000 characters.");
+            if (b.title !== undefined && b.title !== null && (typeof b.title !== "string" || b.title.length > 200)) throw new Error("Invalid sections: a section title can be at most 200 characters.");
+            if (b.metadata !== undefined && b.metadata !== null && (typeof b.metadata !== "string" || b.metadata.length > 20000)) throw new Error("Invalid sections: section data is too large or not text.");
+          }
+        }
+        let skillIds: string[] | undefined;
+        if (data.skillIds !== undefined) {
+          if (!Array.isArray(data.skillIds) || data.skillIds.some((s) => typeof s !== "string")) throw new Error("Invalid skills: expected a list of skill ids.");
+          skillIds = [...new Set(data.skillIds)];
+          const known = await prisma.skill.count({ where: { id: { in: skillIds } } });
+          if (known !== skillIds.length) throw new Error("Invalid skills: one of the chosen skills does not exist.");
+        }
+        return await prisma.$transaction(async (tx) => {
+          await tx.lesson.update({
+            where: { id },
+            data: {
+              title: data.title,
+              description: data.description,
+              learningObjectives: data.learningObjectives,
+              estimatedMinutes: data.estimatedMinutes,
+              prerequisiteLessonId: data.prerequisiteLessonId,
+            },
+          });
+          if (skillIds !== undefined) {
+            await tx.lessonSkill.deleteMany({ where: { lessonId: id, skillId: { notIn: skillIds } } });
+            const have = new Set((await tx.lessonSkill.findMany({ where: { lessonId: id }, select: { skillId: true } })).map((r) => r.skillId));
+            const add = skillIds.filter((s) => !have.has(s));
+            if (add.length > 0) await tx.lessonSkill.createMany({ data: add.map((skillId) => ({ lessonId: id, skillId })) });
+          }
+          if (blocks !== undefined) {
+            // sections that already exist keep their id (students' answers and progress point at it); new ones are created; removed ones deleted
+            const existing = new Set((await tx.lessonContentBlock.findMany({ where: { lessonId: id }, select: { id: true } })).map((b) => b.id));
+            const keep: string[] = [];
+            for (let i = 0; i < blocks.length; i++) {
+              const b = blocks[i];
+              const fields = { type: b.type, title: b.title ?? null, content: b.content, metadata: b.metadata ?? null, sequenceOrder: i + 1 };
+              if (b.id && existing.has(b.id)) { await tx.lessonContentBlock.update({ where: { id: b.id }, data: fields }); keep.push(b.id); }
+              else keep.push((await tx.lessonContentBlock.create({ data: { lessonId: id, ...fields } })).id);
+            }
+            await tx.lessonContentBlock.deleteMany({ where: { lessonId: id, id: { notIn: keep } } });
+          }
+          return tx.lesson.findUniqueOrThrow({
+            where: { id },
+            include: { resources: true, contentBlocks: { orderBy: { sequenceOrder: "asc" } }, skills: { include: { skill: true } } },
+          });
         });
-        return updated;
       }
     } catch (e) {
       if (hasValidDatabaseUrl) throw e; // database mode never falls back to demo data
@@ -2638,7 +2678,7 @@ export const dbService = {
         id: `blk_${Date.now()}_${i}`,
         lessonId: id,
         type: b.type,
-        sequenceOrder: b.sequenceOrder || i + 1,
+        sequenceOrder: i + 1, // the position in the list is the order (same as the database path)
         title: b.title,
         content: b.content,
         metadata: b.metadata,
@@ -2688,6 +2728,11 @@ export const dbService = {
     } else if (targetStatus === "PUBLISHED") {
       if (userRole !== "ADMIN" && userRole !== "TEACHER") {
         return { success: false, error: "Publishing requires teacher or admin credentials" };
+      }
+      // A section still showing the studio's template text would be shown to students as it is.
+      const unfinished = findUnfinishedBlock((lesson.contentBlocks || []) as any[]);
+      if (unfinished) {
+        return { success: false, error: `The section "${unfinished.title}" still has the template text "${TEMPLATE_MARK}". Write your own content or remove the section before publishing.` };
       }
       // Students can only be graded on questions that have a usable answer key.
       for (const b of (lesson.contentBlocks || []) as any[]) {
@@ -2768,8 +2813,10 @@ export const dbService = {
             prerequisites: {
               include: { prerequisiteSkill: true },
             },
+            // where the skill belongs, so a long list of skills can be told apart
+            competency: { select: { id: true, code: true, unit: { select: { id: true, title: true, term: { select: { termNumber: true } } } } } },
           },
-          orderBy: { sequenceOrder: "asc" },
+          orderBy: [{ competency: { unit: { term: { termNumber: "asc" } } } }, { competency: { unit: { sequenceOrder: "asc" } } }, { competency: { sequenceOrder: "asc" } }, { sequenceOrder: "asc" }],
         });
         if (skills.length > 0 || hasValidDatabaseUrl) return skills;
       }
