@@ -60,11 +60,11 @@ async function main() {
 
     section("A. Account enumeration and demo accounts");
     const unk: R[] = [], wrong: R[] = [];
-    for (let i = 0; i < 12; i++) { unk.push(await api("POST", "/api/auth/login", undefined, { email: `nobody${i}.${run}@example.edu`, password: "Wrong-pass-1" })); wrong.push(await api("POST", "/api/auth/login", undefined, { email: `pre.s1.${run}@example.edu`, password: "Wrong-pass-1" })); }
+    for (let i = 0; i < 4; i++) { unk.push(await api("POST", "/api/auth/login", undefined, { email: `nobody${i}.${run}@example.edu`, password: "Wrong-pass-1" })); wrong.push(await api("POST", "/api/auth/login", undefined, { email: `pre.s1.${run}@example.edu`, password: "Wrong-pass-1" })); }
     const same = unk[0].status === wrong[0].status && JSON.stringify(unk[0].json) === JSON.stringify(wrong[0].json);
     check(same, "Unknown email and wrong password give the identical status and message", `${unk[0].status} ${JSON.stringify(unk[0].json)} vs ${wrong[0].status} ${JSON.stringify(wrong[0].json)}`);
-    const avg = (a: R[]) => a.slice(2).reduce((n, r) => n + r.ms, 0) / (a.length - 2);
-    console.log(`     timing: unknown email ${avg(unk).toFixed(0)} ms, wrong password ${avg(wrong).toFixed(0)} ms (average of 10)`);
+    const avg = (a: R[]) => a.reduce((n, r) => n + r.ms, 0) / a.length;
+    console.log(`     timing: unknown email ${avg(unk).toFixed(0)} ms, wrong password ${avg(wrong).toFixed(0)} ms (average of 4; more wrong passwords would trip the per-account lockout and answer faster)`);
     check(Math.abs(avg(unk) - avg(wrong)) < 40, "...and the response time does not give the account away (difference under 40 ms)", `difference ${(avg(unk) - avg(wrong)).toFixed(0)} ms`);
     check((await api("POST", "/api/auth/login", undefined, { email: "student@tuklas.ai", password: "Tuklas2026!" })).status !== 200 && (await api("POST", "/api/auth/login", undefined, { email: "admin@tuklas.ai", password: "Tuklas2026!" })).status !== 200, "The public demo accounts cannot sign in in production");
     const dup = await api("POST", "/api/auth/register", undefined, { name: "x y", email: `pre.s1.${run}@example.edu`, password: PW, acceptPrivacy: true });
@@ -121,7 +121,7 @@ async function main() {
 
     section("E. Secrets, health and headers");
     const health = await api("GET", "/api/health");
-    check(!/password|secret|@|DATABASE|postgres(ql)?:/i.test(health.text) && !health.json.database?.details, "/api/health reveals nothing internal", health.text.slice(0, 160));
+    check(!/password|secret|@|DATABASE_URL|postgres(ql)?:/i.test(health.text) && !health.json.database?.details, "/api/health reveals nothing internal", health.text.slice(0, 160));
     const ready = await api("GET", "/api/ready"); check(ready.status === 200 && Object.keys(ready.json).length === 1, "/api/ready answers only ready true/false");
     const hdr = await fetch(base + "/", { headers: { "X-Forwarded-Proto": "https" } });
     check(!!hdr.headers.get("strict-transport-security") && hdr.headers.get("x-frame-options") === "DENY" && hdr.headers.get("x-powered-by") === null, "Security headers: HSTS, no framing, no X-Powered-By", `hsts=${!!hdr.headers.get("strict-transport-security")} xfo=${hdr.headers.get("x-frame-options")} xpb=${hdr.headers.get("x-powered-by")}`);

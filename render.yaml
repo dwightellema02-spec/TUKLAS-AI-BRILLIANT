@@ -1,11 +1,13 @@
 # Render blueprint: https://render.com/docs/blueprint-spec
 # Needs a PostgreSQL URL (a free Neon database works): set DATABASE_URL in the Render dashboard.
+# The free plan sleeps when idle and its disk is NOT persistent: uploaded documents (DOCUMENT_STORAGE_DIR) are lost on every restart.
+# For real students use a paid plan with a persistent disk mounted at the DOCUMENT_STORAGE_DIR path (see docs/RUNBOOK.md).
 services:
   - type: web
     name: tuklas-ai
     runtime: docker
     plan: free
-    healthCheckPath: /api/health
+    healthCheckPath: /api/ready
     envVars:
       - key: AUTH_SECRET
         generateValue: true
@@ -17,3 +19,15 @@ services:
         sync: false
       - key: TRUST_PROXY
         value: "true"
+      - key: APP_URL
+        sync: false          # the public https address, e.g. https://tuklas.example.edu
+      - key: ADMIN_EMAIL
+        sync: false          # creates the first administrator on first start (never overwrites an account)
+      - key: ADMIN_NAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false          # remove after the first start
+      - key: SCHOOL_NAME
+        sync: false          # named in the privacy notice
+      - key: PRIVACY_CONTACT_EMAIL
+        sync: false          # named in the privacy notice
