@@ -1,0 +1,34 @@
+# Phase 42 — Production and deployment (Module 22)
+
+**Objective:** make running Tuklas AI for real students safe and recoverable, and find out what breaks when a whole class uses it at once. Until now everything had been proven only in a development sandbox: nothing had been started the way production starts it.
+
+## Defects found by running it the way production runs
+| # | Defect | Effect | Fix |
+|---|---|---|---|
+| 1 | **Deploys used `prisma db push`** (no history, cannot be reviewed, can drop data) | A schema change on a database holding real students could lose data or fail half-way | Migrations: a baseline of the current schema plus `scripts/db-migrate.ts`. Empty database → built from migrations; a database made by `db push` → adopted *only if it matches*, otherwise the start stops and changes nothing; later migrations apply without losing rows; a broken one is rolled back whole |
+| 2 | **A school looks like one address, and the only limit was per address (1,200 requests/min).** In the load test **470 of 1,670 requests were refused** and only 27 of 45 students could finish the lesson | A class would be locked out of its own lesson | Signed-in requests are limited **per account** (600/min), the shared address has a very high ceiling (20,000/min) for signed-in traffic, and anonymous traffic (sign-in / registration floods) keeps the strict per-address ceiling |
+| 3 | **SIGTERM was not honoured.** Run through the `tsx` launcher, a restart exited at once (143) and cut requests off | Every deploy would have broken students' requests in flight | Run as `node --import tsx`; requests being handled finish, answers carry `Connection: close`, new connections are refused, the database is closed, exit 0 |
+| 4 | `/api/health` returned the database error text to anyone, and a stale version | Internal details exposed | Health says only "connected or not"; the version is the real one; new `/api/ready` (database answers, every migration finished; 503 otherwise, reason only in the log) |
+| 5 | An address under `/api` that no route handled returned the **web page with a 200** | Hid a missing route (see below), confusing for clients | JSON 404 |
+| 6 | No process-level handlers for unhandled errors | A stray rejection could take the server down silently | Logged; an uncaught exception logs and exits so the platform restarts a clean process |
+| 7 | No settings check, backups, restore or runbook | — | `npm run check:env`; `scripts/backup-db.sh` / `restore-db.sh` (verified, rotated, private files); `docker-compose.yml` (app + PostgreSQL + nightly backup); `docs/RUNBOOK.md` |
+
+**A mistake of my own, caught by the load test:** while editing the health route I deleted seven core routes (`/api/curriculum` and the lesson create/read/update/delete routes). The ops test (which only touched health and sign-in) did not notice; the load test did (the lessons came back as the web page). I restored them exactly from the last commit and added two guards: the ops test now checks that nine essential API routes answer JSON in production, and unknown `/api` paths are a JSON 404.
+
+## Verification
+| Check | Result |
+|---|---|
+| `scripts/test-phase42-migrations.ts` | 17 passed: what the migrations build is **identical** to `schema.prisma` (so a schema edit without a migration fails this); history recorded; repeatable; a `db push` database is adopted with its data untouched; a mismatching one is refused, no history written, no data touched; a later migration keeps the rows; a broken migration fails and is rolled back |
+| `scripts/test-phase42-backup.ts` | 16 passed: backup written, read-back check, private files, unreachable database leaves nothing behind, rotation keeps the newest N; **disaster and restore**: users wiped, restore into a new database, **all 42 tables have identical row counts**, the restored database is under migrations, a row reads back; unconfirmed or invalid restores are refused |
+| `scripts/test-phase42-ops.ts` | 30 passed: the settings checker (fatal vs warning cases); `start-production.sh` on an **empty** database: bad settings stop it before the database is touched, then migrate + curriculum + first administrator + serves + the administrator signs in; health and readiness incl. a half-applied migration (503, still alive) and the database going away (503, no details leaked); SIGTERM with requests in flight (answered in full, `Connection: close`, new connections refused, exit 0); a second start is harmless; nine essential API routes answer JSON; unknown `/api` is a JSON 404 |
+| `scripts/test-phase42-ratelimit.ts` | 7 passed: per-account limit (one account refused, another on the same address unaffected), `Retry-After`, health never throttled, the shared-address ceiling still stops many accounts together, anonymous floods refused |
+| `scripts/test-phase42-load.ts` (production mode, real PostgreSQL) | **45 students on one address**, full lesson + 12-question practice + tutor, teacher watching: 1,960 requests, 0 refused, 0 failed, p95 0.75 s, all 45 completions and 540 practice answers stored, no duplicate rows; a 6× faster burst (3,700 requests/min) also passes. Before the fix: 470 of 1,670 refused, 27/45 completed |
+| `scripts/simulate-container.sh` | A **clean copy** (only files git would ship): `npm ci` → generate → build → `start-production.sh` → ready in 7 s → web app served → administrator signs in → clean shutdown |
+
+## Not done / limits (please read)
+* **The Docker image still has not been built end to end.** With the daemon running here, the base image downloads, but `apt-get` inside the build (HTTP to deb.debian.org) and `npm ci` inside the build are blocked by this environment's egress policy (403). I did not work around that: routing the build through the agent proxy was refused as a containment escape. What is verified instead is every step after the base image, on a clean copy, plus `docker compose config` accepting `docker-compose.yml`. **Build it once on a machine with internet access before relying on it.**
+* **Nothing has been deployed anywhere**, and there is no monitoring or alerting (nothing watches `/api/ready` for you).
+* Capacity is for **one class (45) on a small development machine with a local database**. Several classes at once, a hosted database over a network, and slow school connections were not measured. Registration of 45 students in the same second takes about 4 s at worst (password hashing); the teacher dashboard is the slowest page under load (p95 2.9 s during that burst).
+* Backups were tested on this machine's PostgreSQL 16 (`pg_dump` 16); use the same major version or newer. Off-server copies are the operator's job.
+* Uploaded lesson documents (originals) live on a volume that must be persistent and backed up separately.
+* A live AI model (Gemini) was not part of this phase.

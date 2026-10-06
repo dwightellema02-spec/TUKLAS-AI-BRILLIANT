@@ -5,3 +5,4 @@ dist
 storage
 eval-output
 data/users-persistence.json
+backups

@@ -20,7 +20,7 @@ Needs a GitHub account (already linked to this repo), a Render account and a Neo
 3. **First administrator:** in the Render service's *Environment* tab add `ADMIN_EMAIL`, `ADMIN_NAME` and `ADMIN_PASSWORD` (8+ characters with a letter and a digit), then redeploy. The container creates that account on startup (it never overwrites an existing one). Remove `ADMIN_PASSWORD` afterwards.
 4. Open the `https://...onrender.com` address on your phone and sign in as that administrator. Create a teacher on the Admin page, then register a student account from the sign-in screen.
 
-On startup the container applies the database schema, loads the Grade 7 curriculum (no accounts), and starts the server. No demo accounts exist in this setup: the demo password is public, so the server refuses to start in production without a PostgreSQL database.
+On startup the container checks its settings, applies the database **migrations** (no longer `prisma db push`), loads the Grade 7 curriculum (no accounts), and starts the server. No demo accounts exist in this setup: the demo password is public, so the server refuses to start in production without a PostgreSQL database.
 
 Notes: the free Render plan sleeps when idle (the first load takes about a minute) and has no persistent disk, so **uploaded lesson documents are lost on redeploy**; database content is kept in Neon. The tutor uses the built-in rule-based engine; to try the real model set `AI_PROVIDER=gemini` and `GEMINI_API_KEY`.
 
@@ -28,6 +28,9 @@ Notes: the free Render plan sleeps when idle (the first load takes about a minut
 
 Same as B but without a database: set `ALLOW_DEMO_MODE=I_UNDERSTAND_DEMO_ACCOUNTS_ARE_PUBLIC`. Anyone with the link can sign in with the public demo password, and everything resets on restart. Only for a short look.
 
+## Real students: use the runbook
+`docs/RUNBOOK.md` covers a school server with `docker-compose.yml` (app + PostgreSQL + nightly backup), updates, backup and restore, settings and what was measured. Render's free plan is fine for a look, not for a class: it sleeps when idle and has no persistent disk.
+
 ## Checks you can run yourself
 
-`GET /api/health` should return `{"status":"ok"}`. Sign in as the administrator; the demo accounts must be rejected (401).
+`GET /api/health` should return `{"status":"ok"}` and `GET /api/ready` `{"ready":true}`. `npm run check:env` lists problems with your settings. Sign in as the administrator; the demo accounts must be rejected (401).

@@ -36,7 +36,7 @@ export const siteConfig: SiteConfig = {
   tagline: "Learn. Practice. Discover.",
   description:
     "An interactive learning platform designed to help students understand mathematical concepts, practice problem-solving, and track their learning progress.",
-  version: "0.28.0-pilot",
+  version: "0.42.0-pilot",
   phase: "Pilot build",
   initialScope: {
     subject: "Mathematics",

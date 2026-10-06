@@ -76,7 +76,7 @@ async function main() {
     }
     const unique = Array.from(new Map(routes.map((r) => [`${r.method} ${r.path}`, r])).values());
     assert(unique.length > 100, `Found ${unique.length} API routes to sweep`);
-    const PUBLIC = new Set(["POST /api/auth/register", "POST /api/auth/login", "POST /api/auth/logout", "GET /api/health", "GET /api/curriculum", "GET /api/auth/me"]);
+    const PUBLIC = new Set(["POST /api/auth/register", "POST /api/auth/login", "POST /api/auth/logout", "GET /api/health", "GET /api/ready", "GET /api/curriculum", "GET /api/auth/me"]);
     const fill = (p: string) => p.replace(/:[A-Za-z]+/g, "x");
     const hit = (r: { method: string; path: string }, tok?: string) => api(r.method, fill(r.path), tok, r.method === "GET" ? undefined : {});
     const anonBad: string[] = [];

@@ -8,7 +8,7 @@ import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
-import { dbService, fallbackStore, LessonIncompleteError, hasValidDatabaseUrl } from "./src/lib/db.ts";
+import { dbService, fallbackStore, LessonIncompleteError, hasValidDatabaseUrl, prisma } from "./src/lib/db.ts";
 import { hashPassword, verifyPassword } from "./src/lib/auth/password.ts";
 import { createSessionToken, verifySessionToken, SessionPayload } from "./src/lib/auth/session.ts";
 import { gradeChoiceAnswer, toStudentBlockView } from "./src/lib/lesson/block-grading.ts";
@@ -36,12 +36,21 @@ import { AssessmentService, AssessmentError, ResearchService, ResearchExporter }
 dotenv.config();
 
 const app = express();
+// set when SIGTERM arrives (see startServer): from then on every answer carries "Connection: close" so clients stop reusing the socket
+let shuttingDown = false;
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  // decided when the answer is written, not when the request arrived: a request already in flight when SIGTERM comes must get it too
+  const writeHead = res.writeHead.bind(res) as (...a: unknown[]) => Response;
+  res.writeHead = ((...a: unknown[]) => { if (shuttingDown) res.setHeader("Connection", "close"); return writeHead(...a); }) as typeof res.writeHead;
+  next();
+});
 if (process.env.TRUST_PROXY === "true") app.set("trust proxy", 1);
 
 // A real bcrypt hash of a random value, used to equalise timing for unknown emails.
 const DUMMY_PASSWORD_HASH = "$2b$10$CwTycUXWue0Thq9StjUM0uJ8y3wRZBZl4kG5K2D9wH5g8h4mJrJ1e";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const isProd = process.env.NODE_ENV === "production";
+const APP_VERSION: string = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "package.json"), "utf-8")).version;
 
 // Without a PostgreSQL database the app serves the in-memory DEMO accounts, whose password is public.
 // A production server must therefore either have a database or be started in an explicitly acknowledged demo mode.
@@ -116,13 +125,17 @@ function allowRate(res: Response, key: string, limit: number, windowMs: number):
   }
   return r.ok;
 }
-// A coarse per-address ceiling against scraping and floods. Enabled in production (override with API_RATE_LIMIT_PER_MINUTE; 0 turns it off).
+// Request ceilings (Phase 42). A school's students all reach the server from ONE address, so a per-address ceiling alone throttled a class of 45
+// (470 of 1,670 requests refused in the load test). Now: signed-in requests are limited per ACCOUNT (a runaway tab or script is stopped
+// without touching anyone else), with only a very high ceiling on the shared address; requests with no valid session (the sign-in and
+// registration floods this exists for) keep the strict per-address ceiling. Enabled in production; 0 turns a limit off.
+//   API_RATE_LIMIT_PER_MINUTE                (anonymous, per address)           default 1200
+//   API_RATE_LIMIT_USER_PER_MINUTE           (signed in, per account)           default 600
+//   API_RATE_LIMIT_SIGNED_IN_IP_PER_MINUTE   (signed in, per shared address)    default 20000
 const API_LIMIT = Number(process.env.API_RATE_LIMIT_PER_MINUTE ?? (isProd ? 1200 : 0));
-app.use("/api", (req: Request, res: Response, next: NextFunction) => {
-  if (!API_LIMIT || req.path === "/health") return next();
-  if (!allowRate(res, `ip:${req.ip ?? "unknown"}`, API_LIMIT, 60_000)) return;
-  return next();
-});
+const USER_LIMIT = Number(process.env.API_RATE_LIMIT_USER_PER_MINUTE ?? (isProd ? 600 : 0));
+const SIGNED_IN_IP_LIMIT = Number(process.env.API_RATE_LIMIT_SIGNED_IN_IP_PER_MINUTE ?? (isProd ? 20000 : 0));
+// (the request ceilings are applied below, after the session has been read)
 
 // Internal details (database errors, file paths, stack traces) must not reach the browser: replace them, keep the log.
 const INTERNAL_ERROR = /prisma|invalid `|unique constraint|foreign key|econn|enotfound|etimedout|sqlstate|\bat [\w.<>]+ \(|\/home\/|node_modules|postgres(ql)?:\/\//i;
@@ -199,6 +212,20 @@ app.use(async (req: Request, _res: Response, next: NextFunction) => {
     if (hasValidDatabaseUrl) console.error("Session check failed (treated as signed out):", e instanceof Error ? e.message : e);
   }
   next();
+});
+
+// Applied here, after the session middleware, because the ceiling depends on who is signed in.
+app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+  if (req.path === "/health" || req.path === "/ready") return next();
+  const session = getSessionFromRequest(req);
+  const ip = req.ip ?? "unknown";
+  if (session) {
+    if (USER_LIMIT && !allowRate(res, `user:${session.userId}`, USER_LIMIT, 60_000)) return;
+    if (SIGNED_IN_IP_LIMIT && !allowRate(res, `ipauth:${ip}`, SIGNED_IN_IP_LIMIT, 60_000)) return;
+    return next();
+  }
+  if (API_LIMIT && !allowRate(res, `ip:${ip}`, API_LIMIT, 60_000)) return;
+  return next();
 });
 
 function getSessionFromRequest(req: Request): SessionPayload | null {
@@ -368,14 +395,34 @@ app.get("/api/auth/me", async (req: Request, res: Response) => {
 // API: DATABASE & CURRICULUM VERIFICATION ROUTES
 // -------------------------------------------------------------
 
+// Liveness: the process answers. Public, so it says nothing about the database beyond "connected or not" (connection errors can name hosts).
 app.get("/api/health", async (_req: Request, res: Response) => {
   const status = await dbService.getStatus();
   return res.json({
     status: "ok",
-    database: status,
+    database: { connected: status.connected, provider: status.provider },
     timestamp: new Date().toISOString(),
-    version: "0.2.0-phase2",
+    version: APP_VERSION,
   });
+});
+
+// Readiness (Phase 42): the app can do its job. The database answers and every migration has finished (none failed half-way).
+// 503 means "do not send traffic yet"; the reason is logged, not returned.
+app.get("/api/ready", async (_req: Request, res: Response) => {
+  const notReady = (why: string) => { console.error(`NOT READY: ${why}`); return res.status(503).json({ ready: false }); };
+  if (!hasValidDatabaseUrl) return res.json({ ready: true, mode: "demo" });
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    const rows = await prisma.$queryRawUnsafe<Array<{ migration_name: string; finished_at: Date | null; rolled_back_at: Date | null }>>(
+      `SELECT migration_name, finished_at, rolled_back_at FROM _prisma_migrations ORDER BY started_at`
+    ).catch(() => null);
+    if (rows === null) return notReady("no migration history (run `npm run db:migrate`)");
+    const broken = rows.filter((r) => !r.finished_at && !r.rolled_back_at);
+    if (broken.length > 0) return notReady(`unfinished migration(s): ${broken.map((b) => b.migration_name).join(", ")}`);
+    return res.json({ ready: true });
+  } catch (e) {
+    return notReady(`database unreachable: ${e instanceof Error ? e.message.slice(0, 200) : "unknown"}`);
+  }
 });
 
 app.get("/api/curriculum", async (req: Request, res: Response) => {
@@ -3430,6 +3477,9 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
+    // An address under /api that no route handles is an error for the caller, not a page: without this the single-page fallback below
+    // answered it with index.html and a 200 (which also hid a route that had gone missing).
+    app.use("/api", (_req: Request, res: Response) => res.status(404).json({ error: "Not found" }));
     // Production static serving
     const distPath = path.resolve(import.meta.dirname, "dist");
     app.use(express.static(distPath));
@@ -3438,10 +3488,34 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`🚀 Tuklas AI Server running on http://0.0.0.0:${PORT}`);
   });
+
+  // Phase 42: a deploy or restart sends SIGTERM. Stop taking new connections, let requests in flight finish, close the database, exit.
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} received: shutting down (finishing requests in flight)...`);
+    const force = setTimeout(() => { console.error("Shutdown took too long: exiting."); process.exit(1); }, 10_000);
+    force.unref();
+    server.close(async () => {
+      try { if (hasValidDatabaseUrl) await prisma.$disconnect(); } catch { /* closing anyway */ }
+      console.log("Shut down cleanly.");
+      process.exit(0);
+    });
+    // keep-alive connections that sit idle would hold the shutdown open; close them after a short grace so a request that was just being
+    // sent on one is still read (answers carry "Connection: close" from now on, so clients stop reusing them)
+    setTimeout(() => (server as any).closeIdleConnections?.(), 1000).unref();
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
+
+// A promise nobody awaited must not take the whole classroom offline: log it and carry on. Anything else is a bug whose state we cannot trust:
+// log, then exit so the platform restarts a clean process.
+process.on("unhandledRejection", (reason) => console.error("UNHANDLED REJECTION:", reason instanceof Error ? reason.stack ?? reason.message : reason));
+process.on("uncaughtException", (err) => { console.error("UNCAUGHT EXCEPTION:", err.stack ?? err.message); setTimeout(() => process.exit(1), 100); });
 
 startServer().catch((err) => {
   console.error("Failed to start server:", err);
