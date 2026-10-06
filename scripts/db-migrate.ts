@@ -3,16 +3,18 @@
  * can drop data when the schema changes.
  *
  *  - empty database                      -> `prisma migrate deploy` (builds everything from the migrations)
- *  - database made by the old `db push`  -> if it matches the baseline schema, record the baseline as applied, then deploy; if it does NOT
- *                                           match, stop and change nothing (a person decides: nothing here guesses)
+ *  - database made by the old `db push`  -> if it matches the CURRENT schema exactly, record every migration as already applied (the
+ *                                           database has all of it), then deploy; if it does NOT match, stop and change nothing
+ *                                           (a person decides: nothing here guesses)
  *  - database already under migrations   -> `prisma migrate deploy` (applies only what is new; never destructive on its own)
  *
  * Env: DATABASE_URL (required), PRISMA_SCHEMA_PATH (default prisma/schema.prisma).
  */
+import fs from "fs";
+import path from "path";
 import { spawnSync } from "child_process";
 import { PrismaClient } from "@prisma/client";
 
-const BASELINE = "20261006000000_baseline";
 const schema = process.env.PRISMA_SCHEMA_PATH || "prisma/schema.prisma";
 const url = process.env.DATABASE_URL ?? "";
 
@@ -30,19 +32,24 @@ async function main() {
   } finally { await db.$disconnect(); }
 
   if (hasUsers && !hasHistory) {
-    console.log("db-migrate: this database was created by `prisma db push` (no migration history). Checking it against the baseline schema...");
+    console.log("db-migrate: this database was created by `prisma db push` (no migration history). Checking it against the current schema...");
     const diff = prisma(["migrate", "diff", "--from-url", url, "--to-schema-datamodel", schema, "--exit-code"]);
     if (diff.status === 2) {
-      console.error("db-migrate: STOPPED. The existing database differs from the schema the baseline describes, so it cannot be adopted automatically.");
+      console.error("db-migrate: STOPPED. The existing database differs from the current schema, so it cannot be adopted automatically.");
       console.error("The differences are:\n" + diff.stdout);
       console.error("Nothing was changed. Back the database up, bring it up to date once with `npx prisma db push` (additive changes only), then run this again.");
       process.exit(3);
     }
     if (diff.status !== 0) { show(diff); console.error("db-migrate: could not compare the database with the schema."); process.exit(1); }
-    const resolve = prisma(["migrate", "resolve", "--applied", BASELINE]);
-    show(resolve);
-    if (resolve.status !== 0) process.exit(1);
-    console.log("db-migrate: existing database adopted (baseline recorded, no data touched).");
+    // it already contains everything the migrations describe: record them all as applied without running them
+    const dir = path.join(path.dirname(schema), "migrations");
+    const names = fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+    for (const name of names) {
+      const resolve = prisma(["migrate", "resolve", "--applied", name]);
+      show(resolve);
+      if (resolve.status !== 0) process.exit(1);
+    }
+    console.log(`db-migrate: existing database adopted (${names.length} migration(s) recorded as applied, no data touched).`);
   }
 
   const deploy = prisma(["migrate", "deploy"]);

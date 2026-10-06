@@ -40,6 +40,7 @@ export function checkEnv(env: NodeJS.ProcessEnv = process.env): EnvReport {
   catch { warnings.push(`DOCUMENT_STORAGE_DIR (${dir}) is not writable: teachers' document uploads will fail.`); }
 
   if (env.ADMIN_PASSWORD) warnings.push("ADMIN_PASSWORD is still set. It is only used to create the first administrator; remove it after the first start.");
+  if (prod && !(env.PRIVACY_CONTACT_EMAIL ?? "").trim()) warnings.push("PRIVACY_CONTACT_EMAIL is not set: the privacy notice tells students to ask 'your teacher or the school office' instead of naming a contact. Set it (and SCHOOL_NAME).");
   const limit = env.API_RATE_LIMIT_PER_MINUTE;
   if (limit !== undefined && Number(limit) === 0 && prod) warnings.push("API_RATE_LIMIT_PER_MINUTE=0 turns the request ceiling off in production.");
   return { fatal, warnings, notes };

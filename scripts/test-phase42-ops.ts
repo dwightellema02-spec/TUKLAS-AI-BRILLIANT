@@ -19,7 +19,7 @@ async function main() {
   const assert = (c: boolean, m: string) => { if (c) { passed++; console.log(`  ✅ ${m}`); } else { failed++; console.error(`  ❌ FAILED: ${m}`); } };
 
   console.log("--- A. check-env ---");
-  const good = { NODE_ENV: "production", DATABASE_URL: "postgresql://u:p@db.example.com/x?sslmode=require", AUTH_SECRET: "a".repeat(40), APP_URL: "https://tuklas.example.edu", TRUST_PROXY: "true", AI_PROVIDER: "local", DOCUMENT_STORAGE_DIR: "/tmp/p42-docs" } as NodeJS.ProcessEnv;
+  const good = { NODE_ENV: "production", DATABASE_URL: "postgresql://u:p@db.example.com/x?sslmode=require", AUTH_SECRET: "a".repeat(40), APP_URL: "https://tuklas.example.edu", TRUST_PROXY: "true", AI_PROVIDER: "local", DOCUMENT_STORAGE_DIR: "/tmp/p42-docs", PRIVACY_CONTACT_EMAIL: "privacy@tuklas.example.edu" } as NodeJS.ProcessEnv;
   const rGood = checkEnv(good);
   assert(rGood.fatal.length === 0 && rGood.warnings.length === 0, `A complete production setup has no problems (${[...rGood.fatal, ...rGood.warnings].join("; ")})`);
   assert(checkEnv({ ...good, AUTH_SECRET: "short" }).fatal.some((f) => /AUTH_SECRET/.test(f)) && checkEnv({ ...good, AUTH_SECRET: "placeholder_secret_min_32_characters_long" }).fatal.length > 0, "A short or placeholder AUTH_SECRET is fatal in production");
@@ -27,6 +27,7 @@ async function main() {
   assert(checkEnv({ ...good, DATABASE_URL: undefined, ALLOW_DEMO_MODE: "I_UNDERSTAND_DEMO_ACCOUNTS_ARE_PUBLIC" }).fatal.length === 0, "...unless the public-demo switch is on, which is a loud warning");
   const w = checkEnv({ ...good, APP_URL: "http://x", TRUST_PROXY: undefined, AI_PROVIDER: "gemini", ADMIN_PASSWORD: "x", API_RATE_LIMIT_PER_MINUTE: "0" }).warnings.join(" ");
   assert(/https/.test(w) && /TRUST_PROXY/.test(w) && /GEMINI_API_KEY/.test(w) && /ADMIN_PASSWORD/.test(w) && /turns the request ceiling off/.test(w), "Warnings for http, no proxy setting, gemini without a key, a leftover admin password, rate limit off");
+  assert(checkEnv({ ...good, PRIVACY_CONTACT_EMAIL: undefined }).warnings.some((x) => /PRIVACY_CONTACT_EMAIL/.test(x)), "A production setup with no privacy contact is flagged");
   assert(checkEnv({ ...good, DATABASE_URL: "postgresql://u:p@db.example.com/x" }).warnings.some((x) => /sslmode/.test(x)), "A hosted database without sslmode is flagged");
   assert(checkEnv({ ...good, DOCUMENT_STORAGE_DIR: "/dev/null/docs" }).warnings.some((x) => /not writable/.test(x)), "An unwritable document folder is flagged");
   assert(checkEnv({ NODE_ENV: "development" }).fatal.length === 0, "A plain development run is fine");

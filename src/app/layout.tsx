@@ -1,6 +1,7 @@
 import React, { ReactNode } from "react";
 import { Navbar } from "@/components/shared/Navbar";
 import { Footer } from "@/components/shared/Footer";
+import { PrivacyGate } from "@/components/privacy/PrivacyGate";
 
 export interface RootLayoutProps {
   children: ReactNode;
@@ -20,6 +21,7 @@ export default function RootLayout({
         {children}
       </main>
       <Footer onNavigate={onNavigate} />
+      <PrivacyGate />
     </div>
   );
 }

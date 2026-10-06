@@ -43,6 +43,10 @@ For the person who looks after the server. Everything here is exercised by tests
 | `API_RATE_LIMIT_SIGNED_IN_IP_PER_MINUTE` (20000) | Signed-in requests, per shared address (a whole school is one address) |
 | `AI_PROVIDER` / `GEMINI_API_KEY` | `local` = built-in rule-based tutor; `gemini` = external model (**not tested with a live model**) |
 | `DOCUMENT_STORAGE_DIR` | Must be a persistent volume |
+| `SCHOOL_NAME`, `PRIVACY_CONTACT_EMAIL` | Named in the privacy notice shown to students (see `docs/PRIVACY.md`) |
+| `REQUIRE_PRIVACY_ACCEPTANCE` (on in production) | Accounts must accept the notice before using anything |
+| `REQUIRE_GUARDIAN_CONSENT` (off) | The AI tutor stays closed to a student until a teacher records guardian consent |
+| `RETENTION_TUTOR_DAYS` (365), `RETENTION_AUDIT_IP_DAYS` (90) | Used by `scripts/retention.ts` (schedule it weekly: `npx tsx scripts/retention.ts --apply`) |
 
 ## 8. Capacity (measured, not promised)
 One app container and PostgreSQL on a small dev machine: **45 students on one address**, in production mode, each doing a full lesson, a 12-question practice and two tutor questions while a teacher watches: **1,960 requests, none refused, none failed, p95 0.75 s**; a 6× faster burst (3,700 requests/min) also passed. Slowest steps: all 45 registering at the same instant (p95 4 s, password hashing is deliberately slow) and the teacher dashboard during that burst (p95 2.9 s). **Not measured:** several classes at once, a hosted database across a network, a slow school connection.

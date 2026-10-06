@@ -49,6 +49,8 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
   const [selectedStudentId, setSelectedStudentId] = useState<string>("");
   const [classes, setClasses] = useState<Array<{ id: string; name: string }>>([]);
   const [students, setStudents] = useState<Array<{ id: string; name: string }>>([]);
+  const [identifiedExport, setIdentifiedExport] = useState(false);
+  const exportQuery = [selectedClassroomId ? `classroomId=${encodeURIComponent(selectedClassroomId)}` : "", identifiedExport ? "identified=true" : ""].filter(Boolean).join("&");
   const classQuery = selectedClassroomId ? `classroomId=${encodeURIComponent(selectedClassroomId)}` : "";
 
   // Analytics data
@@ -183,10 +185,14 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
 
           {/* Export Action Buttons */}
           <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-slate-600" title="Off by default: exports use a code instead of the student's name. Turning this on is recorded in the audit log.">
+              <input type="checkbox" data-testid="identified-export" checked={identifiedExport} onChange={(e) => setIdentifiedExport(e.target.checked)} />
+              Include student names (audited)
+            </label>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleExportCsv(`/api/teacher/research/export/metrics.csv?${classQuery}`, "metrics.csv")}
+              onClick={() => handleExportCsv(`/api/teacher/research/export/metrics.csv?${exportQuery}`, "metrics.csv")}
               className="gap-1.5 text-xs text-slate-700 border-slate-300"
             >
               <Download className="w-3.5 h-3.5" />
@@ -195,7 +201,7 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleExportCsv(`/api/teacher/research/export/comparison.csv?${classQuery}`, "comparison.csv")}
+              onClick={() => handleExportCsv(`/api/teacher/research/export/comparison.csv?${exportQuery}`, "comparison.csv")}
               className="gap-1.5 text-xs text-slate-700 border-slate-300"
             >
               <Download className="w-3.5 h-3.5" />
@@ -204,7 +210,7 @@ export default function TeacherResearchPage({ onNavigate }: TeacherResearchPageP
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleExportCsv(`/api/teacher/research/export/attempts.csv?${classQuery}`, "attempts.csv")}
+              onClick={() => handleExportCsv(`/api/teacher/research/export/attempts.csv?${exportQuery}`, "attempts.csv")}
               className="gap-1.5 text-xs text-indigo-700 border-indigo-200 hover:bg-indigo-50"
             >
               <Download className="w-3.5 h-3.5" />

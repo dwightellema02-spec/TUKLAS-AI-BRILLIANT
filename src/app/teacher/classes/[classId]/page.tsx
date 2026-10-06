@@ -60,6 +60,15 @@ export default function TeacherClassDetailPage({
     return json;
   };
 
+  // guardian consent (students under 18): recorded by the teacher; the roster comes from the class detail
+  const [guardianConsent, setGuardianConsent] = useState<Record<string, boolean>>({});
+  useEffect(() => { setGuardianConsent(Object.fromEntries((classData?.students || []).map((s: any) => [s.id, !!s.guardianConsent]))); }, [classData]);
+  const setConsent = async (studentId: string, given: boolean) => {
+    setGuardianConsent((c) => ({ ...c, [studentId]: given }));
+    const json = await callApi(`/api/teacher/students/${studentId}/guardian-consent`, "POST", { given });
+    if (!json) setGuardianConsent((c) => ({ ...c, [studentId]: !given }));
+  };
+
   const handleAddStudents = async (e: React.FormEvent) => {
     e.preventDefault();
     const emails = emailsText.split(/[\s,;]+/).filter(Boolean);
@@ -365,7 +374,11 @@ export default function TeacherClassDetailPage({
               {(classData.students || []).length > 0 && (
                 <ul data-testid="roster-remove" className="flex flex-wrap gap-2">
                   {(classData.students || []).map((st: any) => (
-                    <li key={st.id}>
+                    <li key={st.id} className="flex items-center gap-2">
+                      <label className="text-[11px] text-slate-600 flex items-center gap-1" title="A parent or guardian's consent for this student is on file">
+                        <input type="checkbox" data-testid={`guardian-${st.id}`} aria-label={`Guardian consent on file for ${st.name}`} checked={!!guardianConsent[st.id]} onChange={(e) => setConsent(st.id, e.target.checked)} />
+                        <span>Guardian consent</span>
+                      </label>
                       <button type="button" onClick={() => handleRemove(st.id, st.name)} aria-label={`Remove ${st.name}`} className="text-[11px] px-2 py-1 rounded-lg border border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-200">
                         Remove {st.name}
                       </button>

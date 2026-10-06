@@ -606,6 +606,7 @@ export class TeacherService {
           name: studentUser.name || "Student",
           email: studentUser.email,
           gradeLevel: studentUser.gradeLevel || 7,
+          guardianConsent: !!(studentUser as any).guardianConsentAt,
           classrooms: cls ? [{ id: cls.id, name: cls.name }] : [],
           currentLesson: currentLessonObj,
           primaryMastery: primaryM

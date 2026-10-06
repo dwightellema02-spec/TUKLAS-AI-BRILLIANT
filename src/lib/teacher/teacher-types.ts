@@ -30,6 +30,8 @@ export interface StudentListItemDTO {
   name: string;
   email: string;
   gradeLevel: number;
+  /** Whether a teacher/admin has recorded guardian consent for this student. */
+  guardianConsent?: boolean;
   classrooms: Array<{ id: string; name: string }>;
   currentLesson: {
     id: string;

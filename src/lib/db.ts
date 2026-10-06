@@ -269,6 +269,10 @@ export interface SeedDataStore {
     gradeLevel?: number;
     sessionVersion?: number;
     disabledAt?: Date | string | null;
+    privacyNoticeVersion?: string | null;
+    privacyAcceptedAt?: Date | string | null;
+    guardianConsentAt?: Date | string | null;
+    guardianConsentRecordedBy?: string | null;
     createdAt: Date;
     updatedAt: Date;
   }>;
@@ -2894,6 +2898,7 @@ export const dbService = {
     passwordHash: string;
     role: UserRole;
     gradeLevel?: number;
+    privacyNoticeVersion?: string;
   }) {
     const cleanEmail = data.email.toLowerCase().trim();
 
@@ -2906,6 +2911,7 @@ export const dbService = {
           passwordHash: data.passwordHash,
           role: data.role,
           gradeLevel: data.gradeLevel,
+          ...(data.privacyNoticeVersion ? { privacyNoticeVersion: data.privacyNoticeVersion, privacyAcceptedAt: new Date() } : {}),
         },
       });
     }
@@ -2917,6 +2923,7 @@ export const dbService = {
       passwordHash: data.passwordHash,
       role: data.role,
       gradeLevel: data.gradeLevel,
+      ...(data.privacyNoticeVersion ? { privacyNoticeVersion: data.privacyNoticeVersion, privacyAcceptedAt: new Date() } : {}),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -2926,18 +2933,21 @@ export const dbService = {
   },
 
   /** Admin user listing. Never returns password hashes. */
-  async listUsers(opts: { role?: UserRole; limit?: number; offset?: number } = {}) {
+  async listUsers(opts: { role?: UserRole; limit?: number; offset?: number; search?: string } = {}) {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
     const offset = Math.max(opts.offset ?? 0, 0);
-    const strip = (u: any) => ({ id: u.id, email: u.email, name: u.name, role: u.role, gradeLevel: u.gradeLevel ?? null, disabled: !!u.disabledAt, createdAt: u.createdAt });
+    const strip = (u: any) => ({ id: u.id, email: u.email, name: u.name, role: u.role, gradeLevel: u.gradeLevel ?? null, disabled: !!u.disabledAt, createdAt: u.createdAt, privacyAccepted: !!u.privacyNoticeVersion, guardianConsent: u.role === "STUDENT" ? !!u.guardianConsentAt : null });
+    const q = (opts.search ?? "").trim();
     if (!useInMemoryAccounts) {
+      const where: any = { ...(opts.role ? { role: opts.role } : {}), ...(q ? { OR: [{ email: { contains: q, mode: "insensitive" } }, { name: { contains: q, mode: "insensitive" } }] } : {}) };
       const [rows, total] = await Promise.all([
-        prisma.user.findMany({ where: opts.role ? { role: opts.role } : {}, orderBy: { createdAt: "desc" }, skip: offset, take: limit }),
-        prisma.user.count({ where: opts.role ? { role: opts.role } : {} }),
+        prisma.user.findMany({ where, orderBy: { createdAt: "desc" }, skip: offset, take: limit }),
+        prisma.user.count({ where }),
       ]);
       return { users: rows.map(strip), total };
     }
-    const all = fallbackStore.users.filter((u) => !opts.role || u.role === opts.role);
+    const ql = q.toLowerCase();
+    const all = fallbackStore.users.filter((u) => (!opts.role || u.role === opts.role) && (!ql || u.email.toLowerCase().includes(ql) || u.name.toLowerCase().includes(ql)));
     return { users: all.slice(offset, offset + limit).map(strip), total: all.length };
   },
 
@@ -2959,10 +2969,10 @@ export const dbService = {
   /** What a session token must still match to be honoured: the account exists, is enabled, and the version is current. */
   async getAuthState(userId: string) {
     const u: any = !useInMemoryAccounts
-      ? await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, name: true, role: true, sessionVersion: true, disabledAt: true } })
+      ? await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, name: true, role: true, sessionVersion: true, disabledAt: true, privacyNoticeVersion: true, guardianConsentAt: true } })
       : fallbackStore.users.find((x) => x.id === userId);
     if (!u) return null;
-    return { id: u.id as string, email: u.email as string, name: u.name as string, role: u.role as UserRole, sessionVersion: (u.sessionVersion ?? 0) as number, disabled: !!u.disabledAt };
+    return { id: u.id as string, email: u.email as string, name: u.name as string, role: u.role as UserRole, sessionVersion: (u.sessionVersion ?? 0) as number, disabled: !!u.disabledAt, privacyNoticeVersion: (u.privacyNoticeVersion ?? null) as string | null, guardianConsent: !!u.guardianConsentAt };
   },
 
   /** Revokes every session token issued so far for this user. */

@@ -8,6 +8,14 @@ export interface AuthUser {
   role: UserRole;
 }
 
+export interface PrivacyStatus {
+  /** Server enforces acceptance (production): until accepted nothing else works. */
+  required: boolean;
+  needsAcceptance: boolean;
+  version: string;
+  guardianConsent: boolean | null;
+}
+
 export interface DbStatus {
   connected: boolean;
   provider: string;
@@ -18,12 +26,15 @@ interface AuthContextType {
   user: AuthUser | null;
   loading: boolean;
   dbStatus: DbStatus | null;
+  privacy: PrivacyStatus | null;
+  acceptPrivacy: () => Promise<boolean>;
   login: (email: string, password: string) => Promise<{ success: boolean; user?: AuthUser; error?: string }>;
   register: (
     name: string,
     email: string,
     password: string,
-    role?: UserRole
+    role?: UserRole,
+    acceptPrivacy?: boolean
   ) => Promise<{ success: boolean; user?: AuthUser; error?: string }>;
   logout: () => Promise<void>;
   quickLoginAs: (role: UserRole) => Promise<void>;
@@ -49,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
+  const [privacy, setPrivacy] = useState<PrivacyStatus | null>(null);
 
   const fetchCurrentUser = async () => {
     try {
@@ -57,11 +69,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setUser(data.user);
+        setPrivacy(data.privacy ?? null);
       } else {
         if (typeof window !== "undefined") {
           localStorage.removeItem("tuklas_session_token");
         }
         setUser(null);
+        setPrivacy(null);
       }
     } catch {
       setUser(null);
@@ -75,7 +89,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await fetch("/api/health");
       if (res.ok) {
         const data = await res.json();
-        setDbStatus(data.database);
+        // the health check says only "connected or not" (it no longer returns the database's own error text)
+        setDbStatus({ ...data.database, details: data.database?.connected ? "Connected" : "Not connected" });
       }
     } catch (e) {
       console.warn("Could not retrieve DB health:", e);
@@ -100,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       setUser(data.user);
+      await fetchCurrentUser();
       return { success: true, user: data.user };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Network error during login";
@@ -111,13 +127,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     name: string,
     email: string,
     password: string,
-    role?: UserRole
+    role?: UserRole,
+    acceptPrivacy?: boolean
   ) => {
     try {
       const res = await authFetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password, role: role || "STUDENT" }),
+        body: JSON.stringify({ name, email, password, role: role || "STUDENT", acceptPrivacy: acceptPrivacy === true }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -125,11 +142,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       setUser(data.user);
+      await fetchCurrentUser();
       return { success: true, user: data.user };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Network error during registration";
       return { success: false, error: message };
     }
+  };
+
+  const acceptPrivacy = async () => {
+    const res = await authFetch("/api/auth/accept-privacy", { method: "POST" });
+    if (!res.ok) return false;
+    await fetchCurrentUser();
+    return true;
   };
 
   const logout = async () => {
@@ -142,6 +167,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
     } finally {
       setUser(null);
+      setPrivacy(null);
     }
   };
 
@@ -163,6 +189,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         loading,
         dbStatus,
+        privacy,
+        acceptPrivacy,
         login,
         register,
         logout,

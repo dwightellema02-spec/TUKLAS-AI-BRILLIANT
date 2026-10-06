@@ -146,6 +146,12 @@ model User {
   sessionVersion Int       @default(0)
   /// When set the account cannot sign in and existing sessions stop working.
   disabledAt     DateTime?
+  /// Phase 43: the privacy notice this person accepted (version + time). Null = not accepted yet (admin-created or older accounts see it on next sign-in).
+  privacyNoticeVersion String?
+  privacyAcceptedAt    DateTime?
+  /// Phase 43: a teacher or administrator recorded that the student's parent/guardian consent is on file (students under 18).
+  guardianConsentAt         DateTime?
+  guardianConsentRecordedBy String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

@@ -54,6 +54,17 @@ export default function AccountPage({ onNavigate }: AccountPageProps) {
     }
   };
 
+  const [dataMsg, setDataMsg] = useState<string | null>(null);
+  const downloadMyData = async () => {
+    setDataMsg(null);
+    const res = await authFetch("/api/me/data-export");
+    if (!res.ok) { setDataMsg("Could not prepare your data. Please try again."); return; }
+    const blob = new Blob([JSON.stringify((await res.json()).data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "tuklas-my-data.json"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    setDataMsg("Your data was downloaded as tuklas-my-data.json.");
+  };
+
   const signOutEverywhere = async () => {
     if (!window.confirm("Sign out on every device, including this one?")) return;
     const res = await authFetch("/api/auth/logout-all", { method: "POST" });
@@ -82,6 +93,13 @@ export default function AccountPage({ onNavigate }: AccountPageProps) {
           <Button type="submit" variant="primary" size="sm" disabled={busy}>{busy ? "Saving..." : "Change password"}</Button>
           {msg && <p role="status" className={`text-xs ${msg.ok ? "text-emerald-700" : "text-red-600"}`}>{msg.text} {msg.ok && "Your other devices were signed out."}</p>}
         </form>
+
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-2" data-testid="your-data">
+          <h2 className="text-sm font-bold text-slate-900">Your data</h2>
+          <p className="text-xs text-slate-500">You can download everything this system holds about you. To have your account and all its records erased, ask your teacher or the school's administrator. <a href="/privacy" className="underline text-blue-700">Read the privacy notice</a>.</p>
+          <Button variant="outline" size="sm" onClick={downloadMyData}>Download my data</Button>
+          {dataMsg && <p role="status" className="text-xs text-slate-600">{dataMsg}</p>}
+        </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-2">
           <h2 className="text-sm font-bold text-slate-900">Sign out everywhere</h2>

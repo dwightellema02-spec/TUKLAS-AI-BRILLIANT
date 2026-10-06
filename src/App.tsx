@@ -36,6 +36,7 @@ import TeacherAssessmentsPage from "@/app/teacher/assessments/page";
 import TeacherAssessmentResultsPage from "@/app/teacher/assessments/[id]/page";
 import AdminPage from "@/app/admin/page";
 import AccountPage from "@/app/account/page";
+import PrivacyPage from "@/app/privacy/page";
 import NotFound from "@/app/not-found";
 
 export default function App() {
@@ -91,6 +92,7 @@ export default function App() {
     if (normalized === "/teacher/assessments") return <TeacherAssessmentsPage onNavigate={navigate} />;
     if (normalized === "/admin") return <AdminPage onNavigate={navigate} />;
     if (normalized === "/account") return <AccountPage onNavigate={navigate} />;
+    if (normalized === "/privacy") return <PrivacyPage onNavigate={navigate} />;
 
     const studentAssessmentMatch = normalized.match(/^\/student\/assessments\/([^\/]+)$/);
     if (studentAssessmentMatch) return <StudentAssessmentPage assessmentId={studentAssessmentMatch[1]} onNavigate={navigate} />;

@@ -71,6 +71,7 @@ export const siteConfig: SiteConfig = {
     {
       title: "Administration",
       items: [
+        { title: "Privacy notice", href: "/privacy" },
         { title: "Admin Portal", href: "/admin" },
         { title: "Architecture Docs", href: "#" },
       ],

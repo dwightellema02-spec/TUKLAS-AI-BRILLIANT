@@ -44,7 +44,8 @@ async function main() {
     const r2 = migrate(b);
     assert(r2.status === 0 && /adopted/.test(r2.stdout), "It is adopted");
     assert((await q(b, `SELECT count(*)::int AS n FROM "User" WHERE email = 'legacy@example.edu'`))[0].n === 1, "Its data is untouched");
-    assert((await q(b, `SELECT count(*)::int AS n FROM _prisma_migrations`))[0].n >= 1, "The baseline is now recorded");
+    const folders = fs.readdirSync("prisma/migrations", { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+    assert((await q(b, `SELECT count(*)::int AS n FROM _prisma_migrations WHERE finished_at IS NOT NULL`))[0].n === folders, `Every migration is now recorded as applied (${folders}), none was run against the existing tables`);
 
     console.log("\n--- C. A legacy database that does not match is refused and left alone ---");
     const c = await mk("drift");
@@ -69,7 +70,7 @@ async function main() {
     assert(r4.status === 0, "A new migration applies");
     assert((await q(d, `SELECT count(*)::int AS n FROM information_schema.columns WHERE table_name = 'User' AND column_name = 'p42Note'`))[0].n === 1, "...the new column exists");
     assert((await q(d, `SELECT count(*)::int AS n FROM "User" WHERE email = 'later@example.edu'`))[0].n === 1, "...and the existing rows are intact");
-    assert((await q(d, `SELECT count(*)::int AS n FROM _prisma_migrations`))[0].n === 2, "...and it is recorded");
+    assert((await q(d, `SELECT count(*)::int AS n FROM _prisma_migrations`))[0].n === fs.readdirSync("prisma/migrations", { withFileTypes: true }).filter((e) => e.isDirectory()).length + 1, "...and it is recorded");
     const bad = path.join(tmp, "prisma", "migrations", "20261008000000_broken");
     fs.mkdirSync(bad); fs.writeFileSync(bad + "/migration.sql", `ALTER TABLE "User" ADD COLUMN "ok1" TEXT;\nALTER TABLE "NoSuchTable" ADD COLUMN "x" TEXT;\n`);
     const r5 = migrate(d, { PRISMA_SCHEMA_PATH: path.join(tmp, "prisma", "schema.prisma") });

@@ -43,7 +43,7 @@ const T_EMAIL = `journey.teacher.${run}@example.edu`, S_EMAIL = `journey.student
 async function signIn(page, email, password, { register = false, name = "" } = {}) {
   await page.getByRole("button", { name: /Sign In/ }).first().click();
   await page.getByRole("dialog").waitFor();
-  if (register) { await page.getByRole("button", { name: /Register here/ }).click(); await page.getByPlaceholder("e.g. Maria Cruz").fill(name); }
+  if (register) { await page.getByRole("button", { name: /Register here/ }).click(); await page.getByPlaceholder("e.g. Maria Cruz").fill(name); await page.getByTestId("accept-privacy").check(); }
   await page.getByPlaceholder("name@school.edu.ph").fill(email);
   await page.locator("input[type=password]").fill(password);
   await page.getByRole("dialog").getByRole("button", { name: register ? "Create Account" : "Sign In", exact: true }).click();

@@ -27,6 +27,7 @@ export function AuthModal({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
 
   if (!isOpen) return null;
 
@@ -38,7 +39,7 @@ export function AuthModal({
     try {
       let loggedInRole: UserRole = "STUDENT";
       if (isRegister) {
-        const res = await register(name, email, password, "STUDENT");
+        const res = await register(name, email, password, "STUDENT", acceptedPrivacy);
         if (!res.success) {
           setError(res.error || "Registration failed");
           return;
@@ -234,7 +235,14 @@ export function AuthModal({
               </div>
             </div>
 
-            <Button variant="primary" fullWidth type="submit" disabled={submitting} className="mt-2">
+            {isRegister && (
+              <label className="flex items-start gap-2 text-xs text-slate-600 pt-1">
+                <input type="checkbox" required checked={acceptedPrivacy} onChange={(e) => setAcceptedPrivacy(e.target.checked)} className="mt-0.5" data-testid="accept-privacy" />
+                <span>I have read the <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline text-blue-700">privacy notice</a> and I understand how my information is used. (If you are under 18, ask your parent or guardian first.)</span>
+              </label>
+            )}
+
+            <Button variant="primary" fullWidth type="submit" disabled={submitting || (isRegister && !acceptedPrivacy)} className="mt-2">
               {submitting ? "Processing..." : isRegister ? "Create Account" : "Sign In"}
             </Button>
           </form>

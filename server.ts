@@ -29,6 +29,9 @@ import { StudentDashboardService } from "./src/lib/dashboard/index.ts";
 import { TeacherService, TeacherAIService } from "./src/lib/teacher/index.ts";
 import { ClassroomService, ClassroomError } from "./src/lib/classroom/classroom-service.ts";
 import { StructureService, StructureError } from "./src/lib/curriculum/structure-service.ts";
+import { PrivacyService, PrivacyError } from "./src/lib/privacy/privacy-service.ts";
+import { PRIVACY_NOTICE_VERSION, buildPrivacyNotice, privacySettingsFromEnv } from "./src/config/privacy-notice.ts";
+import { pseudonymFor } from "./src/lib/privacy/pseudonym.ts";
 import { ClassroomRepo } from "./src/lib/classroom/classroom-repo.ts";
 import { ResearchData, type ResearchScope } from "./src/lib/research/research-data.ts";
 import { AssessmentService, AssessmentError, ResearchService, ResearchExporter } from "./src/lib/research/index.ts";
@@ -205,13 +208,26 @@ app.use(async (req: Request, _res: Response, next: NextFunction) => {
     if (payload) {
       const state = await dbService.getAuthState(payload.userId);
       if (state && !state.disabled && state.sessionVersion === (payload.sv ?? 0)) {
-        (req as any)[SESSION_KEY] = { ...payload, role: state.role, email: state.email, name: state.name } as SessionPayload;
+        (req as any)[SESSION_KEY] = { ...payload, role: state.role, email: state.email, name: state.name, privacyOk: state.privacyNoticeVersion === PRIVACY_NOTICE_VERSION, guardianConsent: state.guardianConsent } as SessionPayload;
       }
     }
   } catch (e) {
     if (hasValidDatabaseUrl) console.error("Session check failed (treated as signed out):", e instanceof Error ? e.message : e);
   }
   next();
+});
+
+// Phase 43: until a person has accepted the current privacy notice they can do nothing but read it, accept it, download their data and sign out.
+// On in production (and when REQUIRE_PRIVACY_ACCEPTANCE=true); off in development so the sandbox and the older test suites keep working.
+const REQUIRE_PRIVACY_ACCEPTANCE = process.env.REQUIRE_PRIVACY_ACCEPTANCE ? process.env.REQUIRE_PRIVACY_ACCEPTANCE === "true" : isProd;
+const REQUIRE_GUARDIAN_CONSENT = process.env.REQUIRE_GUARDIAN_CONSENT === "true";
+const PRIVACY_EXEMPT = /^\/(auth\/|privacy-notice$|me\/data-export$|health$|ready$)/;
+app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+  const session = getSessionFromRequest(req) as (SessionPayload & { privacyOk?: boolean }) | null;
+  if (REQUIRE_PRIVACY_ACCEPTANCE && session && session.privacyOk === false && !PRIVACY_EXEMPT.test(req.path)) {
+    return res.status(403).json({ error: "Please read and accept the privacy notice first.", code: "PRIVACY_NOT_ACCEPTED" });
+  }
+  return next();
 });
 
 // Applied here, after the session middleware, because the ceiling depends on who is signed in.
@@ -258,7 +274,9 @@ function clearSessionCookie(req: Request, res: Response) {
 app.post("/api/auth/register", async (req: Request, res: Response) => {
   try {
     console.log("AUTH REGISTER START");
-    const { name, email, password, gradeLevel } = req.body;
+    const { name, email, password, gradeLevel, acceptPrivacy } = req.body;
+    // (a client that does not send it still gets an account when enforcement is off; the web app then shows the notice before anything else)
+    if (acceptPrivacy !== true && REQUIRE_PRIVACY_ACCEPTANCE) return res.status(400).json({ success: false, error: "Please read and accept the privacy notice to create an account.", code: "PRIVACY_NOT_ACCEPTED" });
 
     const validatedEmail = validateEmail(email);
     const validatedPass = validateNewPassword(password);
@@ -270,7 +288,7 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
     // Check existing user by normalized email
     const existing = await dbService.findUserByEmail(validatedEmail);
     if (existing) {
-      console.log("AUTH REGISTER DUPLICATE REJECTED:", validatedEmail);
+      console.log("AUTH REGISTER DUPLICATE REJECTED");
       return res.status(409).json({ success: false, error: "An account with this email already exists" });
     }
 
@@ -281,6 +299,7 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
       passwordHash,
       role: assignedRole,
       gradeLevel: typeof gradeLevel === "number" ? gradeLevel : 7,
+      ...(acceptPrivacy === true ? { privacyNoticeVersion: PRIVACY_NOTICE_VERSION } : {}),
     });
     console.log("AUTH REGISTER DATABASE INSERT SUCCESS - userId:", user.id);
 
@@ -388,8 +407,49 @@ app.get("/api/auth/me", async (req: Request, res: Response) => {
     return res.status(401).json({ success: false, user: null, error: "No active session" });
   }
   // The session middleware already checked the account (exists, enabled, current session version).
-  return res.json({ success: true, user: { id: session.userId, email: session.email, name: session.name, role: session.role } });
+  const state = await PrivacyService.getState(session.userId).catch(() => null);
+  return res.json({ success: true, user: { id: session.userId, email: session.email, name: session.name, role: session.role }, privacy: state ? { ...state, required: REQUIRE_PRIVACY_ACCEPTANCE } : null });
 });
+
+// ---- Phase 43: privacy ----
+const privacyRoute = (fn: (actor: { userId: string; role: string }, req: Request, res: Response) => Promise<unknown>, fallback: string, okStatus = 200) =>
+  async (req: Request, res: Response) => {
+    try {
+      const session = getSessionFromRequest(req);
+      if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+      const data = await fn(actorOf(session), req, res);
+      if (res.headersSent) return;
+      return res.status(okStatus).json({ data });
+    } catch (error: unknown) {
+      if (error instanceof PrivacyError) return res.status(error.status).json({ error: error.message });
+      console.error(fallback, error);
+      return res.status(500).json({ error: fallback });
+    }
+  };
+// the notice itself is public (it is shown before an account exists)
+app.get("/api/privacy-notice", (_req: Request, res: Response) => res.json({ data: buildPrivacyNotice(privacySettingsFromEnv()) }));
+app.post("/api/auth/accept-privacy", privacyRoute(async (a) => { await PrivacyService.acceptNotice(a.userId); return PrivacyService.getState(a.userId); }, "Failed to record acceptance"));
+app.post("/api/teacher/students/:studentId/guardian-consent", privacyRoute((a, req) => PrivacyService.setGuardianConsent(a, req.params.studentId, req.body?.given), "Failed to record guardian consent"));
+// access to one's own data: a file the person can keep
+app.get("/api/me/data-export", privacyRoute(async (a, _req, res) => {
+  const data = await PrivacyService.exportUserData(a.userId);
+  await dbService.recordAudit({ actorId: a.userId, action: "privacy.export.self", targetType: "user", targetId: a.userId, ip: undefined });
+  res.setHeader("Content-Disposition", `attachment; filename="tuklas-my-data-${Date.now()}.json"`);
+  res.json({ data });
+}, "Failed to export data"));
+app.get("/api/admin/users/:userId/data-export", privacyRoute(async (a, req, res) => {
+  if (a.role !== "ADMIN") throw new PrivacyError("Forbidden: Administrator access required.", 403);
+  const data = await PrivacyService.exportUserData(req.params.userId);
+  await dbService.recordAudit({ actorId: a.userId, action: "privacy.export.admin", targetType: "user", targetId: req.params.userId });
+  res.setHeader("Content-Disposition", `attachment; filename="tuklas-data-${Date.now()}.json"`);
+  res.json({ data });
+}, "Failed to export data"));
+app.post("/api/admin/users/:userId/erase", privacyRoute(async (a, req) => {
+  const r = await PrivacyService.eraseUser(a, req.params.userId, req.body?.confirmEmail);
+  // the record names no one: the account no longer exists, and the log must not keep the personal data that was just erased
+  await dbService.recordAudit({ actorId: a.userId, action: "privacy.erase", targetType: "user", targetId: req.params.userId, detail: { role: r.role } });
+  return { erased: true };
+}, "Failed to erase the account"));
 
 // -------------------------------------------------------------
 // API: DATABASE & CURRICULUM VERIFICATION ROUTES
@@ -2010,6 +2070,10 @@ app.post("/api/ai/tutor", async (req: Request, res: Response) => {
       return res.status(401).json({ error: "Unauthorized: Please log in to consult the AI Tutor." });
     }
 
+    if (REQUIRE_GUARDIAN_CONSENT && session.role === "STUDENT" && !(session as any).guardianConsent) {
+      return res.status(403).json({ error: "Your teacher needs to record your parent or guardian's consent before you can use the AI tutor.", code: "GUARDIAN_CONSENT_REQUIRED" });
+    }
+
     const {
       conversationId,
       lessonId,
@@ -3059,9 +3123,10 @@ app.get("/api/admin/users", async (req: Request, res: Response) => {
     if (!session || session.role !== "ADMIN") {
       return res.status(403).json({ error: "Forbidden: Administrator role required" });
     }
-    const role = typeof req.query.role === "string" && (ADMIN_CREATABLE_ROLES as readonly string[]).includes(req.query.role) ? (req.query.role as UserRole) : undefined;
+    const role = typeof req.query.role === "string" && ([...ADMIN_CREATABLE_ROLES, "STUDENT"] as string[]).includes(req.query.role) ? (req.query.role as UserRole) : undefined;
     const result = await dbService.listUsers({
       role,
+      search: typeof req.query.q === "string" ? req.query.q.slice(0, 100) : undefined,
       limit: req.query.limit ? Number(req.query.limit) : 50,
       offset: req.query.offset ? Number(req.query.offset) : 0,
     });
@@ -3396,6 +3461,11 @@ app.get("/api/teacher/research/time-series", async (req: Request, res: Response)
 });
 
 const MAX_EXPORT_STUDENTS = 300;
+// Research exports carry a code instead of the student's id and name unless the teacher asks for an identified export (`?identified=true`),
+// which is audited. The code is a keyed hash: stable inside this installation, not reversible without the server's secret.
+const wantsIdentified = (req: Request) => req.query.identified === "true";
+const deidentify = <T extends { studentId?: string; studentName?: string }>(rows: T[], identified: boolean): T[] =>
+  identified ? rows : rows.map((r) => ({ ...r, studentId: r.studentId ? pseudonymFor(r.studentId) : r.studentId, studentName: "" }));
 const sendCsv = (res: Response, name: string, csv: string) => {
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="${name}_${Date.now()}.csv"`);
@@ -3411,7 +3481,9 @@ app.get("/api/teacher/research/export/metrics.csv", async (req: Request, res: Re
     const ids = scope.studentIds ?? (await dbService.listUsers({ limit: 200 })).users.filter((u: any) => u.role === "STUDENT").map((u: any) => u.id);
     const profiles = [];
     for (const id of ids.slice(0, MAX_EXPORT_STUDENTS)) profiles.push(await ResearchService.getStudentResearchProfile(id));
-    return sendCsv(res, "tuklas_research_metrics", ResearchExporter.exportMetricsSummaryCsv(profiles));
+    const identified = wantsIdentified(req);
+    if (identified) await dbService.recordAudit({ actorId: session.userId, action: "research.export.identified", detail: { file: "metrics", students: profiles.length } });
+    return sendCsv(res, "tuklas_research_metrics", ResearchExporter.exportMetricsSummaryCsv(deidentify(profiles as any[], identified) as any));
   } catch (error: unknown) {
     return researchError(res, error, "Failed to export metrics CSV");
   }
@@ -3425,8 +3497,10 @@ app.get("/api/teacher/research/export/attempts.csv", async (req: Request, res: R
     const scope = await researchScopeFor(session, typeof req.query.classroomId === "string" ? req.query.classroomId : undefined);
     const rows = await ResearchData.attempts(scope);
     const names = await ResearchData.students(Array.from(new Set(rows.map((r) => r.studentId))));
+    const identified = wantsIdentified(req);
+    if (identified) await dbService.recordAudit({ actorId: session.userId, action: "research.export.identified", detail: { file: "attempts", rows: rows.length } });
     const csv = ResearchExporter.exportQuestionAttemptsCsv(
-      rows.map((a) => ({
+      deidentify(rows.map((a) => ({
         studentId: a.studentId,
         studentName: names.get(a.studentId)?.name ?? "",
         questionId: a.questionId,
@@ -3440,7 +3514,7 @@ app.get("/api/teacher/research/export/attempts.csv", async (req: Request, res: R
         timeTakenMs: a.timeTakenMs ?? undefined,
         hintUsed: a.hintUsed,
         submittedAt: a.submittedAt,
-      })) as any
+      })), identified) as any
     );
     return sendCsv(res, "tuklas_question_attempts", csv);
   } catch (error: unknown) {
