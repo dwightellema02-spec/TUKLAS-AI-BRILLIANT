@@ -17,6 +17,12 @@
 | `test-phase43-prompts.ts` | 6 passed: captured prompts (incl. the retry prompt) contain no name, email or account id. **Mutation check:** putting the name into the prompt makes it fail |
 | `test-phase43-browser.mjs` | 17 checks: registration box, gate, class consent checkbox, "Download my data", admin find/export/erase (wrong confirmation does not erase), `/privacy` |
 
+## Full regression (all phases)
+`tsc` and `build` clean. Every in-memory and PostgreSQL suite passes after two kinds of fixes:
+* **Tests that encoded the old behaviour, updated deliberately:** Phase 29 research CSV checks now ask for `?identified=true` (and a new check proves the default export carries a code, not the name); Phase 31 allows the new public `GET /api/privacy-notice`; Phase 30's production test now accepts the privacy notice first (production asks a new administrator to).
+* **Environment, not code:** older PostgreSQL suites share one dev database whose schema lacked the new columns (`prisma db push` fixed it); a real deployment gets them from the migration.
+Browser journeys (Phases 34, 39 and the new 43) pass; Phase 38's browser check runs through its `:pg` wrapper (passes). The 22–30/32/33 browser scripts that need a server on :3000 were not re-run for this phase.
+
 ## Defects found while building it
 * The admin page listed only staff, so an administrator **could not find a student to erase** — added a search.
 * Adoption of a db-push database would have re-run the privacy migration (fixed: all migrations are marked applied only if the schema matches).

@@ -83,6 +83,8 @@ async function main() {
     // Defence in depth: the account's CURRENT state is checked on every request, not only the session version.
     const tok = ((await (await loginRaw(p1)).json()) as any).token as string;
     const call = async (path: string) => (await fetch(`http://127.0.0.1:${p1}${path}`, { headers: { Authorization: `Bearer ${tok}` } })).status;
+    assert((await call("/api/admin/users")) === 403, "(Phase 43) production asks the new administrator to accept the privacy notice first");
+    await fetch(`http://127.0.0.1:${p1}/api/auth/accept-privacy`, { method: "POST", headers: { Authorization: `Bearer ${tok}` } });
     assert((await call("/api/admin/users")) === 200, "The bootstrapped administrator's token works");
     await db.user.update({ where: { email: adminEmail }, data: { role: "TEACHER" } }); // changed behind the app's back: no version bump
     assert((await call("/api/admin/users")) === 403, "A role changed directly in the database applies on the very next request (the token still says ADMIN)");

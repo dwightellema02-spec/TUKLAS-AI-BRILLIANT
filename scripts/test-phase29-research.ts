@@ -136,15 +136,18 @@ async function main() {
     const tsAdmin = (await research(admin, "time-series")).json.data as any[];
     assert(tsAdmin.reduce((n, p) => n + p.attemptCount, 0) >= 18, "An administrator sees everyone (at least all 18)");
 
-    const csv1 = (await research(T1, "export/attempts.csv")).text;
-    const csv2 = (await research(T2, "export/attempts.csv")).text;
-    const csvAdmin = (await research(admin, "export/attempts.csv")).text;
+    const csv1 = (await research(T1, "export/attempts.csv?identified=true")).text;
+    const csv2 = (await research(T2, "export/attempts.csv?identified=true")).text;
+    const csvAdmin = (await research(admin, "export/attempts.csv?identified=true")).text;
     assert(csv1.includes(s1.id) && csv1.includes(s2.id) && !csv1.includes(s3.id), "attempts.csv for Teacher One: their students only");
     assert(csv2.includes(s3.id) && !csv2.includes(s1.id) && !csv2.includes(s2.id), "attempts.csv for Teacher Two: their student only");
     assert(csvAdmin.includes(s1.id) && csvAdmin.includes(s3.id), "attempts.csv for an administrator: everyone");
     assert(csv1.trim().split("\n").length === 13 && csv1.includes("Student s1") && csv1.includes("Student s2"), "...12 data rows with each student's real name (no hard-coded name)");
-    const m1 = (await research(T1, "export/metrics.csv")).text;
+    const m1 = (await research(T1, "export/metrics.csv?identified=true")).text;
     assert(m1.includes("Student s1") && m1.includes("Student s2") && !m1.includes("Student s3") && !m1.includes("Juan de la Cruz"), "metrics.csv: one profile per student in scope, real names");
+
+    const plain = (await research(T1, "export/attempts.csv")).text;
+    assert(!plain.includes(s1.id) && !plain.includes("Student s1") && /S-[0-9a-f]{10}/.test(plain), "Without asking, the same export carries a code instead of the account id and the name (Phase 43)");
 
     section("4. No data means no numbers");
     const cmp = (await research(T1, "comparison")).json.data;
