@@ -27,6 +27,7 @@
     "check:env": "tsx scripts/check-env.ts",
     "retention": "tsx scripts/retention.ts",
     "test:phase43": "AI_PROVIDER=local tsx scripts/test-phase43-privacy.ts && AI_PROVIDER=local tsx scripts/test-phase43-prompts.ts",
+    "test:phase44": "AI_PROVIDER=local tsx scripts/test-phase44-hardening.ts",
     "test:phase43:pg": "tsx scripts/test-phase43-prisma.ts",
     "start:production": "sh scripts/start-production.sh",
     "test:phase42": "tsx scripts/test-phase42-migrations.ts && tsx scripts/test-phase42-backup.ts && tsx scripts/test-phase42-ops.ts && AI_PROVIDER=local tsx scripts/test-phase42-ratelimit.ts",

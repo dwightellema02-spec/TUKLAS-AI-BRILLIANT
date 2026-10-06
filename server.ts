@@ -39,6 +39,7 @@ import { AssessmentService, AssessmentError, ResearchService, ResearchExporter }
 dotenv.config();
 
 const app = express();
+app.disable("x-powered-by");
 // set when SIGTERM arrives (see startServer): from then on every answer carries "Connection: close" so clients stop reusing the socket
 let shuttingDown = false;
 app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -1955,7 +1956,7 @@ app.post("/api/practice/:id/answer", async (req: Request, res: Response) => {
     return res.json({ data: result });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to process question answer";
-    return res.status(400).json({ error: message });
+    return res.status(/not found/i.test(message) ? 404 : 400).json({ error: message });
   }
 });
 
@@ -2007,7 +2008,7 @@ app.post("/api/practice/:id/complete", async (req: Request, res: Response) => {
     return res.json({ data: summary });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to complete practice session";
-    return res.status(500).json({ error: message });
+    return res.status(/not found/i.test(message) ? 404 : 500).json({ error: message });
   }
 });
 
@@ -2025,7 +2026,7 @@ app.get("/api/practice/:id/review", async (req: Request, res: Response) => {
     return res.json({ data: review });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to fetch practice session review";
-    return res.status(500).json({ error: message });
+    return res.status(/not found/i.test(message) ? 404 : 500).json({ error: message });
   }
 });
 
@@ -2117,6 +2118,9 @@ app.post("/api/ai/tutor", async (req: Request, res: Response) => {
     if (message.includes("Rate limit exceeded")) {
       console.warn("AI Tutor rate limit notification:", message);
       return res.status(429).json({ error: message });
+    }
+    if (message.includes("exceeds the maximum allowed length")) {
+      return res.status(400).json({ error: "That message is too long for the tutor (1,000 characters at most). Please shorten it or split it into parts." });
     }
     if (message.includes("disabled by your instructor")) {
       console.warn("AI Tutor disabled notification:", message);

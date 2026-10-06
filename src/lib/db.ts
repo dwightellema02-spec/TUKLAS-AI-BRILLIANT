@@ -4499,9 +4499,8 @@ export const dbService = {
     }
 
     if (!session) return null;
-    if (session.studentId !== studentId) {
-      throw new Error("Unauthorized to access this practice session");
-    }
+    // Someone else's session looks exactly like a session that does not exist (no hint that the id is real).
+    if (session.studentId !== studentId) return null;
 
     // If session is active (not completed), redact question answers
     if (session.status !== "COMPLETED" && Array.isArray(session.questions)) {
