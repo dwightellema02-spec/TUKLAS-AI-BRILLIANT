@@ -29,4 +29,4 @@ A slip is only claimed when at least half of the misses (or at least two and a q
 * Teachers have not reviewed whether the wording of the findings suits their classes.
 
 ## Full regression
-Running when this was committed; the result is recorded in the next commit.
+`tsc`, `build` and every in-memory and PostgreSQL suite (phases 22–44, including the new `test:phase44` and `test:phase44:pg`): **44 of 44 steps passed**. Browser journeys were not re-run (no UI change).
