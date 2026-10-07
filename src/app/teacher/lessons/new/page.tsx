@@ -40,6 +40,38 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Phase 45: import a draft from an uploaded document
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importUnitId, setImportUnitId] = useState("");
+  const [importTitle, setImportTitle] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<any | null>(null);
+
+  const handleImport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setImportError(null);
+    setImportResult(null);
+    if (!importFile) { setImportError("Choose a Word, PDF or text file first."); return; }
+    setImporting(true);
+    try {
+      const unit = importUnitId || selectedUnitId;
+      const q = `?unitId=${encodeURIComponent(unit)}${importTitle.trim() ? `&title=${encodeURIComponent(importTitle.trim())}` : ""}`;
+      const res = await fetch(`/api/teacher/lessons/import${q}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream", "x-file-name": encodeURIComponent(importFile.name) },
+        body: await importFile.arrayBuffer(),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) setImportError(json.error || "The document could not be imported.");
+      else setImportResult(json.data);
+    } catch (err: unknown) {
+      setImportError(err instanceof Error ? err.message : "The upload failed. Please try again.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const handleNav = (path: string) => {
     if (onNavigate) onNavigate(path);
     else window.location.pathname = path;
@@ -143,6 +175,68 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
           </Button>
         </div>
 
+        {/* Phase 45: import from a document */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xs mb-6" data-testid="import-card">
+          <h2 className="text-sm font-bold text-slate-900">Start from a document</h2>
+          <p className="text-xs text-slate-500 mt-1 mb-4">
+            Upload a Word, PDF or text file of the lesson. You get a <b>draft</b> to review and edit: nothing is published, and the document's own wording is kept.
+            Answer keys are never imported. Questions are not created from the document; add them in the studio.
+          </p>
+          <form onSubmit={handleImport} className="space-y-3">
+            <input
+              type="file"
+              data-testid="import-file"
+              aria-label="Lesson document"
+              accept=".docx,.pdf,.txt"
+              onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+              className="block w-full text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-xs file:font-semibold"
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <select
+                aria-label="Unit for the imported lesson"
+                value={importUnitId || selectedUnitId}
+                onChange={(e) => setImportUnitId(e.target.value)}
+                className="text-sm px-3 py-2 rounded-xl border border-slate-300 bg-white"
+              >
+                {units.map((u: any) => (
+                  <option key={u.id} value={u.id}>{u.termName} · {u.name || u.title}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                aria-label="Lesson title (optional)"
+                value={importTitle}
+                onChange={(e) => setImportTitle(e.target.value)}
+                placeholder="Lesson title (optional; the document's own title is used)"
+                className="text-sm px-3 py-2 rounded-xl border border-slate-300"
+              />
+            </div>
+            <Button type="submit" variant="primary" size="sm" disabled={importing || !importFile}>
+              {importing ? "Importing..." : "Import draft"}
+            </Button>
+          </form>
+          {importError && (
+            <div role="alert" className="mt-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700" data-testid="import-error">{importError}</div>
+          )}
+          {importResult && (
+            <div className="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-slate-700 space-y-2" data-testid="import-result">
+              <p className="font-semibold text-emerald-800">Draft created: {importResult.title} ({importResult.blocks.length} section{importResult.blocks.length === 1 ? "" : "s"})</p>
+              <ul className="list-disc pl-5">
+                {importResult.blocks.map((b: any) => (<li key={b.id}>{b.title} <span className="text-slate-400">({b.type.toLowerCase()})</span></li>))}
+              </ul>
+              {importResult.skipped.length > 0 && (
+                <div data-testid="import-skipped"><b>Left out:</b> {importResult.skipped.map((s: any) => `${s.title} (${s.reason})`).join(" ")}</div>
+              )}
+              {importResult.warnings.length > 0 && (
+                <div data-testid="import-warnings"><b>Please check:</b>
+                  <ul className="list-disc pl-5">{importResult.warnings.map((w: string, i: number) => (<li key={i}>{w}</li>))}</ul>
+                </div>
+              )}
+              <Button variant="primary" size="sm" onClick={() => handleNav(`/teacher/lessons/${importResult.lessonId}/edit`)}>Open in the editor</Button>
+            </div>
+          )}
+        </div>
+
         {/* Form Card */}
         <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
           <div className="flex items-center gap-3 mb-6 pb-6 border-b border-slate-100">
@@ -207,6 +301,7 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
                     Curriculum Unit *
                   </label>
                   <select
+                    aria-label="Unit for the new lesson"
                     value={selectedUnitId}
                     onChange={(e) => setSelectedUnitId(e.target.value)}
                     required

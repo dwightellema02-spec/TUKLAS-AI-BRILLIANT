@@ -2500,7 +2500,7 @@ export const dbService = {
     const next = apply(prog ? (prog as any) : null);
     if (!prog) {
       prog = {
-        id: `prg_${Date.now()}`, userId, lessonId, status: "LEARNING", progressPercentage: 15, startedAt: now,
+        id: `prg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, userId, lessonId, status: "LEARNING", progressPercentage: 15, startedAt: now,
         understandingScore: 0, accuracyScore: 0, applicationScore: 0, consistencyScore: 0, compositeScore: 0,
         attemptCount: 1, lastActivity: now,
       };
@@ -2517,6 +2517,13 @@ export const dbService = {
   /**
    * Create a new draft lesson
    */
+  /** Whether a unit with this id exists (an import must name a real unit). */
+  async unitExists(unitId: string): Promise<boolean> {
+    if (typeof unitId !== "string" || !unitId || unitId.length > 100) return false;
+    if (hasValidDatabaseUrl) return !!(await prisma.unit.findUnique({ where: { id: unitId }, select: { id: true } }));
+    return fallbackStore.curriculum.unit.id === unitId;
+  },
+
   async createLesson(data: {
     title: string;
     description?: string;
@@ -2558,7 +2565,7 @@ export const dbService = {
     }
 
     const newLesson: LessonItem = {
-      id: `lsn_${Date.now()}`,
+      id: `lsn_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       unitId: data.unitId,
       authorId: data.authorId,
       sequenceOrder: fallbackStore.curriculum.lessons.length + 1,
@@ -3093,7 +3100,7 @@ export const dbService = {
 
     if (!session) {
       session = {
-        id: `ses_${Date.now()}`,
+        id: `ses_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         userId,
         lessonId,
         currentSectionIndex: 0,
@@ -3156,7 +3163,7 @@ export const dbService = {
 
     if (!session) {
       session = {
-        id: `ses_${Date.now()}`,
+        id: `ses_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         userId,
         lessonId,
         currentSectionIndex: data.currentSectionIndex ?? 0,
@@ -3234,7 +3241,7 @@ export const dbService = {
     );
 
     const newAttempt: CheckpointAttemptItem = {
-      id: `chk_${Date.now()}`,
+      id: `chk_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       userId: data.userId,
       lessonId: data.lessonId,
       blockId: data.blockId,
@@ -3317,7 +3324,7 @@ export const dbService = {
     }
 
     const newBlock: LessonContentBlockItem = {
-      id: `blk_${Date.now()}`,
+      id: `blk_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       lessonId,
       type: data.type,
       sequenceOrder: nextOrder,
@@ -3525,7 +3532,7 @@ export const dbService = {
     }
 
     const newResource: LessonResourceItem = {
-      id: `res_yt_${Date.now()}`,
+      id: `res_yt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       lessonId,
       type: "YOUTUBE",
       title: data.title,
@@ -3949,7 +3956,7 @@ export const dbService = {
     }
 
     const newQ: QuestionItem = {
-      id: `qst_${Date.now()}`,
+      id: `qst_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       lessonId: data.lessonId || null,
       skillId: data.skillId || null,
       type: data.type,
@@ -4257,7 +4264,7 @@ export const dbService = {
     }
 
     const newPs: PracticeSetItem = {
-      id: `ps_${Date.now()}`,
+      id: `ps_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       title: data.title,
       description: data.description || null,
       lessonId: data.lessonId || null,
@@ -4316,7 +4323,7 @@ export const dbService = {
     const pos = order || existing.length + 1;
 
     fallbackStore.practiceSetQuestions.push({
-      id: `psq_${Date.now()}`,
+      id: `psq_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       practiceSetId,
       questionId,
       order: pos,
@@ -4410,7 +4417,7 @@ export const dbService = {
     }
 
     const newSession: PracticeSessionItem = {
-      id: `pses_${Date.now()}`,
+      id: `pses_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       studentId,
       practiceSetId,
       lessonId: ps.lessonId,
@@ -4605,7 +4612,7 @@ export const dbService = {
 
     if (!attemptRecord) {
       attemptRecord = {
-        id: `att_${Date.now()}`,
+        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         studentId,
         questionId,
         practiceSessionId: sessionId,

@@ -19,6 +19,8 @@ import { validateAndExtractYouTube, YouTubeService } from "./src/lib/youtube.ts"
 import { LessonStatus, UserRole } from "@prisma/client";
 import { validateUpload, ingestDocument, DOCUMENT_LIMITS } from "./src/lib/documents/index.ts";
 import { saveOriginal, deleteOriginal } from "./src/lib/documents/file-store.ts";
+import { draftLessonFromDocument } from "./src/lib/documents/lesson-draft.ts";
+import { saveLessonDraft } from "./src/lib/documents/lesson-import-service.ts";
 import { generateQuestionsFromChunks } from "./src/lib/documents/question-generation.ts";
 import { getAIProvider, LocalTutorEngine } from "./src/lib/ai/provider.ts";
 import { AITutorService } from "./src/lib/ai/tutor.ts";
@@ -858,6 +860,50 @@ const rawUploadBody = (req: Request, res: Response, next: NextFunction) => {
     return next();
   });
 };
+
+// Phase 45: a teacher uploads a lesson document (DOCX / PDF / TXT) and gets a DRAFT lesson to review in the studio. Nothing is published, no
+// original file is kept, answer keys are never imported (see src/lib/documents/lesson-draft.ts).
+const authorizeLessonImport = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
+      return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
+    }
+    if (!checkUploadRateLimit(session.userId)) {
+      return res.status(429).json({ error: "Too many uploads. Please wait a few minutes and try again." });
+    }
+    const unitId = typeof req.query.unitId === "string" ? req.query.unitId : "";
+    if (!(await dbService.unitExists(unitId))) return res.status(400).json({ error: "Choose the unit the new lesson belongs to." });
+    (req as any).session = session;
+    return next();
+  } catch (error: unknown) {
+    console.error("Lesson import authorization error:", error);
+    return res.status(500).json({ error: "The import could not be started." });
+  }
+};
+
+app.post("/api/teacher/lessons/import", authorizeLessonImport, rawUploadBody, async (req: Request, res: Response) => {
+  try {
+    const session = (req as any).session as SessionPayload;
+    const rawName = decodeURIComponent(String(req.headers["x-file-name"] || ""));
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const validation = await validateUpload(buffer, rawName);
+    if (!validation.ok) return res.status(validation.status).json({ error: validation.error });
+
+    const requestedTitle = typeof req.query.title === "string" ? req.query.title.slice(0, 200) : "";
+    const outcome = await draftLessonFromDocument(buffer, validation.kind, { fileName: validation.safeFileName, title: requestedTitle });
+    if (!outcome.ok) return res.status(outcome.status).json({ error: outcome.error });
+    const { draft } = outcome;
+
+    const saved = await saveLessonDraft(dbService as any, draft, { unitId: String(req.query.unitId), authorId: session.userId });
+    await dbService.recordAudit({ actorId: session.userId, action: "lesson.import_draft", targetType: "lesson", targetId: saved.lessonId, detail: { kind: validation.kind, bytes: buffer.length, sections: saved.blocks.length, skipped: draft.skipped.length }, ip: req.ip });
+    return res.status(201).json({ data: { lessonId: saved.lessonId, title: draft.title, status: "DRAFT", objectives: draft.objectives, blocks: saved.blocks, skipped: draft.skipped, warnings: draft.warnings, stats: draft.stats } });
+  } catch (error: unknown) {
+    // (saveLessonDraft removes a half-imported lesson itself)
+    console.error("Lesson import error:", error instanceof Error ? error.message : error);
+    return res.status(500).json({ error: "The lesson could not be imported. Nothing was saved." });
+  }
+});
 
 app.post("/api/lessons/:id/documents", authorizeDocumentUpload, rawUploadBody, async (req: Request, res: Response) => {
   let storedKey: string | undefined;
