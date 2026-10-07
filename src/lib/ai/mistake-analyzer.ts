@@ -2,7 +2,7 @@
 
 import { dbService } from "../db";
 import { getAIProvider, LocalTutorEngine } from "./provider";
-import { runDeterministicAnalysis, generateDeterministicMistakeCategory } from "./deterministic-analyzer";
+import { runDeterministicAnalysis, generateDeterministicMistakeCategory, mentionsNegative } from "./deterministic-analyzer";
 import { buildMistakeAnalysisSystemPrompt, buildMistakeAnalysisUserPrompt } from "./prompts";
 import { validateMistakeAnalysisOutput } from "./validators";
 import type {
@@ -234,7 +234,7 @@ export class MistakeAnalyzerService {
     // Check for comparison error on negative numbers
     if (
       (promptLower.includes("compare") || promptLower.includes("order") || promptLower.includes("greater") || promptLower.includes("less")) &&
-      (promptLower.includes("negative") || promptLower.includes("-"))
+      mentionsNegative(promptLower)
     ) {
       return { category: "CONCEPTUAL_MISUNDERSTANDING", feedback: "Remember that on a number line, values farther to the right are always greater." };
     }

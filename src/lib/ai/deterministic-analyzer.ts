@@ -1,11 +1,15 @@
 // Phase 8: Deterministic Performance & Mistake Pre-Analyzer
 
+import { findTopicSlips } from "./topic-slips";
 import type {
   QuestionAttemptDetail,
   DeterministicAnalysisResult,
   StructuredMistakeAnalysis,
   MistakeCategoryType,
 } from "./types";
+
+/** A negative number written in the text ("-5", "(-3)", "−7") or the word. A bare hyphen ("two-step", "well-known") is not a sign. */
+export const mentionsNegative = (text: string): boolean => /(^|[\s(=,:\u2212])[-\u2212]\d/.test(text) || /\bnegative\b/i.test(text);
 
 export function runDeterministicAnalysis(
   attempts: QuestionAttemptDetail[],
@@ -63,7 +67,7 @@ export function runDeterministicAnalysis(
       // 1. Comparison mistake heuristic: e.g. -5 vs -2 where student picked -5
       if (
         (promptLower.includes("greater") || promptLower.includes("less") || promptLower.includes("compare")) &&
-        (promptLower.includes("-") || answerStr.includes("-"))
+        (mentionsNegative(promptLower) || mentionsNegative(answerStr))
       ) {
         comparisonErrorDetected = true;
       }
@@ -72,9 +76,8 @@ export function runDeterministicAnalysis(
       if (
         promptLower.includes("inverse") ||
         promptLower.includes("opposite") ||
-        promptLower.includes("(-") ||
-        promptLower.includes("-") ||
-        promptLower.includes("sign")
+        mentionsNegative(promptLower) ||
+        /\bsigns?\b/.test(promptLower)
       ) {
         signErrorDetected = true;
       }
@@ -213,6 +216,22 @@ export function generateDeterministicMistakeCategory(
     };
   }
 
+  // 2b. A known slip on a Grade 7 Term 1 topic (the wrong value is exactly what that mistake produces)
+  const slips = findTopicSlips(attempts);
+  if (slips.length >= 1 && incorrectAttempts.length >= 1 && (slips.length * 2 >= incorrectAttempts.length || (slips.length >= 2 && slips.length * 4 >= incorrectAttempts.length))) {
+    const first = slips[0];
+    const labels = Array.from(new Set(slips.map((x) => x.label)));
+    return {
+      category: "PROCEDURAL_ERROR",
+      observation: `${slips.length} of ${incorrectAttempts.length} incorrect answer${incorrectAttempts.length === 1 ? "" : "s"} match a common slip in ${labels.join(" and ")}.`,
+      pattern: first.message,
+      possibleCause: `A specific step in ${first.label} is being done in the usual wrong way, rather than the idea being missing altogether.`,
+      confidence: slips.length * 2 >= incorrectAttempts.length ? (slips.length >= 2 ? 0.85 : 0.7) : 0.6,
+      recommendation: first.idea,
+      evidenceAttemptIds: slips.map((x) => x.attemptId),
+    };
+  }
+
   // 3. Integer Comparison Misunderstanding
   if (result.comparisonErrorDetected && incorrectAttempts.length >= 2) {
     return {
@@ -254,7 +273,11 @@ export function generateDeterministicMistakeCategory(
 
   // 6. Question Type Difficulty
   for (const [type, stats] of Object.entries(result.questionTypeDistribution)) {
-    if (stats.total >= 3 && stats.correct === 0) {
+    const others = Object.entries(result.questionTypeDistribution).filter(([t]) => t !== type);
+    const othersTotal = others.reduce((n, [, v]) => n + v.total, 0);
+    const othersCorrect = others.reduce((n, [, v]) => n + v.correct, 0);
+    // A format problem only shows when the student does fine on the OTHER formats; failing everything points at the topic, not the format.
+    if (stats.total >= 3 && stats.correct === 0 && othersTotal >= 3 && othersCorrect / othersTotal >= 0.5) {
       return {
         category: "QUESTION_TYPE_DIFFICULTY",
         observation: `Student struggled specifically with ${type.replace(/_/g, " ").toLowerCase()} questions (0 of ${stats.total} correct), while overall accuracy across all types was ${result.accuracyPercentage}%.`,
@@ -267,7 +290,21 @@ export function generateDeterministicMistakeCategory(
     }
   }
 
-  // 7. General Calculation Error
+  // 7a. Wrong choices and true/false answers are about ideas and definitions, not arithmetic
+  const choiceMisses = incorrectAttempts.filter((a) => a.question.type === "MULTIPLE_CHOICE" || a.question.type === "TRUE_FALSE");
+  if (incorrectAttempts.length >= 2 && choiceMisses.length * 2 > incorrectAttempts.length) {
+    return {
+      category: "CONCEPTUAL_MISUNDERSTANDING",
+      observation: `Student missed ${choiceMisses.length} of ${result.totalAttempts} choice or true/false questions (${result.accuracyPercentage}% accuracy overall).`,
+      pattern: "The wrong answers were choices between ideas or definitions, so the difficulty is likely understanding the concept rather than arithmetic.",
+      possibleCause: "A key idea or definition in this topic is not yet clear.",
+      confidence: 0.6,
+      recommendation: "Re-read the lesson's key ideas and worked examples, then explain the idea in your own words before trying the next question.",
+      evidenceAttemptIds: choiceMisses.map((a) => a.id),
+    };
+  }
+
+  // 7b. General Calculation Error
   if (incorrectAttempts.length >= 2) {
     return {
       category: "CALCULATION_ERROR",
