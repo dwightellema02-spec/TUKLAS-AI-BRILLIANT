@@ -74,6 +74,14 @@ async function main() {
     const many = await upload(T1, path.join(P45, "too-many-sections.docx"), "many.docx", Q);
     assert(many.status === 201 && many.json.data.blocks.length === 40 && many.json.data.warnings.some((w: string) => /only the first 40/.test(w)), "45 sections: 40 imported, the teacher is told");
 
+    const withDoc = await upload(T1, structured, "attach.docx", Q + "&attach=true");
+    assert(withDoc.status === 201 && withDoc.json.data.attached === true, "With attach=true the document is also kept for the AI tutor");
+    const attachedLesson = (await api("GET", `/api/lessons/${withDoc.json.data.lessonId}`, T1)).json.data;
+    assert((attachedLesson.resources ?? []).length === 1 && attachedLesson.resources[0].extractionStatus === "EXTRACTED" && !JSON.stringify(attachedLesson.resources).includes("storagePath"), "...as one resource, extracted, without exposing where the file is stored");
+    assert(got.resources.length === 0 && ok.json.data.attached === false, "Without it, nothing is attached (the default)");
+    const attachBad = await upload(T1, path.join(P22, "scanned-image-only.pdf"), "scan.pdf", Q + "&attach=true");
+    assert(attachBad.status === 422, "A document that cannot be read is refused even when attaching was asked for");
+
     section("4. Bad files change nothing");
     const n0 = await lessonCount();
     const bad: Array<[string, Buffer | string, string, number]> = [

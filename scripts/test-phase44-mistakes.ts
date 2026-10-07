@@ -73,7 +73,7 @@ for (const q of QS) {
     if (new RegExp(`(?<![\\d.])${ans.replace(".", "\\.")}(?![\\d])`).test(text)) leaks++;
   }
 }
-assert(withSlips >= 70, `Coaching knows the usual slips for ${withSlips} of the ${numeric} numeric Term 1 questions (${kindsSeen.size} kinds of problem)`);
+assert(withSlips >= 115, `Coaching knows the usual slips for ${withSlips} of the ${numeric} numeric Term 1 questions (${kindsSeen.size} kinds of problem)`);
 assert(equalsAnswer === 0, "No known-slip value equals the correct answer (a slip is always wrong)");
 assert(recognised === slipsTotal, `Every one of the ${slipsTotal} known slip values is reported as a PROCEDURAL_ERROR pointing at that attempt (${recognised})`);
 assert(empty === 0, "Every finding has an observation, pattern, cause and recommendation");

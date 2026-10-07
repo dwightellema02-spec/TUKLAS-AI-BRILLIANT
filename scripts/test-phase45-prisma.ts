@@ -40,6 +40,9 @@ async function main() {
     const orphan = await db.$queryRawUnsafe<any[]>(`SELECT count(*)::int AS n FROM "LessonContentBlock" b LEFT JOIN "Lesson" l ON l.id = b."lessonId" WHERE l.id IS NULL`);
     assert(orphan[0].n === 0, "No section without a lesson");
     assert((await db.auditLog.count({ where: { action: "lesson.import_draft" } })) >= 4, "The imports are in the audit log");
+    const chunks = await db.resourceChunk.findMany({ where: { text: { contains: "ZZ-ANSWER-KEY-7491" } } });
+    assert(chunks.length >= 1 && chunks.every((c) => c.isAnswerKey), `The attached document's answer-key text is stored only in chunks flagged as answer keys (${chunks.length}), which are never retrieved for students`);
+    assert((await db.lessonResource.count({ where: { addedBy: { not: null }, extractionStatus: "EXTRACTED" } })) >= 1, "An attached document is stored with its extraction result");
   } finally {
     await db.$disconnect();
     const drop = new PrismaClient({ datasources: { db: { url: adminUrl.toString() } } });

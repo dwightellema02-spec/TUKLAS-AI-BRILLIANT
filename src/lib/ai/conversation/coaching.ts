@@ -47,6 +47,21 @@ const slip = (value: number, message: string, question: string) => ({ value: r1(
 // ------------------------------------------------------------------------------------------------------------------------------------
 const KINDS: Kind[] = [
   {
+    id: "regular-perimeter", re: /regular \w+ has a perimeter of \d+ cm\. How long is each side/i,
+    make: (n, p) => {
+      const word = (p.match(/regular (\w+) has/i)?.[1] ?? "").toLowerCase();
+      const sides = Number(Object.keys(NAMES).find((k) => NAMES[Number(k)] === word));
+      return {
+        kind: "regular-perimeter",
+        idea: piece("A regular polygon has equal sides, so its perimeter is shared equally among all of its sides.", "How many sides does this polygon have?"),
+        steps: ["How many sides does the polygon have? (The name tells you.)", "All the sides are equal, so what do you do with the perimeter and the number of sides?", "Can you check that the sides, added up, give the perimeter?"],
+        context: piece("Think of a fence of equal panels around a garden: the whole length divided by the number of panels is one panel.", "What would you do to the whole length to get one panel?"),
+        check: piece("Let's count the sides first.", "How many sides does the polygon in the question have?"),
+        slips: Number.isFinite(sides) && sides > 2 ? [slip(n[0], "That is the distance all the way around (the perimeter), not one side.", "How many equal sides share that distance?"), slip(n[0] / (sides - 1), "Count the sides again: the perimeter is shared among ALL the sides.", "How many sides does that polygon have?")] : [],
+      };
+    },
+  },
+  {
     id: "names-count", re: /How many (sides|interior angles) does an? \w+ have/i,
     make: () => ({
       kind: "names-count",
@@ -65,7 +80,7 @@ const KINDS: Kind[] = [
       steps: ["If you walk all the way around a polygon and end up facing the way you started, how much of a turn have you made in total?", "Each turn at a corner is one exterior angle. What do all those turns add up to?", "Does it matter how many sides the polygon has?"],
       context: piece("Think of turning on the spot until you face the same way again.", "What do we call that amount of turning, and how many degrees is it?"),
       check: piece("Let's think about walking around the shape.", "How much do you turn in total before you face the starting direction again?"),
-      slips: [],
+      slips: [slip(180, "180° is the angle sum of a triangle and a straight angle. Going once around a polygon is a full turn.", "How many degrees make a full turn?")],
     }),
   },
   {
@@ -87,13 +102,13 @@ const KINDS: Kind[] = [
   },
   {
     id: "construct-side", re: /marking \d+ points on a circle of radius/i,
-    make: () => ({
+    make: (n, p) => ({
       kind: "construct-side",
       idea: piece("In a regular hexagon the center and two neighbouring points make a triangle with all sides equal.", "What is the angle at the center, and what does that tell you about the other two angles of the triangle?"),
       steps: ["How many degrees are at the center between two neighbouring points?", "The other two angles of that triangle are equal. How big is each one?", "What kind of triangle has all its angles equal, and what does that say about its sides?"],
       context: piece("Picture a flower with six petals: the distance from the middle to a petal tip is the same as the distance between two tips.", "Which two lengths in the picture are equal, and which length do we want?"),
       check: piece("Let's look at the triangle made by the center and two neighbouring points.", "What do you know about its angles?"),
-      slips: [],
+      slips: [slip(n[0] * n[1], "That is the distance all the way around (the perimeter), not one side.", "How many sides add up to that distance?"), slip(2 * n[1], "That is the width of the circle through the center. In this polygon each side equals the distance from the center to a point.", "What is the distance from the center to one point?")],
     }),
   },
   {
@@ -118,31 +133,31 @@ const KINDS: Kind[] = [
         steps: ["How many degrees do the two angles make together?", "You know one of them. What operation finds the missing part of a total?", "Can you check that your two angles add up to that total?"],
         context: piece("Picture a straight road with a side road joining it: the two angles on one side of the main road fill the straight line.", "How big is the whole straight line?"),
         check: piece("Let's check which total these angles make.", "Do supplementary angles make a right angle or a straight angle?"),
-        slips: [slip(90 - n[0], "That is what you would get for complementary angles.", "Which total belongs to supplementary angles, and which to complementary?")].filter((s) => s.value > 0),
+        slips: [slip(360 - n[0], "Supplementary angles fill a straight line, not a full turn.", "How many degrees are in a straight line?"), slip(90 - n[0], "That is what you would get for complementary angles.", "Which total belongs to supplementary angles, and which to complementary?")].filter((s) => s.value > 0),
         example: (avoid, skip = 0) => { const a = pick([32, 57, 74, 118, 133], avoid, (x) => 180 - x, skip); return a ? { problem: `Two angles are supplementary. One measures ${a}°. Find the other.`, steps: [`Supplementary angles add up to 180°.`, `Other angle = 180° − ${a}°.`, `= ${180 - a}°.`] } : undefined; },
       };
     },
   },
   {
     id: "vertical", re: /vertically opposite/i,
-    make: () => ({
+    make: (n, p) => ({
       kind: "vertical",
       idea: piece("When two straight lines cross, the angles opposite each other are called vertical angles, and they are equal.", "Which angle is directly opposite the one you know?"),
       steps: ["Draw two crossing lines and mark the angle you know. Which angle is directly across from it?", "Do opposite angles at a crossing have the same size or different sizes?", "What does that tell you about the measure you want?"],
       context: piece("Picture the blades of open scissors: the two opposite openings are always the same size.", "So what can you say about the opening opposite the one you know?"),
       check: piece("Let's look at the picture again.", "Which angle is opposite, and which angles are next to the one you know?"),
-      slips: [],
+      slips: [slip(180 - n[0], "That is the angle NEXT to it on the straight line. The angle vertically opposite is across the crossing point.", "Which angle is across the crossing point?"), slip(90 - n[0], "Those two angles do not make a right angle; look at the angle across the crossing point.", "Which angle is exactly opposite?")].filter((x) => x.value > 0),
     }),
   },
   {
     id: "ray", re: /ray BD lies inside/i,
-    make: () => ({
+    make: (n, p) => ({
       kind: "ray",
       idea: piece("A ray inside an angle splits it into two parts, and the two parts add up to the whole angle.", "What is the whole angle, and which part do you already know?"),
       steps: ["What is the measure of the whole angle ABC?", "Which part of it do you already know?", "What operation gives you the other part?"],
       context: piece("Picture a slice of pizza cut by a knife: the two smaller slices make up the original slice.", "How would you find the size of the second slice?"),
       check: piece("Let's compare the parts with the whole.", "What do the two parts add up to?"),
-      slips: [],
+      slips: [slip(n[0] + n[1], "The smaller angle is only PART of the big one, so the other part is found by taking away, not adding.", "Do you add or subtract to find the other part of a whole angle?"), slip(180 - n[1], "The whole angle given here is not a straight angle; use the angle that is actually given.", "How big is the whole angle ABC?")],
     }),
   },
   {
@@ -155,7 +170,7 @@ const KINDS: Kind[] = [
         steps: ["If the smaller angle is x, how can you write the other angle in terms of x?", "What total do the two angles make?", "Can you write an equation 'x + (the other angle) = total' and solve it?"],
         context: piece("Think of sharing a total between two people where one gets a multiple of the other's share.", "How many equal parts does the total break into?"),
         check: piece("Let's set up an equation.", "What do the two angle expressions add up to?"),
-        slips: [],
+        slips: /complementary/i.test(p) ? [slip(45, "The total is split into three equal parts here (the first angle counts once and the second counts twice), not two.", "How many x's are there altogether?"), slip(60, "That is the larger of the two angles. The question asks for the smaller one, x.", "Which of the two angles is x?")] : [slip(60, "The total is shared among four equal parts here (one part for the smaller angle and three for the larger), not three.", "How many equal parts are there altogether?"), slip(135, "That is the larger angle. The question asks for the smaller one.", "Which of the two angles is the smaller?")],
       };
     },
   },
@@ -167,7 +182,7 @@ const KINDS: Kind[] = [
       steps: ["How many degrees do an interior angle and its exterior angle make together?", "You know one of them. What operation finds the other?", "Can you check that the two angles add up to that total?"],
       context: piece("Picture walking along one side of a polygon and then turning at the corner: the turn and the inside angle together make a straight line.", "How would you find the turn if you know the inside angle (or the other way round)?"),
       check: piece("Let's check how the two angles are related.", "Do the interior and exterior angles at one vertex make a right angle or a straight angle?"),
-      slips: [slip(90 - n[0], "Those two angles do not make a right angle; they sit on a straight line.", "How many degrees are in a straight line?")].filter((s) => s.value > 0),
+      slips: [slip(360 - n[0], "At one corner these two angles sit on a straight line, not around a full turn.", "How many degrees are in a straight line?"), slip(90 - n[0], "Those two angles do not make a right angle; they sit on a straight line.", "How many degrees are in a straight line?")].filter((s) => s.value > 0),
       example: (avoid, skip = 0) => { const a = pick([95, 112, 128, 147, 160], avoid, (x) => 180 - x, skip); return a ? { problem: /interior angle is/.test(p) ? `The interior angle at a vertex is ${a}°. Find the adjacent exterior angle.` : `The exterior angle at a vertex is ${a}°. Find the adjacent interior angle.`, steps: [`Interior + exterior = 180°.`, `The missing angle = 180° − ${a}°.`, `= ${180 - a}°.`] } : undefined; },
     }),
   },
@@ -237,7 +252,7 @@ const KINDS: Kind[] = [
         steps: [`What do all the interior angles of a ${quad ? "quadrilateral" : "pentagon"} add up to?`, "What do the angles you are given add up to?", "What operation finds the missing angle from those two totals?"],
         context: piece("Think of a bill that must come to a fixed total: if you know most of the items, the last one is what is left.", "What is the fixed total here, and how much of it is already used?"),
         check: piece("Let's find the missing part of a total.", "What is the total, and what is the sum of the angles you already have?"),
-        slips: [],
+        slips: [slip(n.reduce((a, b) => a + b, 0), "That is the total of the angles you were given. The question asks for the one that is missing.", "What do you do with the total of ALL the angles and the ones you know?"), slip(/quadrilateral/i.test(p) ? 360 : 540, "That is the total of ALL the interior angles, including the missing one.", "How do you get the missing one from that total?")],
       };
     },
   },
@@ -245,7 +260,7 @@ const KINDS: Kind[] = [
   // Percentages and money
   // ------------------------------------------------------------------------------------------------------------------------------------
   {
-    id: "pct-change", re: /(rises|drops) from [\d,]+ to [\d,]+\. What is the percentage|dropped from [\d,]+ to [\d,]+|sold \d+ meals/i,
+    id: "pct-change", re: /(rises|drops) from [\d,]+ to [\d,]+\. What is the percentage|dropped from ₱?[\d,]+ to ₱?[\d,]+|sold \d+ meals/i,
     make: (n, p) => {
       const up = /increase/i.test(p);
       const [a, b] = n;
@@ -293,7 +308,7 @@ const KINDS: Kind[] = [
         steps: rateQ ? ["How much was taken off the price? (Use subtraction.)", "Which price is the original one?", "How do you turn 'amount off ÷ original price' into a percent?"] : saleQ ? ["First, how much is the discount? (A percent of which price?)", "Should the discount be added to or taken from the original price?", "What is left after you do that?"] : ["How do you write the percent as a decimal or fraction?", "A percent OF the original price is found by which operation?", "Once you have multiplied, is the result the discount or the sale price?"],
         context: piece("Picture a sign that says '% off' in a shop: the amount off depends on the price before the sale.", "What do you do with the price tag to get the amount off?"),
         check: piece("Let's separate the discount from the sale price.", "Is the number you got the amount taken off, or what you pay?"),
-        slips: saleQ ? [slip((n[0] * n[1]) / 100, "That number is the discount itself. The question asks for the sale price.", "What do you do with the discount and the original price to get what you pay?")] : [],
+        slips: saleQ ? [slip((n[0] * n[1]) / 100, "That number is the discount itself. The question asks for the sale price.", "What do you do with the discount and the original price to get what you pay?")] : rateQ ? [slip(((n[0] - n[1]) / n[1]) * 100, "It looks like the amount off was compared with the sale price. A discount rate compares it with the ORIGINAL price.", "Which price was there before the sale?"), slip(n[0] - n[1], "That is the amount taken off in pesos, but the question asks for a percent.", "How do you turn 'amount off compared with the original' into a percent?")] : [slip(n[0] * (1 - n[1] / 100), "That number is what you would pay after the discount, not the amount taken off.", "Is the question asking for the amount off or the price you pay?"), slip(n[0] * n[1], "It looks like the percent was not changed into a decimal (divided by 100).", "How do you write a percent as a decimal?"), slip(n[1], "That is the percent itself. The question asks for the amount in pesos.", "A percent of WHAT amount?")],
         example: (avoid, skip = 0) => {
           const list: Array<[number, number]> = [[500, 20], [1200, 15], [260, 10], [900, 30]];
           const f = (x: [number, number]) => (rateQ ? x[1] : saleQ ? x[0] * (1 - x[1] / 100) : (x[0] * x[1]) / 100);
@@ -315,7 +330,7 @@ const KINDS: Kind[] = [
         steps: rateQ ? ["Which amount is the commission and which is the total sales?", "How do you compare the commission with the sales?", "How do you turn that comparison into a percent?"] : tax ? ["How do you write the tax rate as a decimal or fraction?", "What does the tax rate times the price give you?", totalQ ? "Is the tax added to the price or taken from it, and what do you pay in all?" : "Is that product the tax or the total you pay?"] : ["How do you write the commission rate as a decimal or fraction?", "A percent OF the sales is found by which operation?", "Does your answer look like a small part of the sales?"],
         context: piece(tax ? "Think of a receipt: the price of the item, then the tax line, then the total at the bottom." : "Think of a seller who keeps a small share of every sale they make.", "What would you do with the percent and the amount to get that share?"),
         check: piece("Let's check what the percent is applied to.", "Which amount did you multiply or divide by the percent?"),
-        slips: totalQ ? [slip((n[0] * n[1]) / 100, "That number is only the tax. The question asks for what you pay in all.", "What do you do with the tax and the price?")] : [],
+        slips: totalQ ? [slip((n[0] * n[1]) / 100, "That number is only the tax. The question asks for what you pay in all.", "What do you do with the tax and the price?"), slip(n[0] * n[1], "It looks like the percent was not changed into a decimal (divided by 100).", "How do you write a percent as a decimal?")] : rateQ ? [slip(n[0] / n[1], "The comparison still has to be turned into a percent.", "How do you turn a decimal into a percent?"), slip(n[1] / n[0], "It looks like the division went the other way round. The commission is compared with the total sales.", "Which amount is the part and which is the whole?")] : [slip(n[0] * n[1], "It looks like the percent was not changed into a decimal (divided by 100).", "How do you write a percent as a decimal?"), ...(tax ? [slip(n[0] * (1 + n[1] / 100), "That number is the price plus the tax. The question asks for the tax only.", "Is the question asking for the tax or for the total?")] : []), slip(n[1], "That is the percent itself. The question asks for an amount in pesos.", "A percent of WHAT amount?")],
         example: (avoid, skip = 0) => {
           const list: Array<[number, number]> = [[400, 12], [1000, 3], [2500, 5], [650, 10]];
           const f = (x: [number, number]) => (rateQ ? x[1] : totalQ ? x[0] * (1 + x[1] / 100) : (x[0] * x[1]) / 100);
@@ -338,7 +353,7 @@ const KINDS: Kind[] = [
         steps: yearsQ ? ["What does I = P × r × t say about the interest?", "Which values do you know, and which one is missing?", "How do you undo a multiplication to find the missing value?"] : ["Which number is the principal P, which is the rate r, and which is the time t?", "Write the rate as a decimal. Then multiply the three values. What does the product represent?", totalQ ? "Is the interest the amount you will have in all, or only what you earn on top of the principal?" : "Check the units: is t in years?"],
         context: piece("Think of a savings account: the bank pays you a small percent of your deposit for every year you leave it there.", "How much does it pay for one year, and how many years do you wait?"),
         check: piece("Let's list what we know in the formula.", "What are P, r and t here, and is the rate written as a decimal?"),
-        slips: totalQ ? [slip((n[0] * n[1] * n[2]) / 100, "That is only the interest you earn. The question asks for everything you will have.", "What do you do with the interest and the money you started with?")] : [],
+        slips: totalQ ? [slip((n[0] * n[1] * n[2]) / 100, "That is only the interest you earn. The question asks for everything you will have.", "What do you do with the interest and the money you started with?"), slip(n[0] * n[1] * n[2], "It looks like the rate was not written as a decimal (divided by 100).", "How do you write a percent as a decimal?")] : yearsQ ? [slip((n[0] * n[2]) / 100, "That is the interest for ONE year. The question asks how many years it takes to earn the whole interest.", "How many times does one year's interest fit into the total interest?"), slip((n[1] / n[0]) * 100, "That compares the whole interest with the principal as a percent, not a number of years.", "How many years of the yearly rate give that interest?")] : [slip(n[0] * n[1] * n[2], "It looks like the rate was not written as a decimal (divided by 100).", "How do you write a percent as a decimal?"), slip(n[0] + (n[0] * n[1] * n[2]) / 100, "That number is the principal plus the interest. The question asks for the interest only.", "Is the question asking for the interest or for the total?")],
         example: (avoid, skip = 0) => {
           const list: Array<[number, number, number]> = [[3000, 5, 2], [8000, 4, 3], [12000, 6, 1], [2500, 8, 4]];
           const f = (x: [number, number, number]) => (yearsQ ? x[2] : totalQ ? x[0] + (x[0] * x[1] * x[2]) / 100 : (x[0] * x[1] * x[2]) / 100);
@@ -360,7 +375,7 @@ const KINDS: Kind[] = [
         steps: pctQ ? ["Which amount is the whole, and which is the percent?", "How do you write the percent as a decimal?", "What operation do you use to find a percent of an amount?"] : ["What is the total of all the expenses together?", "What is your income?", "What operation finds what is left?"],
         context: piece("Think of an allowance: first you plan where it goes, and whatever is left over is what you can save.", "How would you find what is left?"),
         check: piece("Let's check the plan.", "Did you add up all the expenses before comparing them with the income?"),
-        slips: [],
+        slips: pctQ ? [slip(n[0] * n[1], "It looks like the percent was not changed into a decimal (divided by 100).", "How do you write a percent as a decimal?"), slip(n[1] - (n[0] * n[1]) / 100, "That is what is LEFT after that share. The question asks for the share itself.", "Is the question asking for the share or for what remains?")] : [slip(n.slice(1).reduce((a, b) => a + b, 0), "That is the total of the expenses. Savings are what is LEFT of the income.", "What do you do with the income and the total of the expenses?"), slip(n[0] - n[1], "Only the first expense was taken away. Every planned expense comes out of the income.", "Have you taken away ALL of the expenses?")],
       };
     },
   },
@@ -410,13 +425,13 @@ const KINDS: Kind[] = [
   },
   {
     id: "rate-scale", re: /At this rate/i,
-    make: () => ({
+    make: (n, p) => ({
       kind: "rate-scale",
       idea: piece("When something happens at a steady rate, first find the amount for ONE unit, then multiply by the number of units you want.", "How much happens in one unit (one hour, one day)?"),
       steps: ["How much is done in ONE unit of time? (Divide.)", "How many units of time do you want?", "What do you do with the unit rate and the number of units?"],
       context: piece("Think of earning a daily wage: once you know the pay for one day, any number of days is easy.", "What would you do with the pay for one day to get the pay for several days?"),
       check: piece("Let's find the rate for one first.", "Did you work out the amount for ONE unit before scaling up?"),
-      slips: [],
+      slips: [slip(n[0] / n[1], "That is the amount for ONE unit. The question asks about a different number of units.", "What do you do with the amount for one unit and the new number of units?"), slip(n[0] + (n[2] - n[1]), "It looks like the extra units were added on. At a steady rate the amount grows in proportion.", "Does the amount grow by adding the extra units, or by scaling up the unit amount?")],
     }),
   },
 ];
