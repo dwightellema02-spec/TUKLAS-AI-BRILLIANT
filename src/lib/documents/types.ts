@@ -14,6 +14,8 @@ export type ExtractionStatus =
 export interface RawExtraction {
   pages: string[];
   pageCount: number;
+  /** DOCX only: how many pictures the file holds (text extraction cannot carry them). */
+  imageCount?: number;
 }
 
 export interface DocumentChunk {

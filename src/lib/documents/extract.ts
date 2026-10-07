@@ -82,7 +82,7 @@ async function extractDocx(buffer: Buffer): Promise<RawExtraction> {
       DOCUMENT_LIMITS.EXTRACTION_TIMEOUT_MS,
       "DOCX extraction"
     );
-    return { pages: [htmlToStructuredText(result.value)], pageCount: 1 };
+    return { pages: [htmlToStructuredText(result.value)], pageCount: 1, imageCount: (result.value.match(/<img\b/gi) ?? []).length };
   } catch (e) {
     if (e instanceof ExtractionError) throw e;
     throw new ExtractionError("The DOCX file could not be parsed (it may be corrupted).", "CORRUPT");
