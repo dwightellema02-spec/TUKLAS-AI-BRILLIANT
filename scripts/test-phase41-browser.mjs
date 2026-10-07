@@ -70,7 +70,7 @@ await shot(tp, "unit-structure");
 // 3. create the lesson in that unit with that skill
 await tp.goto(`${base}/teacher/lessons/new`); await tp.waitForTimeout(2500);
 await tp.getByPlaceholder(/e\.g\. Multiplication/i).fill(`Adding and subtracting fractions ${run}`);
-await tp.locator("select").first().selectOption({ label: `Term 3 · Unit ${unit.sequenceOrder}: ${unitTitle}` });
+await tp.getByLabel("Unit for the new lesson").selectOption({ label: `Term 3 · Unit ${unit.sequenceOrder}: ${unitTitle}` });
 const group = tp.getByTestId("skill-group").filter({ hasText: unitTitle });
 check(await group.count() === 1, "Skills are grouped under their unit (Term 3 · unit title)");
 await group.getByRole("checkbox", { name: new RegExp(`Add and subtract fractions ${run}`) }).click();

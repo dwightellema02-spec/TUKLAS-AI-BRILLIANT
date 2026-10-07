@@ -33,4 +33,4 @@ In the demo (in-memory) store, lessons, sections, questions, attempts and simila
 * No teacher has tried it on their own real lesson documents; the fixtures are made for the tests.
 
 ## Full regression
-Running when this was committed; the result is recorded in the next commit.
+`tsc`, `build` and every in-memory and PostgreSQL suite (phases 22–45): the first run passed 45 of 46 steps. The one failure, `test:phase41:pg`, was a real consequence of this phase: its browser journey picked the first `<select>` on the New-lesson page, which is now the import card's unit list. I gave the lesson form's unit list an accessible name ("Unit for the new lesson"), made the journey use it, and re-ran it (71 + 24 + 12 passed). The Phase 34 journey and the new Phase 45 journey pass on the final code. I did not re-run the whole regression a second time after that one-line change.

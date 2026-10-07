@@ -301,6 +301,7 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
                     Curriculum Unit *
                   </label>
                   <select
+                    aria-label="Unit for the new lesson"
                     value={selectedUnitId}
                     onChange={(e) => setSelectedUnitId(e.target.value)}
                     required
