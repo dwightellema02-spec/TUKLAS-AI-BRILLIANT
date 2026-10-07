@@ -32,4 +32,4 @@ Found on the way: a teacher's view of a lesson included the server's internal **
 * None of this has been tried by teachers; the live Gemini path was not exercised.
 
 ## Full regression
-Running when this was committed; the result is recorded in the next commit.
+`tsc`, `build` and every in-memory and PostgreSQL suite (phases 22–46, including `test:phase44`, `test:phase45`, `test:phase45:pg`, `test:phase46`): **47 of 47 steps passed**. The browser journeys (Phases 34, 39, 43, 45) were not re-run after these changes; the only UI change is one checkbox on the import card.
