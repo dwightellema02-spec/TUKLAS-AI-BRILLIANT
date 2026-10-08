@@ -19,6 +19,8 @@ services:
         sync: false
       - key: TRUST_PROXY
         value: "true"
+      - key: DOCUMENT_STORAGE_DIR
+        value: /tmp/tuklas-documents   # free plan: lost on restart. On a paid plan with a disk, use the disk's mount path (see below)
       - key: APP_URL
         sync: false          # the public https address, e.g. https://tuklas.example.edu
       - key: ADMIN_EMAIL
@@ -31,3 +33,10 @@ services:
         sync: false          # named in the privacy notice
       - key: PRIVACY_CONTACT_EMAIL
         sync: false          # named in the privacy notice
+
+# Paid plan with a persistent disk (uploaded lesson documents survive restarts). Costs money every month: change `plan: free` above to
+# `plan: starter`, set DOCUMENT_STORAGE_DIR to /data/documents, and add under the service (same indentation as `healthCheckPath`):
+#     disk:
+#       name: documents
+#       mountPath: /data/documents
+#       sizeGB: 1
