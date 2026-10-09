@@ -28,6 +28,8 @@
     "retention": "tsx scripts/retention.ts",
     "test:phase43": "AI_PROVIDER=local tsx scripts/test-phase43-privacy.ts && AI_PROVIDER=local tsx scripts/test-phase43-prompts.ts",
     "test:phase44": "AI_PROVIDER=local tsx scripts/test-phase44-hardening.ts && tsx scripts/test-phase44-mistakes.ts",
+    "monitor:ready": "tsx scripts/monitor-ready.ts",
+    "test:phase46": "AI_PROVIDER=local tsx scripts/test-phase46-monitor.ts",
     "test:phase45": "tsx scripts/test-phase45-draft.ts && AI_PROVIDER=local tsx scripts/test-phase45-import.ts",
     "test:phase45:pg": "tsx scripts/test-phase45-prisma.ts",
     "test:phase44:pg": "tsx scripts/test-phase44-prisma.ts",

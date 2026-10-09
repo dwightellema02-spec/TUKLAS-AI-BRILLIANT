@@ -37,6 +37,10 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_NAME: ${ADMIN_NAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # named in the privacy notice students see (docs/PRIVACY.md)
+      SCHOOL_NAME: ${SCHOOL_NAME:-}
+      PRIVACY_CONTACT_EMAIL: ${PRIVACY_CONTACT_EMAIL:-}
+      REQUIRE_GUARDIAN_CONSENT: ${REQUIRE_GUARDIAN_CONSENT:-false}
       DOCUMENT_STORAGE_DIR: /data/documents
     volumes:
       - documents:/data/documents

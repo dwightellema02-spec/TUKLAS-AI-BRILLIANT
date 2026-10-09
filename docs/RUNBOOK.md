@@ -61,5 +61,19 @@ One app container and PostgreSQL on a small dev machine: **45 students on one ad
 | After a restart the tutor says it uses the rule-based engine | `AI_PROVIDER` / `GEMINI_API_KEY` (`npm run check:env`) |
 | Disk full | `backups/` and the `dbdata` volume; reduce `BACKUP_KEEP` or move backups off the server |
 
+## 9b. Knowing when it is down (monitoring)
+Nothing inside the app can tell you the app is down. Watch `/api/ready` from **outside** it. It answers `200 {"ready":true}` only when the database answers and every migration is finished, and `503` otherwise (that is the one to alert on; `/api/health` only says the process is alive).
+
+Option 1, a hosted uptime service (simplest): point it at `https://YOUR-ADDRESS/api/ready`, expect HTTP 200 and the text `"ready":true`, check every 1-5 minutes, alert after 2-3 failures in a row, by email or phone.
+
+Option 2, the watcher in this repo, on a second small machine or the host's scheduler (not inside the app's own container):
+```
+MONITOR_URL=https://YOUR-ADDRESS/api/ready \
+MONITOR_ALERT_WEBHOOK=https://hooks.example/your-channel \   # optional (Slack / Teams / Discord style)
+npx tsx scripts/monitor-ready.ts            # keeps watching; alerts after 3 failed checks in a row, once, then tells you when it recovers
+npx tsx scripts/monitor-ready.ts --once     # one check, exit 0 = ready, 1 = not ready (for cron)
+```
+Settings: `MONITOR_INTERVAL_SECONDS` (60), `MONITOR_FAILURES_BEFORE_ALERT` (3), `MONITOR_TIMEOUT_MS` (5000). Without a webhook the alert is only printed, so use a webhook, or run `--once` from cron and let cron email you. The webhook address is never printed.
+
 ## 10. Not covered here
 Monitoring and alerting (nothing watches `/api/ready` for you: point your host's uptime check at it); log shipping; student-data privacy tasks (consent, export, deletion) are described in the privacy documentation, not here.

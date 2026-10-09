@@ -552,7 +552,7 @@ app.get("/api/lessons/:id", async (req: Request, res: Response) => {
       });
     }
 
-    return res.json({ data: staff ? lesson : toStudentLessonView(lesson) });
+    return res.json({ data: staff ? withoutStoragePaths(lesson) : toStudentLessonView(lesson) });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to retrieve lesson";
     return res.status(500).json({ error: message });
@@ -791,6 +791,12 @@ app.delete("/api/lessons/:id/video/:resourceId", async (req: Request, res: Respo
 });
 
 // Students must not see storage keys, content hashes, uploader ids or raw extraction diagnostics.
+/** Teachers see their lesson as it is, except for where the server keeps an uploaded file (a storage key they have no use for). */
+function withoutStoragePaths<T extends { resources?: unknown[] }>(lesson: T): T {
+  if (!lesson.resources) return lesson;
+  return { ...lesson, resources: lesson.resources.map((r) => { const { storagePath: _sp, ...rest } = r as Record<string, unknown>; return rest; }) } as T;
+}
+
 function toStudentLessonView<T extends { resources?: unknown[]; contentBlocks?: any[] }>(lesson: T): T {
   const view: any = { ...lesson };
   if (lesson.resources) {
@@ -896,8 +902,33 @@ app.post("/api/teacher/lessons/import", authorizeLessonImport, rawUploadBody, as
     const { draft } = outcome;
 
     const saved = await saveLessonDraft(dbService as any, draft, { unitId: String(req.query.unitId), authorId: session.userId });
-    await dbService.recordAudit({ actorId: session.userId, action: "lesson.import_draft", targetType: "lesson", targetId: saved.lessonId, detail: { kind: validation.kind, bytes: buffer.length, sections: saved.blocks.length, skipped: draft.skipped.length }, ip: req.ip });
-    return res.status(201).json({ data: { lessonId: saved.lessonId, title: draft.title, status: "DRAFT", objectives: draft.objectives, blocks: saved.blocks, skipped: draft.skipped, warnings: draft.warnings, stats: draft.stats } });
+
+    // Optional: also keep the document as a lesson resource so the AI tutor can use it (answer-key chunks are flagged and never retrieved for students).
+    let attached = false;
+    if (req.query.attach === "true") {
+      let storedKey: string | undefined;
+      try {
+        const ingest = await ingestDocument(buffer, validation.kind);
+        if (ingest.status === "EXTRACTED" || ingest.status === "TRUNCATED") {
+          storedKey = saveOriginal(buffer, validation.kind.toLowerCase());
+          await dbService.addLessonDocumentResource(saved.lessonId, session.role, session.userId, {
+            type: validation.kind === "PDF" ? "PDF" : "DOCUMENT",
+            title: draft.title,
+            fileName: validation.safeFileName,
+            fileSize: buffer.length,
+            storagePath: storedKey,
+            ingest,
+          });
+          attached = true;
+        }
+      } catch (attachError) {
+        deleteOriginal(storedKey);
+        console.warn("Lesson import: attaching the document failed:", attachError instanceof Error ? attachError.message : attachError);
+      }
+      if (!attached) draft.warnings.push("The document could not be attached for the AI tutor. The draft lesson itself was saved; you can upload the file again from the lesson page.");
+    }
+    await dbService.recordAudit({ actorId: session.userId, action: "lesson.import_draft", targetType: "lesson", targetId: saved.lessonId, detail: { kind: validation.kind, bytes: buffer.length, attached, sections: saved.blocks.length, skipped: draft.skipped.length }, ip: req.ip });
+    return res.status(201).json({ data: { lessonId: saved.lessonId, title: draft.title, status: "DRAFT", attached, objectives: draft.objectives, blocks: saved.blocks, skipped: draft.skipped, warnings: draft.warnings, stats: draft.stats } });
   } catch (error: unknown) {
     // (saveLessonDraft removes a half-imported lesson itself)
     console.error("Lesson import error:", error instanceof Error ? error.message : error);

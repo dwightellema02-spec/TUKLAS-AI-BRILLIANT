@@ -44,6 +44,7 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importUnitId, setImportUnitId] = useState("");
   const [importTitle, setImportTitle] = useState("");
+  const [importAttach, setImportAttach] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<any | null>(null);
@@ -56,7 +57,7 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
     setImporting(true);
     try {
       const unit = importUnitId || selectedUnitId;
-      const q = `?unitId=${encodeURIComponent(unit)}${importTitle.trim() ? `&title=${encodeURIComponent(importTitle.trim())}` : ""}`;
+      const q = `?unitId=${encodeURIComponent(unit)}${importTitle.trim() ? `&title=${encodeURIComponent(importTitle.trim())}` : ""}${importAttach ? "&attach=true" : ""}`;
       const res = await fetch(`/api/teacher/lessons/import${q}`, {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream", "x-file-name": encodeURIComponent(importFile.name) },
@@ -211,6 +212,10 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
                 className="text-sm px-3 py-2 rounded-xl border border-slate-300"
               />
             </div>
+            <label className="flex items-start gap-2 text-xs text-slate-600">
+              <input type="checkbox" data-testid="import-attach" checked={importAttach} onChange={(e) => setImportAttach(e.target.checked)} className="mt-0.5" />
+              <span>Also keep the document with the lesson so the AI tutor can use it to help students. (An answer key in it stays hidden from students.)</span>
+            </label>
             <Button type="submit" variant="primary" size="sm" disabled={importing || !importFile}>
               {importing ? "Importing..." : "Import draft"}
             </Button>
@@ -232,6 +237,7 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
                   <ul className="list-disc pl-5">{importResult.warnings.map((w: string, i: number) => (<li key={i}>{w}</li>))}</ul>
                 </div>
               )}
+              {importResult.attached && <p data-testid="import-attached">The document is attached to the lesson for the AI tutor.</p>}
               <Button variant="primary" size="sm" onClick={() => handleNav(`/teacher/lessons/${importResult.lessonId}/edit`)}>Open in the editor</Button>
             </div>
           )}
