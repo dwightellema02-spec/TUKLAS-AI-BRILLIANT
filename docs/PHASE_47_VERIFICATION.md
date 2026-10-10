@@ -12,7 +12,7 @@
 3. **A "waking up" notice and retrying in the browser** (`src/lib/net/resilient-fetch.ts`, `ConnectionNotice`). Requests to `/api/` that fail with a network error or 502/503/504 are retried for up to 45 s (reads) with a notice "The server is waking up or reconnecting... Your work is not lost". Writes are retried **only** when the server says it did not process them (503 `DATABASE_UNAVAILABLE`), for up to 15 s, and a write that failed with a network error is never repeated.
 4. **A phone-size pass**: 19 screens (student, teacher, admin) at 390 px wide in a real browser. Found and fixed: the teacher's Curriculum page overflowed sideways (the unit header did not wrap), footer links and the "Recalculate" button were too small to tap.
 5. **A "before class" checklist** for the free plan in `docs/DEPLOY_RENDER_NEON.md`; the new settings are in `docs/RUNBOOK.md`.
-6. A defect of my own found on the way: the Phase 42 load test (not part of the regular regression) had silently stopped working when Phase 43 made every account accept the privacy notice in production. Fixed.
+6. A defect of my own found on the way: the Phase 42 load test (not part of the regular regression) had silently stopped working when Phase 43 made every account accept the privacy notice in production. Fixed. With the new pool of 5 connections the load test (45 students on one address, production mode, PostgreSQL) still passes: 1,960 requests, none refused or failed, p95 774 ms (it was about 750 ms before).
 
 ## Verification
 | Check | Result |
