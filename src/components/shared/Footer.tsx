@@ -54,7 +54,7 @@ export function Footer({ onNavigate }: FooterProps) {
                     <a
                       href={item.href}
                       onClick={(e) => handleLinkClick(e, item.href)}
-                      className="text-slate-400 hover:text-white transition-colors duration-150 inline-flex items-center gap-1.5"
+                      className="text-slate-400 hover:text-white transition-colors duration-150 inline-flex items-center gap-1.5 py-1.5"
                     >
                       {item.title}
                     </a>

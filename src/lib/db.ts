@@ -30,6 +30,7 @@ import {
   PracticeSetStatus,
 } from "@prisma/client";
 import { QuestionValidator } from "./question-validator";
+import { withDbRetry, withConnectionSettings } from "./db-resilience";
 
 // Global singleton declaration to avoid multiple PrismaClient instances in development/HMR
 const globalForPrisma = globalThis as unknown as {
@@ -54,14 +55,25 @@ export const hasValidDatabaseUrl = isPostgresUrl(process.env.DATABASE_URL);
  */
 export const useInMemoryAccounts = !hasValidDatabaseUrl;
 
-export const prisma =
+const basePrisma =
   globalForPrisma.prisma ??
   new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
+    // a sleeping hosted database needs a few seconds to wake: allow them
+    ...(hasValidDatabaseUrl ? { datasources: { db: { url: withConnectionSettings(process.env.DATABASE_URL)! } } } : {}),
   });
 
+// Phase 47: every query is retried, within a limited time and only where that is safe, when the database cannot be reached for a moment.
+export const prisma = basePrisma.$extends({
+  query: {
+    async $allOperations({ operation, args, query }) {
+      return withDbRetry(() => query(args), operation, { log: (l) => console.warn(l) });
+    },
+  },
+});
+
 if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
+  globalForPrisma.prisma = basePrisma;
 }
 
 // -------------------------------------------------------------

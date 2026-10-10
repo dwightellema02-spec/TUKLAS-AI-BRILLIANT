@@ -182,8 +182,8 @@ export default function TeacherCurriculumPage({ onNavigate }: TeacherCurriculumP
               <>
                 {/* Unit Header Card */}
                 <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs">
-                  <div className="flex items-start justify-between">
-                    <div>
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                    <div className="min-w-0">
                       <span className="text-xs font-semibold text-teal-700 uppercase tracking-wider">
                         Active Unit Overview
                       </span>
@@ -195,7 +195,7 @@ export default function TeacherCurriculumPage({ onNavigate }: TeacherCurriculumP
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
                       <Button
                         variant="outline"
                         size="sm"

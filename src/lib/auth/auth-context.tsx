@@ -70,13 +70,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const data = await res.json();
         setUser(data.user);
         setPrivacy(data.privacy ?? null);
-      } else {
+      } else if (res.status === 401) {
         if (typeof window !== "undefined") {
           localStorage.removeItem("tuklas_session_token");
         }
         setUser(null);
         setPrivacy(null);
       }
+      // any other failure (the server or its database is not answering) is NOT being signed out: keep what we know
     } catch {
       setUser(null);
     } finally {

@@ -20,6 +20,7 @@ import { LessonStatus, UserRole } from "@prisma/client";
 import { validateUpload, ingestDocument, DOCUMENT_LIMITS } from "./src/lib/documents/index.ts";
 import { saveOriginal, deleteOriginal } from "./src/lib/documents/file-store.ts";
 import { draftLessonFromDocument } from "./src/lib/documents/lesson-draft.ts";
+import { classifyDbError } from "./src/lib/db-resilience.ts";
 import { saveLessonDraft } from "./src/lib/documents/lesson-import-service.ts";
 import { generateQuestionsFromChunks } from "./src/lib/documents/question-generation.ts";
 import { getAIProvider, LocalTutorEngine } from "./src/lib/ai/provider.ts";
@@ -203,10 +204,12 @@ function readSessionToken(req: Request): string | undefined {
   return undefined;
 }
 
-app.use(async (req: Request, _res: Response, next: NextFunction) => {
+app.use(async (req: Request, res: Response, next: NextFunction) => {
   (req as any)[SESSION_KEY] = null;
+  let hadToken = false;
   try {
     const token = readSessionToken(req);
+    hadToken = !!token;
     const payload = token ? verifySessionToken(token) : null;
     if (payload) {
       const state = await dbService.getAuthState(payload.userId);
@@ -215,6 +218,12 @@ app.use(async (req: Request, _res: Response, next: NextFunction) => {
       }
     }
   } catch (e) {
+    // Phase 47: when the database cannot be reached the person is NOT signed out: say "try again" (503), so the app waits and retries
+    // instead of showing the sign-in screen. Any other failure still fails closed (treated as signed out).
+    if (hasValidDatabaseUrl && hadToken && req.path.startsWith("/api/") && classifyDbError(e) !== "other") {
+      res.setHeader("Retry-After", "5");
+      return res.status(503).json({ error: "The database is not reachable right now. Please try again in a moment.", code: "DATABASE_UNAVAILABLE" });
+    }
     if (hasValidDatabaseUrl) console.error("Session check failed (treated as signed out):", e instanceof Error ? e.message : e);
   }
   next();

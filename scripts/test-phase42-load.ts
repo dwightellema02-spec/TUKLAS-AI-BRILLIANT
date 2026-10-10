@@ -51,8 +51,10 @@ async function main() {
     const think = (a = 300, b = 1500) => new Promise((r) => setTimeout(r, PACE_SCALE * (a + Math.random() * (b - a))));
 
     const admin = (await call("login", "POST", "/api/auth/login", undefined, { email: adminEmail, password: adminPassword })).json.token as string;
+    await call("accept", "POST", "/api/auth/accept-privacy", admin); // production asks every account to accept the privacy notice first (Phase 43)
     await call("admin", "POST", "/api/admin/users", admin, { name: "Teacher", email: `p42l.t.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER" });
     const T = (await call("login", "POST", "/api/auth/login", undefined, { email: `p42l.t.${run}@example.edu`, password: "Sturdy-Pass1" })).json.token as string;
+    await call("accept", "POST", "/api/auth/accept-privacy", T);
     const cls = (await call("teacher", "POST", "/api/teacher/classes", T, { name: "Load class", gradeLevel: 7 })).json.data;
     const joinCode = (await call("teacher", "GET", `/api/teacher/classes/${cls.id}`, T)).json.data.classroom?.joinCode ?? cls.joinCode;
     if (!T || !cls?.id) { console.error("setup failed:", JSON.stringify(lat.slice(0, 8))); throw new Error("setup failed"); }
@@ -69,7 +71,7 @@ async function main() {
     const teacherLoop = (async () => { while (!teacherStop) { await call("dashboard", "GET", "/api/teacher/dashboard", T); await call("dashboard", "GET", `/api/teacher/classes/${cls.id}`, T); await think(2000, 3500); } })();
     const t0 = performance.now();
     const studentRun = async (i: number) => {
-      const reg = await call("register", "POST", "/api/auth/register", undefined, { name: `Load Student ${i}`, email: `p42l.s${i}.${run}@example.edu`, password: "Sturdy-Pass1" });
+      const reg = await call("register", "POST", "/api/auth/register", undefined, { name: `Load Student ${i}`, email: `p42l.s${i}.${run}@example.edu`, password: "Sturdy-Pass1", acceptPrivacy: true });
       const S = reg.json.token as string; if (!S) return false;
       await call("join", "POST", "/api/student/classes/join", S, { code: joinCode });
       await call("path", "GET", "/api/student/learning-path", S);
