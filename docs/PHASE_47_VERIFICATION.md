@@ -32,4 +32,4 @@
 * Not tested against a real Neon database (a proxy that refuses connections was used to imitate one).
 
 ## Full regression
-Running when this was committed; the result is recorded in the next commit.
+`tsc`, `build` and every in-memory and PostgreSQL suite (phases 22–47, including `test:phase47`, `test:phase47:pg`): the first run passed 47 of 49 steps. The two that failed, `test:phase30:pg` and `test:phase41`, died at start-up with "server did not start" / "bad port": the tests pick a random port and one landed on a port that the test's own HTTP client refuses to use. Both **passed on re-run** (66 + 26 and 5 + 17 checks). That is an old weakness of those two test scripts (random ports), not of this phase; I did not change it. The load test (not part of the regular regression) passes with the new pool of 5 connections. The browser journeys of Phases 34, 39, 43 and 45 were not re-run.
