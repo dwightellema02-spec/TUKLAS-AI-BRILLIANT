@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Response to the Professor's Feedback and Status of Tuklas</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 10.5pt; line-height: 1.45; color: #1b2430; margin: 0; }
+  h1 { font-size: 21pt; line-height: 1.2; margin: 0 0 4pt; color: #0f3d3a; }
+  h2 { font-size: 14pt; margin: 20pt 0 6pt; padding-bottom: 3pt; border-bottom: 2px solid #0f766e; color: #0f3d3a; page-break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 13pt 0 4pt; color: #0f3d3a; page-break-after: avoid; }
+  p { margin: 0 0 7pt; }
+  ul { margin: 0 0 8pt 0; padding-left: 16pt; }
+  li { margin-bottom: 2.5pt; }
+  table { width: 100%; border-collapse: collapse; margin: 6pt 0 10pt; font-size: 9.3pt; }
+  th, td { border: 1px solid #c9d3d8; padding: 4pt 5pt; vertical-align: top; text-align: left; }
+  th { background: #e7f3f2; font-weight: 600; }
+  tr { page-break-inside: avoid; }
+  .sub { color: #51606c; font-size: 11pt; margin-bottom: 10pt; }
+  .meta { color: #51606c; font-size: 9.5pt; }
+  .box { border: 1.5px solid #0f766e; background: #f1faf9; padding: 8pt 10pt; border-radius: 4pt; margin: 8pt 0 10pt; page-break-inside: avoid; }
+  .warn { border: 1.5px solid #b45309; background: #fff7ed; padding: 8pt 10pt; border-radius: 4pt; margin: 8pt 0 10pt; page-break-inside: avoid; }
+  .q { border-left: 4px solid #0f766e; background: #f6f8f9; padding: 5pt 9pt; margin: 8pt 0 5pt; font-style: italic; page-break-after: avoid; }
+  .fill { background: #fff3a3; border: 1px dashed #a16207; padding: 0 3pt; border-radius: 2pt; font-weight: 600; }
+  .b { display: inline-block; font-size: 8pt; font-weight: 700; padding: 1pt 5pt; border-radius: 8pt; white-space: nowrap; }
+  .ok { background: #d1fae5; color: #065f46; }
+  .pre { background: #fef3c7; color: #92400e; }
+  .no { background: #fee2e2; color: #991b1b; }
+  .grp { background: #e0e7ff; color: #3730a3; }
+  .cover { padding-top: 40mm; page-break-after: always; }
+  .cover .tag { display: inline-block; background: #0f766e; color: #fff; font-size: 9pt; letter-spacing: .08em; padding: 2pt 8pt; border-radius: 3pt; margin-bottom: 14pt; }
+  .small { font-size: 9pt; color: #51606c; }
+  .pb { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="tag">RESPONSE TO FEEDBACK</div>
+  <h1>Response to the Professor's Feedback and Statement of the Current Status of Tuklas</h1>
+  <p class="sub">Tuklas: an AI-powered adaptive learning platform for Junior High School mathematics</p>
+  <p><b>Group 9</b> (Novio, et al.)<br>
+  Course / Professor: <span class="fill">[GROUP TO COMPLETE]</span><br>
+  Date: <span class="fill">[GROUP TO COMPLETE]</span></p>
+  <div class="box">
+    <b>In one paragraph.</b> Tuklas exists: it is a functional, full-stack web application (React front end, Express server, PostgreSQL database) at the <b>pre-pilot</b> stage. It has been built and checked with automated software tests only. It has <b>not</b> yet been used by students or teachers in a research setting, has <b>not</b> been validated by mathematics or educational-technology experts, and its AI features have <b>not</b> been evaluated with a live language model. This document separates what is built and tested from what is still a study task, answers each of the twelve points and the suggestions A to G, and marks in yellow the places only the group can complete.
+  </div>
+  <h3>How to read this document</h3>
+  <table>
+    <tr><td><span class="b ok">BUILT + SOFTWARE-TESTED</span></td><td>Implemented and checked by automated tests (in a test environment, with simulated students).</td></tr>
+    <tr><td><span class="b pre">BUILT, NOT TESTED WITH PEOPLE</span></td><td>Implemented, but not checked with real users, real devices, a live AI model or experts.</td></tr>
+    <tr><td><span class="b no">NOT BUILT</span></td><td>Not implemented. It is future work or must be done outside the platform.</td></tr>
+    <tr><td><span class="b grp">STUDY TASK</span></td><td>Research work for the group (evidence, permissions, instruments, analysis). Software cannot do it.</td></tr>
+    <tr><td><span class="fill">[GROUP TO COMPLETE]</span></td><td>Facts only the group knows or must still collect. They were deliberately left blank so that nothing is invented.</td></tr>
+  </table>
+  <p class="small">Every statement about the software was checked against the project's source code and its test records. The project is kept in a GitHub repository (dwightellema02-spec/TUKLAS-AI-BRILLIANT) with a verification report for each development phase.</p>
+</div>
+
+<h2>1. Status of Tuklas (the professor's third concern)</h2>
+<div class="q">"Clarify whether Tuklas is already an existing and functional platform or whether it is still a proposed system. If it exists, who developed it? What features are currently operational? Has it undergone testing?"</div>
+
+<h3>1.1 What Tuklas is today</h3>
+<p>Tuklas is an <b>existing, functional web application</b>. Students use it in a web browser on a phone or computer; teachers use it to manage classes and lessons. It has a database, user accounts with three roles (student, teacher, administrator), and the features listed in Section 2. It is at the <b>pre-pilot stage</b>: it is complete enough to be tried with a small class, but it has not yet been tried.</p>
+
+<h3>1.2 Who developed it</h3>
+<div class="warn"><b>Disclosure for the group to confirm.</b> The platform was developed by <span class="fill">[GROUP TO COMPLETE: name(s) of the developer(s) and their role]</span>. Most of the programming was carried out with the help of an AI coding assistant (Claude Code, by Anthropic) working under the developer's direction; the repository's change history records this. <span class="fill">[GROUP TO CONFIRM: wording, and whether this is acceptable under the course's rules on AI assistance]</span>. The group should be ready to explain which parts of the design (the feature choices, pedagogy, curriculum selection, mastery rules) are their own decisions.</div>
+
+<h3>1.3 What content it currently contains</h3>
+<ul>
+  <li>Grade 7 Mathematics, <b>Term 1, Weeks 1–6</b> of the DepEd MATATAG Grade 7 Mathematics budget of work supplied by the school: 6 lessons, 6 competencies, 17 skills and a bank of 180 questions (126 numeric-answer, 34 multiple-choice, 20 true/false).</li>
+  <li>Topics: polygons (naming, regular and irregular, convex and non-convex), angle pairs, interior and exterior angles of polygons, percentage increase and decrease, money problems with percentages (discounts, commission, sales tax, simple interest, budgets), and rates and unit rates.</li>
+  <li>Lesson text, examples and questions are original to the platform; every answer was computed by code and rechecked by tests.</li>
+  <li>This is <b>not</b> the integers-and-fractions scope used as an example in the feedback. Fractions are not built. An earlier integers unit (7 lessons) from the first development stage remains in the system, but it is not part of the Term 1 content and no teacher has reviewed it. Teachers can add further lessons themselves (including by uploading a Word or PDF lesson, which becomes an editable draft).</li>
+</ul>
+
+<h3>1.4 How it has been tested (and what that does and does not show)</h3>
+<ul>
+  <li>Automated software tests across 46 development phases, run with an in-memory store and on a real PostgreSQL database; browser tests that act as a teacher and a student on a laptop and a phone-sized screen; security probes of a production-mode server; and a full regression run after each phase. Examples: 69 checks on the tutor's safety against hostile student messages and hostile model output, 925 checks on the tutor's topic hints, 47 on privacy functions.</li>
+  <li>These tests show the software behaves as designed with <b>simulated</b> users and scripted AI models. They do <b>not</b> show that students learn more, that the feedback is pedagogically sound, or that a live AI model behaves well.</li>
+</ul>
+
+<h3>1.5 What has not been done</h3>
+<table>
+  <tr><th style="width:32%">Item</th><th>Status</th></tr>
+  <tr><td>Use by real students or teachers</td><td><span class="b no">NOT DONE</span> No pilot has taken place.</td></tr>
+  <tr><td>Expert validation (mathematics and educational-technology experts)</td><td><span class="b no">NOT DONE</span> <span class="b grp">STUDY TASK</span></td></tr>
+  <tr><td>Evaluation of the AI tutor with a live language model</td><td><span class="b no">NOT DONE</span> All AI tests used the built-in rule-based tutor or scripted stand-in models.</td></tr>
+  <tr><td>Teacher review of the Term 1 lessons and of the tutor's wording</td><td><span class="b no">NOT DONE</span></td></tr>
+  <tr><td>Review of the privacy notice by the school's data protection officer</td><td><span class="b no">NOT DONE</span> The notice is a template.</td></tr>
+  <tr><td>Voice tutor on real phones</td><td><span class="b pre">NOT TESTED ON REAL DEVICES</span></td></tr>
+  <tr><td>Online deployment</td><td><span class="b pre">READY, NOT YET DEPLOYED</span> A step-by-step hosting guide exists; the production image has not yet been built outside the test environment.</td></tr>
+</table>
+
+<h2 class="pb">2. Features of Tuklas</h2>
+<table>
+  <tr><th style="width:19%">Feature</th><th>What it does</th><th style="width:19%">Status</th></tr>
+  <tr><td><b>Curriculum and lessons</b></td><td>Grade, term, unit, competency, skill and lesson structure; lessons are taken in order, and a teacher can unlock a lesson for a class or one student. A lesson studio lets teachers write text, worked examples, checkpoints, practice, video links and summaries, and import a Word, PDF or text lesson as an editable draft (answer keys are never imported).</td><td><span class="b ok">BUILT + SOFTWARE-TESTED</span></td></tr>
+  <tr><td><b>Practice with instant feedback</b></td><td>Practice sets and checkpoint questions are graded on the server (answers are never sent to the student's browser), with hints and a review at the end.</td><td><span class="b ok">BUILT + SOFTWARE-TESTED</span></td></tr>
+  <tr><td><b>Question bank and Question Generator</b></td><td>Teachers write questions and link them to skills. The generator proposes draft questions from teacher-uploaded material; each must quote the source text, have a valid answer and pass a code check, and all are saved as <b>drafts for the teacher to review</b>. Nothing is published automatically.</td><td><span class="b pre">TESTED WITH SCRIPTED STAND-IN MODELS ONLY</span></td></tr>
+  <tr><td><b>AI tutor</b></td><td>A step-by-step, question-based tutor that plans its next move from the student's attempts (hint levels, worked example with different numbers, topic-specific nudges for the Term 1 topics). Default engine: built-in and rule-based (nothing leaves the server). Optional: an external model (Google Gemini). Safeguards: it must not state the answer (outputs are screened), defences against prompt-injection and unsafe output, rate limits, and teachers can switch it off.</td><td><span class="b ok">BUILT-IN ENGINE: SOFTWARE-TESTED</span><br><span class="b pre">LIVE MODEL: NOT EVALUATED</span></td></tr>
+  <tr><td><b>Voice tutor</b></td><td>Spoken questions and answers through the browser's speech features, with a spoken-mathematics normaliser.</td><td><span class="b pre">NOT TESTED ON REAL DEVICES</span></td></tr>
+  <tr><td><b>Mistake Analyzer</b></td><td>After practice, classifies the likely kind of error (for example conceptual misunderstanding, calculation, sign, prerequisite gap, possible carelessness), cites the attempts it is based on, and gives a confidence value. Using the tutor's knowledge of the common wrong values, it recognises a specific "usual slip" for 121 of the 126 numeric Term 1 questions; otherwise it gives only a general finding.</td><td><span class="b ok">RULES: SOFTWARE-TESTED</span><br><span class="b no">NOT VALIDATED BY EXPERTS</span></td></tr>
+  <tr><td><b>Mastery Engine</b></td><td>Rule-based mastery level per skill (not started, learning, developing, proficient, mastered) with the rule that produced it and the evidence; thresholds are in one configuration file (Section 4D).</td><td><span class="b ok">BUILT + SOFTWARE-TESTED</span><br><span class="b no">THRESHOLDS NOT VALIDATED</span></td></tr>
+  <tr><td><b>Adaptive recommendations</b></td><td>Suggests the next activity (easier, same, harder, or revisit a prerequisite) from evidence by fixed rules, with an explanation; teachers can override a recommendation, and overrides are recorded.</td><td><span class="b ok">BUILT + SOFTWARE-TESTED</span></td></tr>
+  <tr><td><b>Assessments (pre-test and post-test)</b></td><td>Teachers build timed tests from their own questions, pair a pre-test with a post-test, and see results by student and skill.</td><td><span class="b ok">BUILT + SOFTWARE-TESTED</span></td></tr>
+  <tr><td><b>Teacher dashboard and analytics</b></td><td>Class overview, who needs help and why, difficult skills, recommendations with the evidence behind them, and tutor conversations flagged by safety screens.</td><td><span class="b ok">BUILT + SOFTWARE-TESTED</span></td></tr>
+  <tr><td><b>Research analytics and export</b></td><td>Four metrics (Accuracy, Understanding, Application, Consistency; Section 4D), a descriptive pre/post comparison, and CSV exports in which names are replaced by a code unless the teacher chooses otherwise (the choice is logged). <b>It does not run significance tests.</b></td><td><span class="b ok">BUILT + SOFTWARE-TESTED</span></td></tr>
+  <tr><td><b>Classes and accounts</b></td><td>Classes with join codes, assignments, teacher accounts created by an administrator, student self-registration, password rules, session revocation, an audit log.</td><td><span class="b ok">BUILT + SOFTWARE-TESTED</span></td></tr>
+  <tr><td><b>Privacy tools</b></td><td>Privacy notice and acceptance, a guardian-consent record (which can keep the AI tutor closed until consent is recorded), download of one's own data, erasure of an account, and a retention tool that deletes old tutor conversations once the administrator schedules it (Section 5).</td><td><span class="b ok">BUILT + SOFTWARE-TESTED</span><br><span class="b no">NOT REVIEWED BY A DPO</span></td></tr>
+  <tr><td><b>Operations</b></td><td>Database migrations, nightly backups, health and readiness checks, an alerting script, and hosting guides.</td><td><span class="b ok">BUILT + SOFTWARE-TESTED</span><br><span class="b pre">NOT YET DEPLOYED</span></td></tr>
+</table>
+
+<h2 class="pb">3. Answers to the twelve points</h2>
+
+<div class="q">First: "Establish the actual research problem through evidence."</div>
+<p><b>Response.</b> The proposal's statement that many Junior High School students struggle because teachers cannot always give immediate, individual feedback is, as written, <b>not yet supported by evidence</b>. The platform cannot supply that evidence; it only becomes a data source after a pilot. The group will substantiate the problem from three sources: (a) published literature on the timing of feedback and on persistent mathematical misconceptions <span class="fill">[GROUP TO COMPLETE: references]</span>; (b) documented assessment results from the intended school or from national and international assessments <span class="fill">[GROUP TO COMPLETE: source, year, figures]</span>; and (c) interviews or classroom observations with Grade 7 mathematics teachers <span class="fill">[GROUP TO COMPLETE: how many teachers, instrument, date, or "not yet done"]</span>. Until then the problem will be written as a concern drawn from the literature, not as an observed fact.</p>
+
+<div class="q">Second: "Narrow the mathematical competencies covered by your study."</div>
+<p><b>Response.</b> Agreed. The study will be limited to <b>Grade 7</b> and to a small set of competencies. The platform currently contains Grade 7 Term 1 (Weeks 1–6), so a realistic scope would be one or two of its topic clusters: polygons and angles; percentage change and money problems; or rates. Integers and fractions, the professor's example, are not built, so choosing them would add development work. Final choice: <span class="fill">[GROUP TO COMPLETE: topics, based on the confirmed school, class and the school's current pacing]</span>.</p>
+
+<div class="q">Third: "Clarify the actual status of Tuklas."</div>
+<p><b>Response.</b> See Section 1 (status, developer, tested and untested features) and Section 2 (the feature list with a status label for each feature).</p>
+
+<div class="q">Fourth: "Reconsider the scope of your research design."</div>
+<p><b>Response.</b> Developmental research and mixed-methods research serve different purposes, and the group accepts that its design has several phases (Section 4C). The software-development phase has largely reached a prototype; the phases that need schools, experts and participants have not started and are the main feasibility risk. The group will state which phases are within its time and resources: <span class="fill">[GROUP TO COMPLETE: planned phases, schedule, available people]</span>. If time is short, the group may limit the study to development, expert validation and a small pilot, and say so openly.</p>
+
+<div class="q">Fifth: "Improve the Statement of the Problem."</div>
+<p><b>Response.</b> Accepted. The group will adopt the revised questions on design requirements, development, expert evaluation, mastery before and after, the pre/post difference, experiences, and improvements (Section 4B), and will separate evaluation of Tuklas as an educational product (accuracy, appropriateness, functionality, usability, privacy safeguards) from its possible effect on students' mastery.</p>
+
+<div class="q">Sixth: "Strengthen the evaluation of the AI-generated feedback."</div>
+<p><b>Response.</b> Agreed that accuracy must be investigated, not assumed. What exists now: expected answers are computed or checked by code; the tutor's output is screened so it does not state the answer; mistake findings cite the attempts they come from and carry a confidence value; the AI tutor can be switched off, and conversations flagged by the safety screens are visible to the teacher; and an evaluation script can replay simulated student conversations so that the replies can be scored. What does <b>not</b> exist yet: any review by mathematics educators, a measure of how often the Mistake Analyzer is right, and a way for a teacher to approve each tutor reply before the student sees it (replies are immediate). The group will validate the feedback with a panel of qualified mathematics educators using the rubric in Section 4E, will report errors as well as successes, and will treat every AI diagnosis as a <b>hypothesis</b> about a misconception until it is supported by the student's own work or explanation. Panel: <span class="fill">[GROUP TO COMPLETE: number, qualifications, how recruited]</span>.</p>
+
+<div class="q">Seventh: "Clarify how mathematics mastery will be measured."</div>
+<p><b>Response.</b> Section 4D gives the definition the software currently uses for each indicator. These are design choices that have not been validated. The group agrees that Tuklas must not be the only evaluator of its own effectiveness: the main outcome will be an <b>independently developed or validated mathematics test</b>, given in the same way before and after the intervention and scored outside Tuklas <span class="fill">[GROUP TO COMPLETE: name or source of the test, who validated it]</span>. Tuklas's internal indicators will be reported as secondary, descriptive measures, and their agreement with the independent test can be examined. The software does <b>not</b> currently combine the four indicators into one mastery score; the group must either report them separately or define and justify a composite.</p>
+
+<div class="q">Eighth: "Reconsider how you will establish effectiveness."</div>
+<p><b>Response.</b> Agreed. The platform's own pre/post comparison is deliberately descriptive (differences in average scores) and makes no causal claim; it does not compute a significance test. The significance test (for example a paired-samples test appropriate to the data) will be run by the group in statistical software on the exported, pseudonymised data. The group will either include a comparison group <span class="fill">[GROUP TO COMPLETE: feasible or not, and how]</span> or state plainly that a one-group pretest–posttest design cannot rule out other explanations (regular instruction, practice effects, prior learning) and will limit its claims accordingly.</p>
+
+<div class="q">Ninth: "Clarify how qualitative data will be collected and analyzed."</div>
+<p><b>Response.</b> The group agrees that an AI-generated diagnosis is not evidence of what a student was thinking. Qualitative evidence will come from students' own explanations (interviews, think-aloud or open-ended written solutions) and from teacher interviews on the accuracy and usefulness of the feedback <span class="fill">[GROUP TO COMPLETE: protocol, sample, interview guide]</span>. Responses will be coded by thematic analysis <span class="fill">[GROUP TO COMPLETE: coding procedure, who codes, how disagreement is resolved]</span> and integrated with the quantitative results (for example by comparing the platform's diagnoses with what students say). With consent, students' typed messages to the tutor can also be exported from the platform as additional material.</p>
+
+<div class="q">Tenth: "Address ethical considerations and data privacy."</div>
+<p><b>Response.</b> See Section 5. In short: the platform has privacy features, but permissions and consent are study tasks that have not been done, and the choice of AI engine decides whether any student text leaves the server.</p>
+
+<div class="q">Eleventh: "Strengthen the verification of your research policy references."</div>
+<p><b>Response.</b> The group will verify the exact titles, dates and provisions of the cited documents from official sources and replace outdated agenda periods with current ones <span class="fill">[GROUP TO COMPLETE: verified citations for CHED, DepEd Order No. 39, s. 2016, and RTU]</span>. The software cannot verify these. On the SDGs, to be checked against the official United Nations text: Target 4.1 concerns quality primary and secondary education with relevant and effective learning outcomes, which fits a study of Grade 7 mastery; Target 4.c concerns the supply of qualified teachers, so the group should either justify the link to teacher-supervised AI or drop it.</p>
+
+<div class="q">Twelfth: "Improve the academic writing and presentation of your proposal."</div>
+<p><b>Response.</b> Accepted. The group will use cautious wording until the platform is validated, include a reference list, use consistent terms, and present one final title. Examples of claims to retire:</p>
+<table>
+  <tr><th style="width:36%">Avoid</th><th>Use instead</th></tr>
+  <tr><td>"Tuklas is classroom-ready."</td><td>"Tuklas is a functional prototype that has been tested with software tests and has not yet been validated with students, teachers or experts."</td></tr>
+  <tr><td>"Tuklas can diagnose every incorrect answer."</td><td>"Tuklas attempts to classify the likely type of error from a student's responses. Its findings are hypotheses. Specific common slips are recognised for most numeric Term 1 questions; other answers receive only general findings."</td></tr>
+  <tr><td>"Tuklas improves students' mastery."</td><td>"This study examines whether using Tuklas is associated with changes in mastery, and acknowledges the limits of the design."</td></tr>
+  <tr><td>"The AI gives accurate feedback."</td><td>"The accuracy of the AI-supported feedback is evaluated by experts using a rubric."</td></tr>
+</table>
+
+<h2 class="pb">4. Alignment with the specific suggestions (A to G)</h2>
+
+<h3>A. Research title</h3>
+<p>Tuklas is functional but unvalidated, and the study includes expert validation, a pilot and refinement. The recommended developmental title therefore fits the real status: <i>"Development and Evaluation of Tuklas: A Teacher-Supervised AI-Powered Adaptive Learning Platform for Grade 7 Mathematics"</i>. The alternative title (evaluation of an already functional platform) would be appropriate only if validation were not part of the study. Final title and scope: <span class="fill">[GROUP TO COMPLETE]</span>.</p>
+
+<h3>B. Statement of the Problem: how each question can be answered</h3>
+<table>
+  <tr><th style="width:5%">#</th><th style="width:33%">Question (as suggested)</th><th>Evidence source</th><th style="width:20%">What Tuklas provides</th></tr>
+  <tr><td>1</td><td>Learning difficulties and feedback needs of the target students</td><td><span class="b grp">STUDY TASK</span> Teacher interviews, existing assessment results, a diagnostic test.</td><td>Nothing before the pilot.</td></tr>
+  <tr><td>2</td><td>Design requirements and features</td><td><span class="b grp">STUDY TASK</span> Derived from question 1 and the literature.</td><td>The feature list in Section 2 as the starting design.</td></tr>
+  <tr><td>3</td><td>How Tuklas is developed to give teacher-supervised, personalised feedback</td><td>Development documentation.</td><td>Source code and a verification report for each phase.</td></tr>
+  <tr><td>4</td><td>Expert evaluation: accuracy, appropriateness, functionality, usability, privacy</td><td><span class="b grp">STUDY TASK</span> Expert panel with a rubric and a usability questionnaire <span class="fill">[GROUP TO COMPLETE: instrument]</span>.</td><td>A working system to evaluate and test logs; the rubric is in 4E.</td></tr>
+  <tr><td>5</td><td>Mastery before and after</td><td>Independent test scores (main) plus Tuklas indicators (secondary).</td><td>Pre/post tests and a pseudonymised CSV export.</td></tr>
+  <tr><td>6</td><td>Significance of the pre/post difference</td><td>Paired test in statistical software.</td><td>Export only; <b>no significance test inside Tuklas</b>.</td></tr>
+  <tr><td>7</td><td>Students' and teachers' experiences</td><td><span class="b grp">STUDY TASK</span> Interviews, reflections, open-ended responses.</td><td>With consent, tutor conversation transcripts.</td></tr>
+  <tr><td>8</td><td>Recommended improvements</td><td>Integration of findings.</td><td>A teacher-visible record of difficult skills and flagged conversations.</td></tr>
+</table>
+
+<h3>C. Research framework: what is done</h3>
+<table>
+  <tr><th style="width:22%">Phase</th><th>Activity</th><th style="width:24%">Status</th></tr>
+  <tr><td>1. Needs assessment</td><td>Literature, teacher interviews, assessment data, diagnostic test.</td><td><span class="b grp">STUDY TASK</span> Not done.</td></tr>
+  <tr><td>2. Design and development</td><td>Design requirements; build the platform.</td><td><span class="b ok">PROTOTYPE BUILT</span> Requirements from phase 1 may require changes.</td></tr>
+  <tr><td>3. Expert validation</td><td>Experts rate accuracy, appropriateness, functionality, usability, privacy using a rubric.</td><td><span class="b no">NOT DONE</span></td></tr>
+  <tr><td>4. Revision</td><td>Fix problems found in phase 3.</td><td><span class="b no">NOT DONE</span> The platform is maintained, so changes are feasible.</td></tr>
+  <tr><td>5. Pilot implementation</td><td>A small class uses Tuklas for a set period; pre- and post-test; interviews.</td><td><span class="b no">NOT DONE</span> Needs permissions (Section 5) and hosting.</td></tr>
+  <tr><td>6. Evaluation</td><td>Quantitative and qualitative analysis; integration; recommendations.</td><td><span class="b grp">STUDY TASK</span></td></tr>
+</table>
+
+<h3>D. Operational definitions of the four indicators (as implemented)</h3>
+<p>The software reports Understanding, Accuracy, Application and Consistency (research metrics, version RESEARCH_V1) and, separately, a rule-based mastery level (version MASTERY_V1). The weights and thresholds are <b>design choices that have not been validated</b>; the group must justify them, adjust them, or replace them. Each metric reports "insufficient evidence" below a minimum number of attempts.</p>
+<table>
+  <tr><th style="width:14%">Indicator</th><th style="width:21%">Suggested meaning (professor)</th><th>How Tuklas currently computes it</th><th style="width:21%">Gap</th></tr>
+  <tr><td><b>Accuracy</b></td><td>Correctness of computations and solutions.</td><td>Correct attempts divided by valid attempts (at least 3 attempts).</td><td>Counts correct final answers only, not the quality of the working.</td></tr>
+  <tr><td><b>Understanding</b></td><td>Ability to explain concepts and recognise relationships.</td><td>A weighted score (at least 4 attempts): 50% accuracy without hints, 20% checkpoint score, 15% variety of question formats, 15% a reduction when the Mistake Analyzer reports conceptual misunderstandings or prerequisite gaps.</td><td>Inferred from answers; it does not measure explanation. Needs open-ended explanations or interviews.</td></tr>
+  <tr><td><b>Application</b></td><td>Use of concepts in contextual or unfamiliar problems.</td><td>Accuracy on questions labelled "application" or "higher-order", with higher-order items weighted 1.5 (at least 2 such attempts). The mastery rules use item types (numeric, equation, ordering, matching, hard) as a proxy.</td><td>Depends on the cognitive-level labels given to questions, which no teacher has verified.</td></tr>
+  <tr><td><b>Consistency</b></td><td>Stability of performance across assessments.</td><td>From the spread of accuracy across segments of the attempt history and the longest correct streak, scaled by overall accuracy (at least 5 attempts). The mastery rules use a separate composite: run stability 35%, recent-versus-overall agreement 25%, independence from hints 20%, easy-versus-medium gap 20%.</td><td>Two slightly different definitions exist; the group should choose one.</td></tr>
+</table>
+<p><b>Levels.</b> Research metrics: low (below 0.60), developing (0.60–0.74), proficient (0.75–0.89), high (0.90 and above). Mastery levels, with the thresholds kept in one configuration file: <i>learning</i> (fewer than 5 attempts, or overall accuracy below 60%, or recent accuracy below 50%); <i>developing</i> (at least 5 attempts and what remains, including a drop in recent accuracy after good earlier performance); <i>proficient</i> (at least 10 attempts, overall accuracy of at least 80%, recent accuracy of at least 70%, consistency of at least 0.55, no repeated conceptual misunderstanding); <i>mastered</i> (at least 15 attempts, overall and recent accuracy of at least 85%, consistency of at least 0.75, at least 2 question formats, at least 60% on hard questions if any were attempted, and no repeated conceptual misunderstanding or sign error). The application score is reported with the evidence but is <b>not</b> currently required by these rules, although the configuration file defines a threshold for it.</p>
+<p><b>Overall score.</b> The software does <b>not</b> calculate one overall mastery score from the four indicators. The group should report them separately or define a composite with a stated rationale.</p>
+
+<h3>E. Validation of AI-generated feedback</h3>
+<table>
+  <tr><th style="width:17%">Criterion</th><th style="width:25%">Evaluation question</th><th>What Tuklas provides now</th><th style="width:24%">Gap</th></tr>
+  <tr><td>Mathematical accuracy</td><td>Is the AI-generated solution mathematically correct?</td><td>Correct answers come from code and are rechecked by tests; the tutor is blocked from stating the answer; a worked example uses different numbers.</td><td>The correctness of free-text explanations from a live model is not checked by code. Experts must rate a sample.</td></tr>
+  <tr><td>Misconception identification</td><td>Does it correctly identify the likely error?</td><td>Findings cite attempts, have a confidence value, and use the known-slip patterns.</td><td>Agreement with experts has not been measured.</td></tr>
+  <tr><td>Clarity</td><td>Is it understandable to the grade level?</td><td>Short, one-question-at-a-time replies in a fixed style.</td><td>Expert and student rating needed.</td></tr>
+  <tr><td>Instructional appropriateness</td><td>Does it guide without creating new misconceptions?</td><td>Hint levels, question-first style, and a rule that the answer is not given.</td><td>Expert rating needed; a live model has not been evaluated.</td></tr>
+  <tr><td>Teacher supervision</td><td>Can teachers review, correct or reject feedback?</td><td>A teacher can switch the tutor off, read mistake findings, see conversations flagged by safety screens, and override adaptive recommendations (recorded).</td><td>A teacher cannot approve each live tutor reply before the student sees it, and there is no "reject this finding" button.</td></tr>
+  <tr><td>Reliability</td><td>Are responses consistent across similar cases?</td><td>A scripted evaluation replays simulated conversations and reports rule violations, repetition and fallback rate.</td><td>Not yet run with a live model.</td></tr>
+</table>
+<p>Possible additions if the study needs them: an expert rating form and a review queue inside the platform. They are <span class="b no">NOT BUILT</span>.</p>
+
+<h3>F. Policy and SDG alignment</h3>
+<p>The group will follow the suggested revisions: verify NHERA's applicability and more recent CHED priorities, name the specific Teaching and Learning provisions of DepEd Order No. 39, s. 2016, verify the exact wording of the RTU agenda and whether newer priorities apply, emphasise SDG Target 4.1, and justify or drop Target 4.c <span class="fill">[GROUP TO COMPLETE]</span>.</p>
+
+<h3>G. Background of the study</h3>
+<p>The suggested background is a draft and is accepted as a structure. It still needs scholarly references and evidence of the problem in the intended setting <span class="fill">[GROUP TO COMPLETE]</span>. Nothing in the software can replace this evidence.</p>
+
+<h2 class="pb">5. Ethics and data privacy (the professor's tenth concern)</h2>
+<table>
+  <tr><th style="width:22%">Requirement</th><th>What Tuklas provides</th><th style="width:30%">What the group must obtain or decide</th></tr>
+  <tr><td>Permissions and consent</td><td>A guardian-consent record that teachers or administrators set per student, which can keep the AI tutor closed until it is recorded. A privacy notice shown at registration and accepted before use. These record consent; they do not collect or verify signatures.</td><td><span class="b grp">STUDY TASK</span> Institutional and school permission, ethics review, parental consent and student assent forms <span class="fill">[GROUP TO COMPLETE: status]</span>.</td></tr>
+  <tr><td>Protecting responses and records</td><td>Passwords are stored hashed; role-based access (a student sees only their own data, a teacher only their own classes); sign-in throttling; an audit log; nightly database backups; HTTPS when hosted.</td><td>Where the data will be hosted and who administers it <span class="fill">[GROUP TO COMPLETE]</span>.</td></tr>
+  <tr><td>Student rights</td><td>A student can download their data; an administrator can export or permanently erase an account; a retention tool, which the administrator must schedule, deletes tutor conversations older than 365 days by default (adjustable); research exports use a code instead of a name unless a teacher chooses otherwise, and that choice is logged.</td><td>A retention period matching the research protocol; how erasure requests are handled <span class="fill">[GROUP TO COMPLETE]</span>.</td></tr>
+  <tr><td>External AI service</td><td>The default tutor is built in and <b>sends no student text outside the server</b>. If the optional external model (Google Gemini) is switched on, what the student types, their answers and the question text are sent to that service; the student's name, email and account number are not (tested). The privacy notice states which mode is on.</td><td>Decide which mode the study uses. If the external model is used, review its terms, obtain approval and consent for this transfer, and tell participants. The tutor is currently only tested in the built-in mode.</td></tr>
+  <tr><td>Legal review</td><td>The notice is a template that describes what the software does.</td><td><span class="b grp">STUDY TASK</span> Review by the school or university's data protection officer under the Data Privacy Act of 2012 (Republic Act No. 10173). This document is not legal advice.</td></tr>
+</table>
+<p><b>Responsible AI use.</b> In the design, the AI is limited to supporting, not replacing, the teacher: the teacher controls whether the tutor is on, sees the evidence behind recommendations, and can override them. The study will report the AI's errors as well as its successes.</p>
+
+<h2>6. What Tuklas cannot yet claim, and the group's checklist</h2>
+<div class="warn">
+  <b>Tuklas cannot yet claim</b> that it is classroom-ready; that its feedback is accurate, clear or appropriate; that it correctly diagnoses students' misconceptions; that it improves mastery; or that it is safe with a live AI model. Each requires the evidence listed below.
+</div>
+<table>
+  <tr><th style="width:5%">☐</th><th>Task for the group</th></tr>
+  <tr><td>☐</td><td>Substantiate the research problem with literature, assessment data and teacher input (point 1).</td></tr>
+  <tr><td>☐</td><td>Fix the scope: grade, topics and competencies (point 2, suggestion A).</td></tr>
+  <tr><td>☐</td><td>Confirm the development disclosure and who built what (Section 1.2).</td></tr>
+  <tr><td>☐</td><td>Choose the title and the research design; state limits openly (points 4, 8, 12).</td></tr>
+  <tr><td>☐</td><td>Obtain an independent or validated mathematics test (point 7).</td></tr>
+  <tr><td>☐</td><td>Recruit an expert panel and prepare the rubric and a usability instrument (point 6, suggestion E).</td></tr>
+  <tr><td>☐</td><td>Prepare interviews and a coding plan (point 9).</td></tr>
+  <tr><td>☐</td><td>Obtain permissions, consent and assent; decide the AI mode; arrange the data protection review (point 10).</td></tr>
+  <tr><td>☐</td><td>Verify every policy citation and SDG target from official sources (point 11).</td></tr>
+  <tr><td>☐</td><td>Host the platform and have teachers review the Term 1 content before any pilot.</td></tr>
+</table>
+
+<h2>Appendix: where the evidence is</h2>
+<ul>
+  <li><b>Feature and test records:</b> a verification report for each development phase, kept in the repository's <i>docs</i> folder (for example the tutor safety report, the privacy report, the mistake-analyzer report, the pre-deployment risk report).</li>
+  <li><b>Indicator definitions:</b> <i>src/lib/research</i> (research metrics and thresholds) and <i>src/config/mastery-learning.ts</i> (mastery rules).</li>
+  <li><b>Privacy practices:</b> <i>docs/PRIVACY.md</i>.</li>
+  <li><b>Hosting steps:</b> <i>docs/DEPLOY_RENDER_NEON.md</i> and <i>docs/RUNBOOK.md</i>.</li>
+  <li>All results quoted here come from automated tests with simulated users and are not research findings.</li>
+</ul>
+<p class="small">Prepared from the project's source code and test records. Items in yellow must be completed or confirmed by the group before this document is submitted.</p>
+
+</body>
+</html>
