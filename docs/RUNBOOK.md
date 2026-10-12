@@ -43,6 +43,8 @@ For the person who looks after the server. Everything here is exercised by tests
 | `API_RATE_LIMIT_SIGNED_IN_IP_PER_MINUTE` (20000) | Signed-in requests, per shared address (a whole school is one address) |
 | `AI_PROVIDER` / `GEMINI_API_KEY` | `local` = built-in rule-based tutor; `gemini` = external model (**not tested with a live model**) |
 | `DOCUMENT_STORAGE_DIR` | Must be a persistent volume |
+| `DB_RETRY_BUDGET_MS` (12000) | How long a request keeps trying when the database cannot be reached (a sleeping hosted database, a restart). 0 turns it off |
+| `DB_CONNECTION_LIMIT` (5), `DB_MAX_IDLE_CONNECTION_SECONDS` (120) | Database pool size and how long an idle connection is kept (added to `DATABASE_URL` unless it already sets `connection_limit` / `max_idle_connection_lifetime`). A larger school server with its own PostgreSQL can raise the limit |
 | `SCHOOL_NAME`, `PRIVACY_CONTACT_EMAIL` | Named in the privacy notice shown to students (see `docs/PRIVACY.md`) |
 | `REQUIRE_PRIVACY_ACCEPTANCE` (on in production) | Accounts must accept the notice before using anything |
 | `REQUIRE_GUARDIAN_CONSENT` (off) | The AI tutor stays closed to a student until a teacher records guardian consent |

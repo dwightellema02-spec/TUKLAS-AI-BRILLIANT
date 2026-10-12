@@ -37,5 +37,12 @@ Everything is done in a web browser, on a laptop or a phone. No Linux, no Docker
 * **Backups:** Neon keeps history; also take your own copies as in `docs/RUNBOOK.md` section 5 (run `scripts/backup-db.sh` from any computer that has PostgreSQL tools, with the Neon string as `DATABASE_URL`).
 * **Updating:** push to the deployed branch; Render rebuilds, the app applies new migrations on start. Take a backup first.
 
-## 6. The Gemini tutor (later)
+## 6. Before every class (free plan checklist)
+1. **10 minutes before:** open `https://YOUR-ADDRESS/api/ready`. The first visit after a pause can take up to a minute while Render wakes the app (nothing to do but wait). You should then see `{"ready":true}`.
+2. Open the site, sign in as the teacher and open the class page once. This also wakes the Neon database (a few seconds).
+3. If students see "The server is waking up or reconnecting", tell them to wait: the page retries by itself and their work is not lost. If it lasts more than a minute, check `/api/ready`; if it says `false`, see `docs/RUNBOOK.md` section 9.
+4. After class nothing needs doing. The app sleeps by itself after 15 minutes without visitors and the database after 5 minutes.
+5. An uptime service pointed at `/api/ready` every 5 minutes keeps both awake during school hours (and tells you if something breaks).
+
+## 7. The Gemini tutor (later)
 Only after the live evaluation passes: in Render → Environment add `GEMINI_API_KEY` and change `AI_PROVIDER` to `gemini`.

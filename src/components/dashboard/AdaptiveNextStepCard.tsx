@@ -38,7 +38,7 @@ export function AdaptiveNextStepCard({
             size="sm"
             onClick={onRefresh}
             disabled={refreshing}
-            className="text-[11px] h-7 px-2 text-slate-500 hover:text-slate-900 gap-1.5"
+            className="text-[11px] h-9 sm:h-7 px-3 sm:px-2 text-slate-500 hover:text-slate-900 gap-1.5"
           >
             <RefreshCw className={`w-3 h-3 ${refreshing ? "animate-spin" : ""}`} />
             <span>Recalculate</span>
