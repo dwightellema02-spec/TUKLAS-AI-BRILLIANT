@@ -93,9 +93,12 @@ export function withConnectionSettings(url: string | undefined, env: NodeJS.Proc
     const limit = Number(env.DB_CONNECTION_LIMIT);
     const defaults: Record<string, string> = {
       connect_timeout: "15",
-      connection_limit: String(Number.isFinite(limit) && limit >= 1 && limit <= 50 ? limit : 5),
+      // many short-lived instances run at once, so each keeps a small pool (3, not 1: a request that runs queries in parallel, or inside a transaction, would wait on itself)
+      connection_limit: String(Number.isFinite(limit) && limit >= 1 && limit <= 50 ? limit : env.VERCEL ? 3 : 5),
       max_idle_connection_lifetime: String(Number.isFinite(idle) && idle >= 1 && idle <= 3600 ? idle : 120),
     };
+    // Neon's pooled address (host contains "-pooler") is PgBouncer, which cannot keep prepared statements
+    if (/-pooler\./.test(u.hostname)) defaults.pgbouncer = "true";
     for (const [k, v] of Object.entries(defaults)) if (!u.searchParams.has(k)) u.searchParams.set(k, v);
     return u.toString();
   } catch {

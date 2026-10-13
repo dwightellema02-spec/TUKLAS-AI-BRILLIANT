@@ -198,14 +198,14 @@ export const ClassroomService = {
     if (student.role !== "STUDENT") throw new ClassroomError("Only student accounts can join a class with a code.", 403);
 
     const keys = [`join-user:${student.userId}`, `join-ip:${clientIp}`];
-    const gate = checkLoginThrottle(keys);
+    const gate = await checkLoginThrottle(keys);
     if (!gate.allowed) throw new ClassroomError("Too many attempts. Please wait a few minutes and try again.", 429);
 
     const code = normalizeJoinCode(rawCode);
     const cls = code ? await ClassroomRepo.getByJoinCode(code) : null;
     // One generic failure for: malformed, unknown, switched-off, or archived. Never reveals which.
     if (!cls || !cls.joinCodeActive || cls.archivedAt) {
-      recordLoginFailure(keys);
+      await recordLoginFailure(keys);
       throw new ClassroomError("That class code is not valid. Check it with your teacher.", 404);
     }
     const count = (await ClassroomRepo.listEnrollments([cls.id])).length;
@@ -213,7 +213,7 @@ export const ClassroomService = {
     if (!existing && count >= MAX_STUDENTS_PER_CLASS) throw new ClassroomError("This class is full. Ask your teacher.", 409);
 
     await ClassroomRepo.addEnrollment(cls.id, student.userId, "JOIN_CODE");
-    clearLoginFailures([keys[0]]);
+    await clearLoginFailures([keys[0]]);
     const teacher = await dbService.findUserById(cls.teacherId);
     return this.toView({ ...cls, joinCode: null }, count + (existing ? 0 : 1), teacher?.name);
   },

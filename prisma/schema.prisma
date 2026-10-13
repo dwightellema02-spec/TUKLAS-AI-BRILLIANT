@@ -2,7 +2,9 @@
 // Phase 2: Database + Authentication Foundation
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // "rhel-openssl-3.0.x" is the engine Vercel's serverless functions run on (Phase 48); "native" is this machine.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
@@ -1167,4 +1169,20 @@ model AuditLog {
   @@index([createdAt])
   @@index([actorId])
   @@index([action])
+}
+
+// -------------------------------------------------------------
+// PHASE 48: SHARED RATE-LIMIT EVENTS (serverless hosts have no shared memory between instances)
+// One row per counted event (a failed sign-in, a tutor question, an upload) or, with `until` set, a temporary block.
+// Only used when DURABLE_RATE_LIMITS is on (automatic on Vercel); everywhere else the same limits are kept in memory.
+// -------------------------------------------------------------
+
+model RateEvent {
+  id    String    @id @default(uuid())
+  key   String
+  at    DateTime  @default(now())
+  until DateTime?
+
+  @@index([key, at])
+  @@index([at])
 }

@@ -1,0 +1,10 @@
+storage
+data
+eval-output
+docs
+backups
+node_modules
+.env*
+Dockerfile
+docker-compose.yml
+render.yaml
