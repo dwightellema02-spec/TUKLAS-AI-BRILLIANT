@@ -8,8 +8,11 @@ export function solveNumeric(p: string): number | undefined {
   const n = nums(p);
   let m: RegExpMatchArray | null;
   // Phase 49 questions (Week 1 exemplar: angle measures of regular polygons, equal sides)
-  if (/Each interior angle of a regular (pentagon|octagon) measures how many degrees/.test(p)) return /pentagon/.test(p) ? 540 / 5 : 1080 / 8;
-  if (/ABCDE is a regular pentagon and side BC is \d+ cm\. How long is side AE/.test(p)) return n[0];
+  if ((m = p.match(/Each interior angle of a regular (pentagon|hexagon|octagon|nonagon|decagon|12-sided polygon) measures how many degrees/))) {
+    const sides = ({ pentagon: 5, hexagon: 6, octagon: 8, nonagon: 9, decagon: 10, "12-sided polygon": 12 } as Record<string, number>)[m[1]];
+    return ((sides - 2) * 180) / sides;
+  }
+  if (/is a regular \w+ and side \w+ is \d+ cm\. How long is side/.test(p)) return n[0];
   // Phase 49 questions (from the Week 5 exemplar topics): original price from a sale price, the principal and the rate in simple interest
   if (/is on sale for ₱[\d,]+ after a \d+% discount\. What was its original price/.test(p)) return n[0] / (1 - n[1] / 100);
   if (/pays ₱[\d,]+ simple interest after \d+ years at \d+% per year\. What principal/.test(p)) return n[0] / ((n[2] / 100) * n[1]);
