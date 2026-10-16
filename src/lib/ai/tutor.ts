@@ -2,6 +2,7 @@
 
 import { normalizeSpokenMath } from "../voice/spoken-math";
 import { dbService } from "../db";
+import { rateHit, resetMemoryRateStore } from "../rate-store";
 import { buildAITutorContext } from "./context";
 import { buildTutorSystemPrompt, buildTutorUserPrompt } from "./prompts";
 import { getAIProvider, LocalTutorEngine } from "./provider";
@@ -24,13 +25,7 @@ import { realizePlan } from "./conversation/realizer";
 import { coachFor } from "./conversation/coaching";
 import type { ConversationState, ParsedProblem, ResponsePlan } from "./conversation/types";
 
-interface RateLimitRecord {
-  count: number;
-  resetAt: number;
-}
-
-// In-memory sliding window rate-limiter per student
-const rateLimitMap = new Map<string, RateLimitRecord>();
+// Student request limit. Counted by src/lib/rate-store.ts: in memory on one server, in the shared database on a serverless host (Phase 48).
 const MAX_REQUESTS_PER_MINUTE = 20;
 const WINDOW_DURATION_MS = 60 * 1000;
 
@@ -41,44 +36,18 @@ export class AITutorService {
   /**
    * Check and increment rate limit for a student
    */
-  static checkRateLimit(studentId: string): { allowed: boolean; remaining: number; resetInSeconds: number } {
-    const now = Date.now();
-    const record = rateLimitMap.get(studentId);
-
-    if (!record || now > record.resetAt) {
-      rateLimitMap.set(studentId, { count: 1, resetAt: now + WINDOW_DURATION_MS });
-      return {
-        allowed: true,
-        remaining: MAX_REQUESTS_PER_MINUTE - 1,
-        resetInSeconds: Math.ceil(WINDOW_DURATION_MS / 1000),
-      };
-    }
-
-    if (record.count >= MAX_REQUESTS_PER_MINUTE) {
-      return {
-        allowed: false,
-        remaining: 0,
-        resetInSeconds: Math.max(1, Math.ceil((record.resetAt - now) / 1000)),
-      };
-    }
-
-    record.count += 1;
-    return {
-      allowed: true,
-      remaining: MAX_REQUESTS_PER_MINUTE - record.count,
-      resetInSeconds: Math.max(1, Math.ceil((record.resetAt - now) / 1000)),
-    };
+  static async checkRateLimit(studentId: string): Promise<{ allowed: boolean; remaining: number; resetInSeconds: number }> {
+    const r = await rateHit(`tutor:${studentId}`, MAX_REQUESTS_PER_MINUTE, WINDOW_DURATION_MS);
+    return r.ok
+      ? { allowed: true, remaining: MAX_REQUESTS_PER_MINUTE - r.count, resetInSeconds: Math.ceil(WINDOW_DURATION_MS / 1000) }
+      : { allowed: false, remaining: 0, resetInSeconds: r.retryAfterSeconds };
   }
 
   /**
-   * Reset rate limit state (useful after test suites or administrative resets)
+   * Reset rate limit state (useful after test suites or administrative resets). Memory mode only: tests run without the shared table.
    */
   static resetRateLimit(studentId?: string): void {
-    if (studentId) {
-      rateLimitMap.delete(studentId);
-    } else {
-      rateLimitMap.clear();
-    }
+    resetMemoryRateStore(studentId ? `tutor:${studentId}` : "tutor:");
   }
 
   /**
@@ -93,7 +62,7 @@ export class AITutorService {
     const params: AITutorInteractParams = { ...rawParams, studentQuery };
 
     // 1. Rate Limit Enforcement
-    const rateLimit = this.checkRateLimit(studentId);
+    const rateLimit = await this.checkRateLimit(studentId);
     if (!rateLimit.allowed) {
       throw new Error(
         `Rate limit exceeded. Please wait ${rateLimit.resetInSeconds} seconds before asking the AI Tutor again.`

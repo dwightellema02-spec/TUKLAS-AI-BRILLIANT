@@ -27,6 +27,7 @@ export function checkEnv(env: NodeJS.ProcessEnv = process.env): EnvReport {
   if (prod && (secret.length < 32 || /^placeholder/i.test(secret))) fatal.push("AUTH_SECRET must be at least 32 random characters in production (generate one with: openssl rand -hex 32). Changing it signs everyone out.");
   else if (!prod && secret.length < 32) notes.push("AUTH_SECRET is short or missing: the dev server makes a temporary one.");
 
+  if (env.VERCEL && hasDb && !/-pooler\./.test(db)) warnings.push("On Vercel, DATABASE_URL should be Neon's POOLED address (the host contains \"-pooler\"): each function instance opens its own connections, and the direct address runs out of them under load. Use the direct address only for `npm run setup:db`.");
   if (prod) {
     if (!/^https:\/\//.test(env.APP_URL ?? "")) warnings.push("APP_URL is not an https:// address. Students' browsers keep the secure session cookie only over https.");
     if (env.TRUST_PROXY !== "true" && env.TRUST_PROXY !== "1") warnings.push("TRUST_PROXY is not set. Behind a proxy or load balancer (Render, nginx...) every student then looks like one address to the rate limit; set TRUST_PROXY=true.");
@@ -36,7 +37,8 @@ export function checkEnv(env: NodeJS.ProcessEnv = process.env): EnvReport {
   if (provider === "local") notes.push("AI_PROVIDER=local: the tutor uses the built-in rule-based engine (no external model).");
 
   const dir = path.resolve(env.DOCUMENT_STORAGE_DIR || "./storage/documents");
-  try { fs.mkdirSync(dir, { recursive: true }); fs.accessSync(dir, fs.constants.W_OK); notes.push(`Uploaded lesson documents are stored in ${dir}: this must be a persistent volume, or originals are lost on redeploy (their extracted text stays in the database).`); }
+  if (env.VERCEL && env.STORE_ORIGINALS !== "true") notes.push("Running on Vercel: uploaded documents keep their extracted text (database) but not the original file; uploads are limited to 4 MB.");
+  else try { fs.mkdirSync(dir, { recursive: true }); fs.accessSync(dir, fs.constants.W_OK); notes.push(`Uploaded lesson documents are stored in ${dir}: this must be a persistent volume, or originals are lost on redeploy (their extracted text stays in the database).`); }
   catch { warnings.push(`DOCUMENT_STORAGE_DIR (${dir}) is not writable: teachers' document uploads will fail.`); }
 
   if (env.ADMIN_PASSWORD) warnings.push("ADMIN_PASSWORD is still set. It is only used to create the first administrator; remove it after the first start.");

@@ -162,7 +162,7 @@ mc("g7t1-money-interest", "In simple interest, I = P × r × t. What does r stan
 // S14 financial plan
 num("g7t1-money-budget", "Mia gets a daily allowance of ₱200. She plans ₱60 for food, ₱40 for fare and ₱30 for school needs. How much is left to save (in pesos)?", 70, "Total planned spending = 60 + 40 + 30 = 130. Savings = 200 − 130 = 70.", "EASY", { unit: "₱" });
 num("g7t1-money-budget", "Mia wants to save 20% of her ₱350 daily allowance. How much should she set aside each day (in pesos)?", 70, "20% of 350 = 0.20 × 350 = 70.", "EASY", { unit: "₱" });
-num("g7t1-money-budget", "A student plans to spend 45% of a ₱600 weekly allowance on food. How much is that (in pesos)?", 270, "45% of 600 = 0.45 × 600 = 270.", "MEDIUM", { unit: "₱" });
+num("g7t1-money-budget", "A student plans to spend 45% of a ₱400 daily allowance on food. How much is that (in pesos)?", 180, "45% of 400 = 0.45 × 400 = 180.", "MEDIUM", { unit: "₱" });
 num("g7t1-money-budget", "Income ₱500, expenses ₱120 + ₱80 + ₱150. What are the savings (in pesos)?", 150, "Expenses = 120 + 80 + 150 = 350. Savings = 500 − 350 = 150.", "EASY", { unit: "₱" });
 mc("g7t1-money-budget", "Which formula describes a daily financial plan?", "Savings = income − total planned expenses", ["Savings = income + total planned expenses", "Savings = expenses ÷ income", "Savings = income × expenses"], "What you do not spend from your income is what you can save.");
 tf("g7t1-money-budget", "A good budget lists the money coming in and the money planned to go out before spending.", true, "Planning first lets you see how much you can save or whether you are overspending.", "EASY");
@@ -188,12 +188,42 @@ for (const [d, t] of [[240, 4], [180, 3], [150, 2.5]] as const) {
 for (const [s, t] of [[45, 3], [60, 2.5], [80, 1.5]] as const) {
   num("g7t1-rate-problems", `A van travels at ${s} km/h for ${t} hours. How far does it go (in km)?`, s * t, `Distance = speed × time = ${s} × ${t} = ${s * t} km.`, "MEDIUM", { tolerance: 0.01, unit: "km" });
 }
-for (const [d, s] of [[180, 60], [150, 50], [90, 45]] as const) {
+for (const [d, s] of [[180, 60], [150, 50], [120, 30]] as const) {
   num("g7t1-rate-problems", `How long does it take to travel ${d} km at ${s} km/h (in hours)?`, d / s, `Time = distance ÷ speed = ${d} ÷ ${s} = ${d / s} hours.`, "MEDIUM", { tolerance: 0.01, unit: "h" });
 }
 num("g7t1-rate-problems", "Jim writes 10 pages in 4 hours. At this rate, how many pages can he write in 6 hours?", 15, "Unit rate = 10 ÷ 4 = 2.5 pages per hour. In 6 hours: 2.5 × 6 = 15 pages.", "HARD", { tolerance: 0.01 });
 num("g7t1-rate-problems", "A worker is paid ₱1,800 for 6 days of work. At this rate, how much is the pay for 10 days (in pesos)?", 3000, "Unit rate = 1,800 ÷ 6 = ₱300 per day. For 10 days: 300 × 10 = ₱3,000.", "HARD", { tolerance: 0.01, unit: "₱" });
 mc("g7t1-rate-problems", "A cyclist rides 36 km in 2 hours. Which statement is correct?", "Her speed is 18 km/h", ["Her speed is 72 km/h", "Her speed is 38 km/h", "Her speed is 34 km/h"], "36 ÷ 2 = 18 km/h.", "EASY");
 
-export const GRADE7_TERM1_QUESTIONS: SeedQuestion[] = out;
+// Added in Phase 49 so every part of the Lesson Exemplars has questions: identifying exterior angles (Week 3, Day 1), finding the original price
+// from a sale price and finding the principal and the rate in simple interest (Week 5, Days 1 and 3).
+mc("g7t1-ext-int", "At a vertex of a polygon, the angle outside the polygon formed by extending one side past the vertex is called the", "exterior angle", ["interior angle", "vertical angle", "central angle"], "Extending a side past a vertex makes an angle outside the polygon: an exterior angle.");
+mc("g7t1-ext-int", "At one vertex of a polygon, the interior angle and the exterior angle next to it are", "adjacent angles that add up to 180°", ["vertical angles that are equal", "complementary angles that add up to 90°", "angles that add up to 360°"], "They share the vertex and one side and together form a straight line, so they add up to 180°.");
+// Week 1, Day 2: angle measures of regular polygons (the exemplar gives them for 5, 6, 8 and 10 sides), regular polygons in words
+for (const [n, name, angle] of [[5, "pentagon", 108], [8, "octagon", 135]] as const) {
+  num("g7t1-poly-regular", `Each interior angle of a regular ${name} measures how many degrees?`, angle, `A regular ${name} has ${n} equal interior angles of ${angle}° each.`, "EASY", { tolerance: 0.01, unit: "°" });
+}
+mc("g7t1-poly-regular", "A polygon that is both equilateral and equiangular is called a", "regular polygon", ["irregular polygon", "triangle", "quadrilateral"], "Equilateral means all sides are equal and equiangular means all angles are equal; a polygon with both is regular.");
+num("g7t1-poly-regular", "ABCDE is a regular pentagon and side BC is 10 cm. How long is side AE (in cm)?", 10, "All sides of a regular polygon are equal, so AE = BC = 10 cm.", "EASY", { tolerance: 0.01, unit: "cm" });
+for (const [rate, original] of [[12, 600], [35, 2000]] as const) {
+  const sale = original * (1 - rate / 100);
+  num("g7t1-money-discount", `An item is on sale for ${peso(sale)} after a ${pct(rate)} discount. What was its original price (in pesos)?`, original, `The sale price is ${100 - rate}% of the original price, so original price = ${sale} ÷ ${(100 - rate) / 100} = ${original}.`, "HARD", { tolerance: 0.01, unit: "₱" });
+}
+num("g7t1-money-interest", "A bank pays ₱600 simple interest after 2 years at 6% per year. What principal was invested (in pesos)?", 5000, "I = P × r × t, so P = I ÷ (r × t) = 600 ÷ (0.06 × 2) = 600 ÷ 0.12 = 5,000.", "HARD", { tolerance: 0.01, unit: "₱" });
+num("g7t1-money-interest", "₱8,000 earns ₱960 simple interest in 3 years. What is the yearly interest rate (as a percent)?", 4, "r = I ÷ (P × t) = 960 ÷ (8,000 × 3) = 960 ÷ 24,000 = 0.04 = 4%.", "HARD", { tolerance: 0.01, unit: "%" });
+
+/**
+ * Questions that go beyond what the Lesson Exemplars teach in Weeks 2-6 (Phase 49). They are left out of the bank so a student is never
+ * asked something the week's lessons did not cover.
+ */
+const BEYOND_THE_EXEMPLARS = new Set([
+  "g7t1-angle-pairs-12", // two supplementary angles in a ratio (Week 2 teaches complementary/supplementary angles with one known angle)
+  "g7t1-angle-pairs-13", // two complementary angles x and 2x (an algebra setup the exemplar does not use)
+  "g7t1-pct-decrease-13", // a 50% fall followed by a 50% rise (successive percentage changes are not in Week 4)
+  "g7t1-poly-regular-06", "g7t1-poly-regular-07", "g7t1-poly-regular-08", "g7t1-poly-regular-09", // side from a perimeter (perimeter is not part of the Week 1 exemplar)
+  "g7t1-poly-construct-05", "g7t1-poly-construct-06", // a nonagon and a 12-gon (Week 1 draws polygons with 5, 6, 8 or 10 sides)
+  "g7t1-money-interest-05", // total amount after interest (Week 5 asks for the interest, the principal, the rate or the time)
+]);
+
+export const GRADE7_TERM1_QUESTIONS: SeedQuestion[] = out.filter((q) => !BEYOND_THE_EXEMPLARS.has(q.key));
 counters = {};

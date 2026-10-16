@@ -44,6 +44,10 @@ export type SeedQuestion =
 export interface SeedLesson {
   key: string;
   week: number;
+  /** Day of the week (1-5) in the Lesson Exemplar, when the lesson covers one day of it. */
+  day?: number;
+  /** false = loaded as a DRAFT that students cannot see (for a week whose Lesson Exemplar has not been supplied yet). Default true. */
+  published?: boolean;
   unit: "A" | "B";
   title: string;
   description: string;

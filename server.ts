@@ -13,12 +13,13 @@ import { hashPassword, verifyPassword } from "./src/lib/auth/password.ts";
 import { createSessionToken, verifySessionToken, SessionPayload } from "./src/lib/auth/session.ts";
 import { gradeChoiceAnswer, toStudentBlockView } from "./src/lib/lesson/block-grading.ts";
 import { validateEmail, validatePassword, validateNewPassword, validateName, validateRole } from "./src/lib/auth/validation.ts";
+import { rateHit } from "./src/lib/rate-store.ts";
 import { checkLoginThrottle, recordLoginFailure, clearLoginFailures } from "./src/lib/auth/login-throttle.ts";
 import { canUserAccessPath } from "./src/lib/auth/rbac.ts";
 import { validateAndExtractYouTube, YouTubeService } from "./src/lib/youtube.ts";
 import { LessonStatus, UserRole } from "@prisma/client";
 import { validateUpload, ingestDocument, DOCUMENT_LIMITS } from "./src/lib/documents/index.ts";
-import { saveOriginal, deleteOriginal } from "./src/lib/documents/file-store.ts";
+import { saveOriginal, deleteOriginal, originalsAreKept, maxUploadBytes } from "./src/lib/documents/file-store.ts";
 import { draftLessonFromDocument } from "./src/lib/documents/lesson-draft.ts";
 import { classifyDbError } from "./src/lib/db-resilience.ts";
 import { saveLessonDraft } from "./src/lib/documents/lesson-import-service.ts";
@@ -57,7 +58,15 @@ if (process.env.TRUST_PROXY === "true") app.set("trust proxy", 1);
 const DUMMY_PASSWORD_HASH = "$2b$10$CwTycUXWue0Thq9StjUM0uJ8y3wRZBZl4kG5K2D9wH5g8h4mJrJ1e";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const isProd = process.env.NODE_ENV === "production";
-const APP_VERSION: string = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "package.json"), "utf-8")).version;
+const APP_VERSION: string = (() => {
+  // next to this file normally; one folder up or in the working folder when the server is bundled into a serverless function (Phase 48)
+  for (const dir of [import.meta.dirname, path.resolve(import.meta.dirname, ".."), process.cwd()]) {
+    try { return JSON.parse(fs.readFileSync(path.resolve(dir, "package.json"), "utf-8")).version as string; } catch { /* try the next place */ }
+  }
+  return "unknown";
+})();
+/** True on a serverless host (Vercel): the platform calls the exported app per request; nothing listens on a port. */
+const SERVERLESS = !!process.env.VERCEL;
 
 // Without a PostgreSQL database the app serves the in-memory DEMO accounts, whose password is public.
 // A production server must therefore either have a database or be started in an explicitly acknowledged demo mode.
@@ -128,6 +137,15 @@ function allowRate(res: Response, key: string, limit: number, windowMs: number):
   const r = rateCheck(key, limit, windowMs);
   if (!r.ok) {
     res.setHeader("Retry-After", String(r.retryAfter));
+    res.status(429).json({ error: "Too many requests. Please wait a moment and try again." });
+  }
+  return r.ok;
+}
+/** Like allowRate, but the count is kept where rate-store.ts keeps it (shared by every instance on a serverless host). For limits that guard accounts, cost or uploads. */
+async function allowRateShared(res: Response, key: string, limit: number, windowMs: number): Promise<boolean> {
+  const r = await rateHit(key, limit, windowMs);
+  if (!r.ok) {
+    res.setHeader("Retry-After", String(r.retryAfterSeconds));
     res.status(429).json({ error: "Too many requests. Please wait a moment and try again." });
   }
   return r.ok;
@@ -345,7 +363,7 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
 
     // Brute-force protection: per account and per client address.
     const throttleKeys = [`email:${validatedEmail}`, `ip:${req.ip ?? "unknown"}`];
-    const throttle = checkLoginThrottle(throttleKeys);
+    const throttle = await checkLoginThrottle(throttleKeys);
     if (!throttle.allowed) {
       res.setHeader("Retry-After", String(throttle.retryAfterSeconds));
       return res.status(429).json({ success: false, error: "Too many failed sign-in attempts. Please try again later." });
@@ -355,7 +373,7 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
     if (!user) {
       // Spend the same time as a real password check so response timing does not reveal which emails exist.
       await verifyPassword(validatedPass, DUMMY_PASSWORD_HASH);
-      recordLoginFailure(throttleKeys);
+      await recordLoginFailure(throttleKeys);
       console.log("AUTH LOGIN REJECTED: User not found");
       return res.status(401).json({ success: false, error: "Invalid email or password" });
     }
@@ -363,17 +381,17 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
 
     const isValid = await verifyPassword(validatedPass, user.passwordHash);
     if (!isValid) {
-      recordLoginFailure(throttleKeys);
+      await recordLoginFailure(throttleKeys);
       console.log("AUTH LOGIN REJECTED: Incorrect password");
       return res.status(401).json({ success: false, error: "Invalid email or password" });
     }
     if ((user as any).disabledAt) {
       // Same answer as a wrong password: do not reveal which accounts exist or are disabled.
-      recordLoginFailure(throttleKeys);
+      await recordLoginFailure(throttleKeys);
       await dbService.recordAudit({ actorId: user.id, action: "auth.login.blocked_disabled", targetType: "user", targetId: user.id, ip: req.ip });
       return res.status(401).json({ success: false, error: "Invalid email or password" });
     }
-    clearLoginFailures([throttleKeys[0]]);
+    await clearLoginFailures([throttleKeys[0]]);
     console.log("AUTH LOGIN PASSWORD CHECK SUCCESS");
 
     const token = issueSession(req, res, user as any);
@@ -823,20 +841,11 @@ function toStudentLessonView<T extends { resources?: unknown[]; contentBlocks?: 
 // PHASE 22: DOCUMENT UPLOAD, NOTES & EXTRACTION STATUS
 // -------------------------------------------------------------
 
-const uploadHistory = new Map<string, number[]>();
 const UPLOADS_PER_WINDOW = 20;
 const UPLOAD_WINDOW_MS = 10 * 60 * 1000;
 
-function checkUploadRateLimit(userId: string): boolean {
-  const now = Date.now();
-  const recent = (uploadHistory.get(userId) || []).filter((t) => now - t < UPLOAD_WINDOW_MS);
-  if (recent.length >= UPLOADS_PER_WINDOW) {
-    uploadHistory.set(userId, recent);
-    return false;
-  }
-  recent.push(now);
-  uploadHistory.set(userId, recent);
-  return true;
+async function checkUploadRateLimit(userId: string): Promise<boolean> {
+  return (await rateHit(`upload:${userId}`, UPLOADS_PER_WINDOW, UPLOAD_WINDOW_MS)).ok;
 }
 
 function publicResourceView(resource: Record<string, any>) {
@@ -851,7 +860,7 @@ const authorizeDocumentUpload = async (req: Request, res: Response, next: NextFu
     if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
       return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
     }
-    if (!checkUploadRateLimit(session.userId)) {
+    if (!(await checkUploadRateLimit(session.userId))) {
       return res.status(429).json({ error: "Too many uploads. Please wait a few minutes and try again." });
     }
     await dbService.assertCanEditLesson(req.params.id, session.role, session.userId);
@@ -865,11 +874,13 @@ const authorizeDocumentUpload = async (req: Request, res: Response, next: NextFu
 };
 
 const rawUploadBody = (req: Request, res: Response, next: NextFunction) => {
-  express.raw({ type: () => true, limit: DOCUMENT_LIMITS.MAX_FILE_BYTES + 1024 })(req, res, (err?: any) => {
+  const maxBytes = maxUploadBytes();
+  express.raw({ type: () => true, limit: maxBytes + 1024 })(req, res, (err?: any) => {
     if (err) {
       const tooLarge = err.type === "entity.too.large";
+      const mb = Math.round((maxBytes / (1024 * 1024)) * 10) / 10;
       return res.status(tooLarge ? 413 : 400).json({
-        error: tooLarge ? "File exceeds the 25MB upload limit." : "The upload could not be read.",
+        error: tooLarge ? `File exceeds the ${mb}MB upload limit on this host. Use a smaller file, or split the document into parts.` : "The upload could not be read.",
       });
     }
     return next();
@@ -884,7 +895,7 @@ const authorizeLessonImport = async (req: Request, res: Response, next: NextFunc
     if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) {
       return res.status(403).json({ error: "Forbidden: Teacher or Administrator access required." });
     }
-    if (!checkUploadRateLimit(session.userId)) {
+    if (!(await checkUploadRateLimit(session.userId))) {
       return res.status(429).json({ error: "Too many uploads. Please wait a few minutes and try again." });
     }
     const unitId = typeof req.query.unitId === "string" ? req.query.unitId : "";
@@ -985,6 +996,8 @@ app.post("/api/lessons/:id/documents", authorizeDocumentUpload, rawUploadBody, a
         pageCount: ingest.pageCount,
         chunkCount: ingest.chunks.length,
         usableByAITutor: ingest.status === "EXTRACTED" || ingest.status === "TRUNCATED",
+        originalKept: !!storedKey,
+        ...(originalsAreKept() ? {} : { note: "The text of the document was saved for the AI tutor. This host does not keep the original file." }),
       },
     });
   } catch (error: unknown) {
@@ -1087,7 +1100,7 @@ app.post("/api/lessons/:id/resources/:resourceId/generate-questions", async (req
     }
     const lesson = await dbService.assertCanEditLesson(req.params.id, session.role, session.userId);
     // Each call can cost money with an external model.
-    if (!allowRate(res, `genq:${session.userId}`, 6, 10 * 60_000)) return;
+    if (!(await allowRateShared(res, `genq:${session.userId}`, 6, 10 * 60_000))) return;
     const resource = lesson.resources?.find((r: any) => r.id === req.params.resourceId);
     if (!resource) return res.status(404).json({ error: "Resource not found on this lesson." });
     if (resource.extractionStatus !== "EXTRACTED" && resource.extractionStatus !== "TRUNCATED") {
@@ -3233,7 +3246,7 @@ app.post("/api/auth/change-password", async (req: Request, res: Response) => {
     if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
 
     const keys = [`email:${session.email}`, `ip:${req.ip ?? "unknown"}`];
-    const throttle = checkLoginThrottle(keys);
+    const throttle = await checkLoginThrottle(keys);
     if (!throttle.allowed) {
       res.setHeader("Retry-After", String(throttle.retryAfterSeconds));
       return res.status(429).json({ error: "Too many failed attempts. Please try again later." });
@@ -3245,13 +3258,13 @@ app.post("/api/auth/change-password", async (req: Request, res: Response) => {
 
     const user = await dbService.findUserById(session.userId);
     if (!user || !(await verifyPassword(currentPassword, user.passwordHash))) {
-      recordLoginFailure(keys);
+      await recordLoginFailure(keys);
       return res.status(401).json({ error: "Current password is incorrect" });
     }
     if (currentPassword === validatedNew) return res.status(400).json({ error: "The new password must be different" });
 
     await dbService.updateUserPassword(user.id, await hashPassword(validatedNew)); // also revokes every older session
-    clearLoginFailures([keys[0]]);
+    await clearLoginFailures([keys[0]]);
     await dbService.recordAudit({ actorId: user.id, action: "auth.password.change", targetType: "user", targetId: user.id, ip: req.ip });
     // Keep THIS device signed in with a fresh token; every other device must sign in again.
     const fresh = await dbService.getAuthState(user.id);
@@ -3681,7 +3694,15 @@ async function startServer() {
 process.on("unhandledRejection", (reason) => console.error("UNHANDLED REJECTION:", reason instanceof Error ? reason.stack ?? reason.message : reason));
 process.on("uncaughtException", (err) => { console.error("UNCAUGHT EXCEPTION:", err.stack ?? err.message); setTimeout(() => process.exit(1), 100); });
 
-startServer().catch((err) => {
-  console.error("Failed to start server:", err);
-  process.exit(1);
-});
+if (SERVERLESS) {
+  // The host serves the built web app itself; only /api reaches this function. An /api address nobody handles is an error, not a page.
+  app.use("/api", (_req: Request, res: Response) => res.status(404).json({ error: "Not found" }));
+} else {
+  startServer().catch((err) => {
+    console.error("Failed to start server:", err);
+    process.exit(1);
+  });
+}
+
+/** The Express application. A server listens on it (startServer); a serverless host (Vercel, see serverless/entry.ts) calls it per request. */
+export default app;

@@ -42,7 +42,7 @@ async function main() {
     const byPrompt = new Map((GRADE7_TERM1_QUESTIONS as any[]).map((q) => [q.prompt, q]));
     const reg = async (tag: string) => { const r = await api("POST", "/api/auth/register", undefined, { name: `Pupil ${tag}`, email: `p44.${tag}.${run}@example.edu`, password: "Sturdy-Pass1" }); await api("POST", "/api/student/classes/join", r.json.token, { code: cls.joinCode }); return { tok: r.json.token as string, id: r.json.user.id as string }; };
 
-    const wantTitles = [/Percentage Increase/i, /Interior and Exterior/i, /Rates and Unit/i];
+    const wantTitles = [/Percentage Increase/i, /Angle Measures and the Number of Sides of Polygons/i, /Solving Problems Involving Rates/i]; // one daily lesson each (Phase 49)
     for (const [wi, re] of wantTitles.entries()) {
       const S = await reg(`w${wi}`);
       const set = sets.find((s) => re.test(s.title) && /Practice/.test(s.title));

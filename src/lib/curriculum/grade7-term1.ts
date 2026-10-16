@@ -27,10 +27,11 @@ export const GRADE7_TERM1_SKILLS: SeedSkill[] = [
   s("g7t1-poly-names", "Name polygons by number of sides", "Name polygons with 3 to 10 sides.", 1.2, "w1", ["g7t1-poly-define"]),
   s("g7t1-poly-regular", "Classify regular and irregular polygons", "Decide whether a polygon is regular (equal sides and equal angles) or irregular.", 1.8, "w1", ["g7t1-poly-names"]),
   s("g7t1-poly-construct", "Draw regular polygons", "Plan the central angle and side measures for drawing regular polygons with a compass, protractor and ruler.", 2.2, "w1", ["g7t1-poly-regular"]),
-  s("g7t1-poly-convex", "Classify convex and non-convex polygons", "Use interior angle sizes to classify polygons as convex or non-convex.", 2.0, "w2", ["g7t1-poly-regular"]),
+  // Week 1 is held back until its Lesson Exemplar is supplied (Phase 49), so no Week 2-6 skill may require a Week 1 skill: a student could never complete it.
+  s("g7t1-poly-convex", "Classify convex and non-convex polygons", "Use interior angle sizes to classify polygons as convex or non-convex.", 2.0, "w2"),
   s("g7t1-angle-pairs", "Use angle-pair relationships", "Use complementary, supplementary, linear-pair and vertical angles to find unknown angles.", 2.2, "w2"),
   s("g7t1-ext-int", "Relate exterior and interior angles", "Use the fact that an interior angle and its adjacent exterior angle add up to 180 degrees.", 2.0, "w3", ["g7t1-angle-pairs"]),
-  s("g7t1-polygon-angles", "Find angle measures and number of sides of polygons", "Use the interior angle sum (n - 2) x 180 and exterior angle sum 360 to find angles and the number of sides.", 3.0, "w3", ["g7t1-ext-int", "g7t1-poly-names"]),
+  s("g7t1-polygon-angles", "Find angle measures and number of sides of polygons", "Use the interior angle sum (n - 2) x 180 and exterior angle sum 360 to find angles and the number of sides.", 3.0, "w3", ["g7t1-ext-int"]),
   s("g7t1-pct-increase", "Solve percentage increase problems", "Find the percentage increase and the new value after an increase.", 2.0, "w4"),
   s("g7t1-pct-decrease", "Solve percentage decrease problems", "Find the percentage decrease and the new value after a decrease.", 2.2, "w4", ["g7t1-pct-increase"]),
   s("g7t1-money-discount", "Solve discount and sale price problems", "Compute discounts and sale prices.", 2.5, "w5", ["g7t1-pct-decrease"]),

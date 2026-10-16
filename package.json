@@ -74,7 +74,13 @@
     "test:phase39:browser": "node scripts/test-phase39-browser.mjs",
     "test:phase39:pg": "tsx scripts/test-phase39-prisma.ts",
     "test:phase38:pg": "tsx scripts/test-phase38-prisma.ts",
-    "test:phase37:pg": "tsx scripts/test-phase37-prisma.ts"
+    "test:phase37:pg": "tsx scripts/test-phase37-prisma.ts",
+    "build:vercel": "esbuild serverless/entry.ts --bundle --platform=node --format=esm --packages=external --outfile=build/serverless.mjs --log-level=warning",
+    "vercel-build": "prisma generate && vite build && npm run build:vercel",
+    "setup:db": "tsx scripts/setup-database.ts",
+    "test:phase48": "tsx scripts/test-phase48-store.ts",
+    "test:phase48:pg": "tsx scripts/test-phase48-serverless.ts",
+    "test:phase49": "tsx scripts/test-phase49-alignment.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts",
@@ -111,5 +117,8 @@
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": "22.x"
   }
 }

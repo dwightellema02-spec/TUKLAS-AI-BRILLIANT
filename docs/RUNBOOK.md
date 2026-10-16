@@ -77,5 +77,8 @@ npx tsx scripts/monitor-ready.ts --once     # one check, exit 0 = ready, 1 = not
 ```
 Settings: `MONITOR_INTERVAL_SECONDS` (60), `MONITOR_FAILURES_BEFORE_ALERT` (3), `MONITOR_TIMEOUT_MS` (5000). Without a webhook the alert is only printed, so use a webhook, or run `--once` from cron and let cron email you. The webhook address is never printed.
 
+## 9c. Running on Vercel (Phase 48)
+See `docs/DEPLOY_VERCEL_NEON.md`. Differences that matter when something goes wrong: logs are in Vercel → the project → **Logs** (not a container); migrations are applied by `npm run setup:db` from a computer with the direct Neon address, never by Vercel; the sign-in lock-out and tutor limits are rows in the `RateEvent` table (to lift a lock-out for one account: `DELETE FROM "RateEvent" WHERE key IN ('block:email:THE-EMAIL','fail:email:THE-EMAIL')`); uploaded originals are not kept (extracted text is). Env: `DURABLE_RATE_LIMITS` (`true` forces shared limits on any host, `false` turns them off), `STORE_ORIGINALS`, `MAX_UPLOAD_BYTES` (can only lower the limit).
+
 ## 10. Not covered here
 Monitoring and alerting (nothing watches `/api/ready` for you: point your host's uptime check at it); log shipping; student-data privacy tasks (consent, export, deletion) are described in the privacy documentation, not here.

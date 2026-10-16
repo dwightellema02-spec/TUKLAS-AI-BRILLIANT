@@ -46,6 +46,53 @@ const slip = (value: number, message: string, question: string) => ({ value: r1(
 // Polygons and angles
 // ------------------------------------------------------------------------------------------------------------------------------------
 const KINDS: Kind[] = [
+  // Phase 49: questions added so the Week 1 and Week 5 exemplars are fully covered
+  {
+    id: "regular-angle-fact", re: /Each interior angle of a regular (pentagon|octagon) measures how many degrees/i,
+    make: (n, p) => {
+      const sides = /pentagon/i.test(p) ? 5 : 8;
+      return {
+        kind: "regular-angle-fact",
+        idea: piece("In a regular polygon all the interior angles are equal, so each one is the total of the interior angles shared equally.", "What is the total of the interior angles of this polygon?"),
+        steps: ["What do you know about the angles of a regular polygon: equal or different?", "What do all the interior angles add up to for this polygon?", "How do you share that total equally?"],
+        context: piece("Think of a pizza of equal slices: once you know the whole, each equal slice is the whole shared out.", "What is the whole here, and how many equal parts is it shared among?"),
+        check: piece("Let's break it into two parts.", "First find the total of the interior angles. What do you do with it next?"),
+        slips: [slip((sides - 2) * 180, "That looks like the total of all the angles rather than one angle.", "How many angles share that total?"), slip(360 / sides, "That is the size of an exterior angle, but the question asks about an interior angle.", "How are the exterior and interior angles at a vertex related?")],
+        example: (avoid, skip = 0) => { const k = pick([6, 9, 10, 12], avoid, (x) => ((x - 2) * 180) / x, skip); return k ? { problem: `Each interior angle of a regular ${NAMES[k] ?? `${k}-sided polygon`} measures how many degrees?`, steps: [`Sum of interior angles = (${k} − 2) × 180° = ${(k - 2) * 180}°.`, `${k} equal angles share it.`, `${(k - 2) * 180}° ÷ ${k} = ${fmt(((k - 2) * 180) / k)}°.`] } : undefined; },
+      };
+    },
+  },
+  {
+    id: "regular-equal-sides", re: /is a regular \w+ and side \w+ is \d+ cm\. How long is side/i,
+    make: (n, p) => {
+      const word = (p.match(/is a regular (\w+) and/i)?.[1] ?? "pentagon").toLowerCase();
+      const sides = Object.entries(NAMES).find(([, w]) => w === word)?.[0];
+      return {
+        kind: "regular-equal-sides",
+        idea: piece("All the sides of a regular polygon are equal.", "What does 'regular' tell you about the sides?"),
+        steps: ["What is special about the sides of a regular polygon?", "Which side are you told about, and which side are you asked about?", "What does that tell you about their lengths?"],
+        context: piece("Think of a floor tile cut as a regular shape: every edge is the same length.", "If one edge measures a certain length, how long is any other edge?"),
+        check: piece("Let's use what 'regular' means.", "Are the sides of a regular polygon equal or different?"),
+        slips: [...(sides ? [slip(n[0] * Number(sides), "That is the distance all the way around, but the question asks about one side.", "What do all the sides of a regular polygon have in common?")] : []), slip(108, "That is an angle in degrees, but the question asks for a length in centimeters.", "Which measure does 'how long' ask about?")],
+        example: (avoid, skip = 0) => { const L = pick([6, 8, 12, 15], avoid, (x) => x, skip); return L ? { problem: `PQRSTU is a regular hexagon and side QR is ${L} cm. How long is side TU?`, steps: ["All the sides of a regular polygon are equal.", `So TU = QR = ${L} cm.`] } : undefined; },
+      };
+    },
+  },
+  {
+    id: "original-price", re: /What was its original price/i,
+    make: (n) => {
+      const sale = n[0], rate = n[1];
+      return {
+        kind: "original-price",
+        idea: piece("When there is a discount, the sale price is only a part of the original price: 100% minus the discount rate.", "What percent of the original price do you pay after the discount?"),
+        steps: ["What percent of the original price is the sale price?", "The sale price is that percent of which price?", "How do you go back from a part to the whole?"],
+        context: piece("Picture a sign saying '% off': you pay what is left of the original price.", "What fraction of the original price is left after the discount?"),
+        check: piece("Let's separate the original price from the sale price.", "Is the number you got what you pay after the sale, or the price before the sale?"),
+        slips: [slip(sale * (1 + rate / 100), "It looks like the discount was taken as a percent of the sale price. The discount is a percent of the ORIGINAL price.", "What percent of the original price is the sale price?"), slip((sale * rate) / 100, "That number is a percent of the sale price, not the price before the sale.", "What do you do with the sale price to get back to the original price?")],
+        example: (avoid, skip = 0) => { const pr = pick<[number, number]>([[400, 20], [900, 10], [600, 25], [1500, 40]], avoid, (x) => x[0], skip); if (!pr) return undefined; const sl = pr[0] * (1 - pr[1] / 100); return { problem: `An item is on sale for ${peso(sl)} after a ${pr[1]}% discount. What was its original price (in pesos)?`, steps: [`The sale price is ${100 - pr[1]}% of the original price.`, `Original price = ${peso(sl)} ÷ ${fmt((100 - pr[1]) / 100)}.`, `= ${peso(pr[0])}.`] }; },
+      };
+    },
+  },
   {
     id: "regular-perimeter", re: /regular \w+ has a perimeter of \d+ cm\. How long is each side/i,
     make: (n, p) => {

@@ -26,8 +26,8 @@ assert(GRADE7_TERM1_SKILLS.every((s) => s.prerequisites.every((p) => order.index
 const compKeys = new Set(GRADE7_TERM1_COMPETENCIES.map((c) => c.key));
 assert(GRADE7_TERM1_SKILLS.every((s) => compKeys.has(s.competency)), "Every skill has a competency");
 assert(new Set(GRADE7_TERM1_COMPETENCIES.map((c) => c.code)).size === GRADE7_TERM1_COMPETENCIES.length, "Competency codes are unique");
-assert(GRADE7_TERM1_UNITS.length === 2 && GRADE7_TERM1_LESSONS.length === 6, "2 units and 6 lessons (weeks 1-6)");
-assert(GRADE7_TERM1_LESSONS.map((l) => l.week).join() === "1,2,3,4,5,6", "One lesson per week, in order");
+assert(GRADE7_TERM1_UNITS.length === 2 && GRADE7_TERM1_LESSONS.length === 25, "2 units and 25 lessons (one lesson per day of the Lesson Exemplars: Week 1: 4, Week 2: 4, Week 3: 5, Weeks 4-6: 4 each)");
+assert(GRADE7_TERM1_LESSONS.map((l) => `${l.week}.${l.day ?? 0}`).join() === "1.1,1.2,1.3,1.4,2.1,2.2,2.3,2.4,3.1,3.2,3.3,3.4,3.5,4.1,4.2,4.3,4.4,5.1,5.2,5.3,5.4,6.1,6.2,6.3,6.4", "Lessons are in week and day order");
 assert(GRADE7_TERM1_SKILLS.every((s) => GRADE7_TERM1_LESSONS.some((l) => l.skills.includes(s.key))), "Every skill is taught by a lesson");
 
 section("2. Questions are well formed");
@@ -58,7 +58,7 @@ section("4. Lessons");
 for (const l of GRADE7_TERM1_LESSONS) {
   const types = l.blocks.map((b) => b.type);
   assert(types.includes("TEXT") && types.includes("EXAMPLE") && types.includes("CHECKPOINT") && types.includes("PRACTICE") && types.includes("SUMMARY"), `${l.key}: has text, example, checkpoint, practice and summary blocks`);
-  assert(l.practice.length >= 10 && l.practice.every((k) => qKeys.has(k)), `${l.key}: practice set has ≥10 questions and all keys exist`);
+  assert(l.practice.length >= 4 && l.practice.every((k) => qKeys.has(k)), `${l.key}: practice set has ≥4 questions and all keys exist`);
   assert(new Set(l.practice).size === l.practice.length, `${l.key}: no duplicate practice questions`);
   const bySkill = new Set(l.practice.map((k) => Q.find((q) => q.key === k)!.skill));
   assert(l.skills.every((s) => bySkill.has(s)), `${l.key}: practice covers every skill the lesson teaches`);
@@ -86,7 +86,7 @@ for (const l of GRADE7_TERM1_LESSONS) {
   assert(((all.replace(/\$\$/g, "").match(/\$/g) ?? []).length % 2) === 0 || /₱/.test(all), `${l.key}: inline math delimiters balanced`);
 }
 // checkpoint answer re-derivations that don't depend on the generator
-const w3 = GRADE7_TERM1_LESSONS[2].blocks.find((b) => b.title === "Checkpoint: Sum of angles")!.metadata as any;
+const w3 = GRADE7_TERM1_LESSONS.find((l) => l.key === "g7t1-w3-d3")!.blocks.find((b) => b.title === "Checkpoint: Sum of angles")!.metadata as any;
 assert(w3.correctAnswer === `${(6 - 2) * 180}°`, "Week 3 checkpoint (hexagon angle sum) matches (n-2)x180");
 
 console.log(`\nPHASE 38 CURRICULUM RESULTS: ${passed} passed, ${failed} failed (questions: ${Q.length}, skills: ${GRADE7_TERM1_SKILLS.length}, lessons: ${GRADE7_TERM1_LESSONS.length})`);

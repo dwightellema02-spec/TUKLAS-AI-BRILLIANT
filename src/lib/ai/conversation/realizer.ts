@@ -442,8 +442,11 @@ function realizeDraftEN(plan: ResponsePlan, ctx: RealizeContext, seed: number): 
         question: "What answer do you get?",
       };
     case "REVIEW_KEY_IDEAS": {
-      if (top) {
-        const excerpt = bestSentences(top.text, plan.studentQuote ?? "", 2, 320);
+      // A lesson passage is quoted only if it does not state the answer to the question being asked (e.g. "octa- (8)" under "how many sides does an octagon have?").
+      const answerValue = plan.protectedAnswer === undefined ? NaN : Number(plan.protectedAnswer);
+      const statesAnswer = (t: string) => Number.isFinite(answerValue) && new RegExp(`(?<![\\d.])${String(answerValue).replace(".", "\\.")}(?![\\d])`).test(t.replace(/,/g, ""));
+      const excerpt = top ? bestSentences(top.text, plan.studentQuote ?? "", 2, 320) : "";
+      if (top && !statesAnswer(excerpt)) {
         return { message: lead(`Here is the key idea from ${top.origin === "TEACHER_NOTE" ? "your teacher's note" : `"${top.title}"`} (${top.sectionLabel}): "${excerpt}"`), question: "In your own words, what is the main idea, and where might you use it?", citedSourceIds: [top.sourceId] };
       }
       if (!integerTopic(ctx, p)) return { message: lead(`Let's recap ${lessonName(ctx)}.`), question: "In your own words, what is the main idea, and which part feels least clear to you?" };

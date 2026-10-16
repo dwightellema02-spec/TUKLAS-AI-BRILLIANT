@@ -9,9 +9,29 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 
+/**
+ * Phase 48: a serverless host (Vercel) has a read-only disk and no memory between requests, so originals cannot be kept there. The text
+ * extracted from a document is stored in the database either way (that is what the AI tutor reads); only the original file is skipped.
+ * STORE_ORIGINALS=false does the same anywhere; STORE_ORIGINALS=true forces storing.
+ */
+export function originalsAreKept(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.STORE_ORIGINALS === "true") return true;
+  if (env.STORE_ORIGINALS === "false") return false;
+  return !env.VERCEL;
+}
+
+/** The largest upload this host accepts. Vercel rejects request bodies over 4.5 MB before our code runs, so stay under it there. */
+export function maxUploadBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const hard = 25 * 1024 * 1024;
+  const cap = Number(env.MAX_UPLOAD_BYTES);
+  if (Number.isFinite(cap) && cap >= 1024 && cap <= hard) return cap;
+  return env.VERCEL ? 4 * 1024 * 1024 : hard;
+}
+
 const STORAGE_ROOT = path.resolve(process.env.DOCUMENT_STORAGE_DIR || path.join(process.cwd(), "storage", "documents"));
 
-export function saveOriginal(buffer: Buffer, extension: string): string {
+export function saveOriginal(buffer: Buffer, extension: string): string | undefined {
+  if (!originalsAreKept()) return undefined;
   fs.mkdirSync(STORAGE_ROOT, { recursive: true });
   const safeExt = extension.replace(/[^a-z0-9]/gi, "").slice(0, 8).toLowerCase();
   const key = `${crypto.randomUUID()}.${safeExt}`;
