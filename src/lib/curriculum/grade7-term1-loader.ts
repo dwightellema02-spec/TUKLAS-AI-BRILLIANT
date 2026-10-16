@@ -11,6 +11,7 @@ import { GRADE7_TERM1_UNITS, GRADE7_TERM1_COMPETENCIES, GRADE7_TERM1_SKILLS, GRA
  * A database seeded before Phase 49 still has them: they are archived (never deleted) so students no longer see them.
  */
 export const RETIRED_WEEKLY_LESSON_TITLES = [
+  "Polygons: Naming, Regular and Irregular, and Drawing Them",
   "Convex and Non-Convex Polygons; Angle Pairs",
   "Interior and Exterior Angles of Polygons",
   "Percentage Increase and Percentage Decrease",

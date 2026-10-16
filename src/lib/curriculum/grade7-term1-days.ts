@@ -1,17 +1,100 @@
 /**
- * Grade 7 Mathematics, Term 1, Weeks 2-6: ONE LESSON PER DAY, following the DepEd MATATAG Budget of Work and the Lesson Exemplars
- * (Q1 Lessons 2-6) day by day. Each lesson teaches only what its day of the exemplar teaches. All text, examples and questions are original;
+ * Grade 7 Mathematics, Term 1, Weeks 1-6: ONE LESSON PER DAY, following the DepEd MATATAG Budget of Work and the Lesson Exemplars
+ * (Q1 Lessons 1-6) day by day. Each lesson teaches only what its day of the exemplar teaches. All text, examples and questions are original;
  * the exemplars are restricted teacher materials, so their wording is not reproduced. Where an exemplar gives a sub-topic two days
- * (Week 2 angle pairs, Week 4 percentage increase and decrease) the sub-topic is split in two lessons (noted in each teacher note).
+ * (Week 1 drawing polygons, Week 2 angle pairs, Week 4 percentage increase and decrease) the sub-topic is split in two lessons (noted in each teacher note).
  * See docs/BOW_LE_ALIGNMENT.md for the week-by-week map and the differences between the Budget of Work and the exemplars.
  */
 import type { SeedLesson } from "./grade7-term1-types";
-import { convexConcaveDiagram, intersectingLinesDiagram, interiorExteriorDiagram } from "./grade7-term1-diagrams";
+import { regularPolygonsDiagram, constructionDiagram, convexConcaveDiagram, intersectingLinesDiagram, interiorExteriorDiagram } from "./grade7-term1-diagrams";
 import { text, hint, summary, image, example, check, practice } from "./grade7-term1-blocks";
 
 const LE = (n: number, day: string) => `Aligned with the DepEd MATATAG Grade 7 Budget of Work (Term 1) and Lesson Exemplar Q1 Lesson ${n}, ${day}. Content is limited to what that day of the exemplar teaches.`;
 
 export const GRADE7_TERM1_DAILY_LESSONS: SeedLesson[] = [
+  // =========================================================================================================== Week 1 (LE Q1 Lesson 1)
+  {
+    key: "g7t1-w1-d1", week: 1, day: 1, unit: "A", title: "Week 1, Day 1: Defining a Polygon and Naming Polygons and Their Parts",
+    description: "What a polygon is, how polygons are named by their number of sides, and how a polygon and its sides and interior angles are named.",
+    objectives: ["Define a polygon and tell polygons from figures that are not polygons", "Name polygons with 3 to 10 sides", "Name a polygon, its sides and its interior angles using its vertices"],
+    minutes: 45, skills: ["g7t1-poly-define", "g7t1-poly-names"],
+    teacherNote: LE(1, "Day 1 (Sub-topic 1: define polygon and describe its properties; naming polygons by their number of sides and naming a polygon and its parts using its vertices)."),
+    blocks: [
+      text("1. Shapes all around us", "Look at road signs, window frames and floor tiles. Many of the shapes you see are **polygons**.\n\nA **polygon** is a closed, plane figure bounded by line segments that meet only at their endpoints."),
+      text("2. What is NOT a polygon?", "A figure is **not** a polygon if\n\n• it has a **curved** side (like a circle),\n• it is **open** (the last segment does not meet the first),\n• its segments cross each other instead of meeting only at their endpoints, or\n• it is not a **plane** figure (a cube is a solid, not a polygon)."),
+      check("Checkpoint: Is it a polygon?", "Which figure is a polygon?", ["A circle", "A closed figure made of 5 straight segments", "Two lines that cross", "A shape with one curved side"], "A closed figure made of 5 straight segments", "A polygon is closed, flat and made only of straight segments that meet at their endpoints."),
+      image("3. Polygons and their names", regularPolygonsDiagram(), "Regular polygons with 3, 4, 5, 6, 8 and 10 sides", "A polygon is named by its number of sides: triangle (3), quadrilateral (4), pentagon (5), hexagon (6), octagon (8), decagon (10)."),
+      text("4. Naming by the number of sides", "The names come from Greek prefixes: **tri**- (3), **quadri**- (4), **penta**- (5), **hexa**- (6), **hepta**- (7), **octa**- (8), **nona**- (9), **deca**- (10).\n\nA polygon has as many **sides** as it has **vertices** (corners) and as many **interior angles** as it has sides."),
+      check("Checkpoint: Names", "What do you call a polygon with 8 sides?", ["Hexagon", "Heptagon", "Octagon", "Decagon"], "Octagon", "Octa- means eight, so a polygon with 8 sides is an octagon."),
+      text("5. Naming a polygon and its parts", "A polygon is named using its **vertices**. If the vertices of a triangle are the points $A$, $B$ and $C$, it can be called triangle $ABC$ (or $BCA$, or $ACB$).\n\nIts **sides** are $\\overline{AB}$, $\\overline{BC}$ and $\\overline{AC}$. Its **interior angles** are $\\angle BAC$, $\\angle ABC$ and $\\angle BCA$."),
+      example("6. Worked example: the parts of a triangle", "Triangle $PQR$ is given. Name its sides and its interior angles.", ["The vertices are $P$, $Q$ and $R$.", "Sides join pairs of vertices: $\\overline{PQ}$, $\\overline{QR}$, $\\overline{PR}$.", "Interior angles are at each vertex: $\\angle QPR$, $\\angle PQR$, $\\angle PRQ$."], "Sides $\\overline{PQ}$, $\\overline{QR}$, $\\overline{PR}$; interior angles $\\angle QPR$, $\\angle PQR$, $\\angle PRQ$."),
+      practice("Polygons, their names and their parts", 12),
+      summary("Key ideas", "• A polygon is a closed plane figure bounded by line segments that meet only at their endpoints.\n• Polygons are named by their number of sides: 3 triangle, 4 quadrilateral, 5 pentagon, 6 hexagon, 7 heptagon, 8 octagon, 9 nonagon, 10 decagon.\n• A polygon has as many sides and interior angles as vertices; it is named using its vertices."),
+    ],
+    practice: ["g7t1-poly-define-01", "g7t1-poly-define-02", "g7t1-poly-define-03", "g7t1-poly-define-04", "g7t1-poly-define-05", "g7t1-poly-define-06", "g7t1-poly-define-07", "g7t1-poly-names-01", "g7t1-poly-names-03", "g7t1-poly-names-05", "g7t1-poly-names-07", "g7t1-poly-names-10"],
+  },
+  {
+    key: "g7t1-w1-d2", week: 1, day: 2, unit: "A", title: "Week 1, Day 2: Regular and Irregular Polygons with 5, 6, 8 or 10 Sides",
+    description: "Naming, describing and comparing regular and irregular polygons with 5, 6, 8 or 10 sides using the measures of their sides and angles.",
+    objectives: ["Define equilateral, equiangular, regular and irregular polygons", "Classify a polygon as regular or irregular from the measures of its sides and angles", "Name regular polygons and state the angle measures of regular polygons with 5, 6, 8 and 10 sides"],
+    minutes: 45, skills: ["g7t1-poly-regular"],
+    teacherNote: LE(1, "Day 2 (Sub-topic 2: name, describe and compare regular and irregular polygons with 5, 6, 8 or 10 sides based on measurements of sides and angles; Activity 1)."),
+    blocks: [
+      text("1. What is special about a square?", "A square has 4 sides that are all equal and 4 interior angles that are all $90^\\circ$. That is what makes it a **regular** polygon."),
+      text("2. Four words to know", "• An **equilateral** polygon has all its sides equal (congruent).\n• An **equiangular** polygon has all its angles equal.\n• A **regular polygon** is both equilateral **and** equiangular.\n• An **irregular polygon** is a polygon whose sides and angles are not all equal.\n\nTo name a regular polygon, add the word \"regular\": regular pentagon, regular hexagon. Two have their own names: a regular triangle is an **equilateral triangle** and a regular quadrilateral is a **square**."),
+      image("3. Regular polygons", regularPolygonsDiagram(), "Regular polygons with 3, 4, 5, 6, 8 and 10 sides", "In each picture all the sides are equal and all the angles are equal."),
+      text("4. Measure and compare", "Measure the sides with a ruler and the interior angles with a protractor. In a **regular** polygon every interior angle has the same measure:\n\n| Regular polygon | Each interior angle | Sum of the interior angles |\n|---|---|---|\n| pentagon (5 sides) | $108^\\circ$ | $540^\\circ$ |\n| hexagon (6 sides) | $120^\\circ$ | $720^\\circ$ |\n| octagon (8 sides) | $135^\\circ$ | $1080^\\circ$ |\n| decagon (10 sides) | $144^\\circ$ | $1440^\\circ$ |"),
+      example("5. Worked example: regular or irregular?", "Pentagon A has five sides of 3 cm each and five interior angles of $108^\\circ$ each. Hexagon B has sides of 4 cm, 4 cm, 4 cm, 4 cm, 4 cm and 6 cm. Classify each.", ["Pentagon A: all sides are equal and all angles are equal, so it is both equilateral and equiangular.", "Hexagon B: its sides are not all equal, so it is not regular."], "Pentagon A is a regular pentagon. Hexagon B is an irregular hexagon."),
+      example("6. Worked example: use what a regular polygon tells you", "ABCDE is a regular pentagon and $BC = 10$ cm. How long is $AE$, and what is $\\angle CBA$?", ["All sides of a regular polygon are equal, so $AE = BC = 10$ cm.", "Each interior angle of a regular pentagon is $108^\\circ$."], "$AE = 10$ cm and $\\angle CBA = 108^\\circ$."),
+      check("Checkpoint: Regular?", "Which statement describes a regular polygon?", ["All sides are equal and all angles are equal", "All sides are equal, but the angles may differ", "It has 4 right angles", "It has at least 5 sides"], "All sides are equal and all angles are equal", "A regular polygon is both equilateral and equiangular."),
+      check("Checkpoint: Angle measure", "Each interior angle of a regular octagon measures", ["108°", "120°", "135°", "144°"], "135°", "From the table: a regular octagon has interior angles of 135° each."),
+      hint("Common mistake", "Equal sides alone are not enough. A rhombus has four equal sides, but its angles are not all equal, so it is not regular. A polygon is regular only when **both** its sides and its angles are equal."),
+      practice("Regular and irregular polygons", 9),
+      summary("Key ideas", "• Equilateral: all sides equal. Equiangular: all angles equal. Regular: both. Irregular: sides and angles not all equal.\n• Regular triangle = equilateral triangle; regular quadrilateral = square.\n• Each interior angle: regular pentagon $108^\\circ$, hexagon $120^\\circ$, octagon $135^\\circ$, decagon $144^\\circ$."),
+    ],
+    practice: ["g7t1-poly-regular-01", "g7t1-poly-regular-02", "g7t1-poly-regular-03", "g7t1-poly-regular-04", "g7t1-poly-regular-05", "g7t1-poly-regular-10", "g7t1-poly-regular-11", "g7t1-poly-regular-12", "g7t1-poly-regular-13"],
+  },
+  {
+    key: "g7t1-w1-d3", week: 1, day: 3, unit: "A", title: "Week 1, Day 3: Drawing Regular Polygons with a Ruler, Protractor and Compass",
+    description: "Drawing regular polygons with 5, 6, 8 or 10 sides from a circle, using a compass, a protractor and a ruler.",
+    objectives: ["Draw a regular pentagon, hexagon, octagon and decagon using a ruler, a protractor and a compass", "State the angle at the center that is used to draw each regular polygon"],
+    minutes: 45, skills: ["g7t1-poly-construct"],
+    teacherNote: LE(1, "Days 3-4 (Sub-topic 3: draw polygons with 5, 6, 8 or 10 sides using a ruler, a protractor and a compass; Activity 3, drawing regular polygons from a circle). The exemplar gives the sub-topic two days; this platform splits it: Day 3 draws the regular polygons, Day 4 draws triangles and quadrilaterals and completes the table. Note: in the exemplar a circle of radius 2 cm is said to give a regular pentagon of side 2 cm. That is true only for the hexagon (side = radius); for the other polygons the learner measures the side with a ruler."),
+    blocks: [
+      text("1. The idea", "A regular polygon can be drawn from a circle. The corners are points on the circle that are equally spaced, so the angle at the center between neighboring points is the same each time:\n\n$$\\text{angle at the center} = \\frac{360^\\circ}{n}$$\n\nFor a regular polygon with $n$ sides you need $n$ points."),
+      image("2. Drawing a regular polygon", constructionDiagram(), "A circle with five equal angles at the center and the regular pentagon joining the points", "Five points every 72° around the center; joining them gives a regular pentagon."),
+      text("3. Three steps", "**Step 1.** With the compass, draw a circle. (The radius is the distance between the compass point and the pencil. Draw it with a ruler first, for example 3 cm.)\n\n**Step 2.** Divide the circle into $n$ equal parts: with the protractor, mark a point every $360^\\circ \\div n$ around the center.\n\n**Step 3.** Connect the points in order with the ruler to make the polygon. Measure the sides with the ruler to check that they are equal."),
+      text("4. The angles to use", "| Regular polygon | Number of sides $n$ | Angle at the center $360^\\circ \\div n$ |\n|---|---|---|\n| pentagon | 5 | $72^\\circ$ |\n| hexagon | 6 | $60^\\circ$ |\n| octagon | 8 | $45^\\circ$ |\n| decagon | 10 | $36^\\circ$ |"),
+      example("5. Worked example: a regular pentagon", "Describe how to draw a regular pentagon from a circle of radius 2 cm.", ["Draw a circle of radius 2 cm.", "Mark points every $360 \\div 5 = 72^\\circ$ around the center.", "Join the five points in order and measure the sides to check."], "A regular pentagon with five equal sides and five equal angles of $108^\\circ$."),
+      example("6. Worked example: a regular hexagon", "A regular hexagon is drawn from a circle of radius 3 cm. What angle do you use, and how long is each side?", ["Angle at the center: $360 \\div 6 = 60^\\circ$.", "Each triangle formed by two neighboring points and the center has angles of $60^\\circ$, so it is equilateral: the side equals the radius."], "Use $60^\\circ$; each side is 3 cm."),
+      check("Checkpoint: The angle", "To draw a regular octagon from a circle, at what angle around the center do you mark the points?", ["30°", "45°", "60°", "72°"], "45°", "$360 \\div 8 = 45$, so the points are 45° apart."),
+      check("Checkpoint: The last step", "What is the LAST step in drawing a regular octagon from a circle?", ["Draw the circle", "Mark the points every 45°", "Join the points in order", "Measure the radius"], "Join the points in order", "First the circle, then the points, and the last step is to connect the points."),
+      hint("Draw it accurately", "Use a sharp pencil, keep the compass point fixed, line up the protractor's zero line and its center with the center of the circle every time, and check your result by measuring all the sides."),
+      practice("Drawing regular polygons", 7),
+      summary("Key ideas", "• Tools: compass (circle), protractor (equal angles at the center), ruler (join the points and check the sides).\n• Angle at the center $= 360^\\circ \\div n$: pentagon $72^\\circ$, hexagon $60^\\circ$, octagon $45^\\circ$, decagon $36^\\circ$.\n• Steps: circle, equal points, join in order."),
+    ],
+    practice: ["g7t1-poly-construct-01", "g7t1-poly-construct-02", "g7t1-poly-construct-03", "g7t1-poly-construct-04", "g7t1-poly-construct-07", "g7t1-poly-construct-08", "g7t1-poly-construct-09"],
+  },
+  {
+    key: "g7t1-w1-d4", week: 1, day: 4, unit: "A", title: "Week 1, Day 4: Triangles, Quadrilaterals and Polygon Angle Facts - Review and Check",
+    description: "Drawing triangles and quadrilaterals with a ruler and a protractor, completing the table of angle facts, and a check on the week.",
+    objectives: ["Draw a triangle and a quadrilateral using a ruler and a protractor", "Complete and use the table of the sides, interior angles and sums of regular polygons", "Answer a short check on defining, naming, classifying and drawing polygons"],
+    minutes: 45, skills: ["g7t1-poly-names", "g7t1-poly-regular", "g7t1-poly-construct"],
+    teacherNote: LE(1, "Days 3-4 (Sub-topic 3, Day 4: Activity 4 complete the table, Activity 5 drawing triangles and quadrilaterals, and the formative assessment). Day 4 of this platform's split."),
+    blocks: [
+      text("1. Drawing a triangle", "With a ruler and a protractor you can draw a triangle from given measures.\n\n**Example:** a triangle with a 5 cm side $AB$ and angles of $40^\\circ$ at $A$ and $60^\\circ$ at $B$.\n\n1. Draw $AB = 5$ cm with the ruler.\n2. At $A$, use the protractor to mark $40^\\circ$ and draw a ray.\n3. At $B$, mark $60^\\circ$ and draw a ray.\n4. The rays meet at $C$. Measure $\\angle C$: it should be $80^\\circ$."),
+      text("2. Drawing a quadrilateral", "To draw a rectangle that is 5 cm long and 3 cm wide, draw the 5 cm side, then use the protractor to draw a $90^\\circ$ angle at each end, measure 3 cm along each, and join the ends. All four interior angles should measure $90^\\circ$."),
+      text("3. Completing the table", "| Polygon | Sides | Interior angles | Each interior angle if regular | Sum of the interior angles |\n|---|---|---|---|---|\n| pentagon | 5 | 5 | $108^\\circ$ | $540^\\circ$ |\n| hexagon | 6 | 6 | $120^\\circ$ | $720^\\circ$ |\n| octagon | 8 | 8 | $135^\\circ$ | $1080^\\circ$ |\n| decagon | 10 | 10 | $144^\\circ$ | $1440^\\circ$ |\n\nThe number of sides and the number of interior angles are always the same. For the same number of sides the sum of the interior angles is the same whether the polygon is regular or irregular; only in a regular polygon are all the angles equal."),
+      check("Checkpoint 1", "Polygons are classified according to their number of", ["sides", "colors", "diagonals only", "areas"], "sides", "Polygons are named by the number of their sides."),
+      check("Checkpoint 2", "Each interior angle of a regular pentagon is", ["90°", "108°", "120°", "144°"], "108°", "From the table: 540° ÷ 5 = 108°."),
+      check("Checkpoint 3", "A regular hexagon has interior angles that add up to", ["540°", "720°", "1080°", "1440°"], "720°", "From the table: the sum for a hexagon is 720°."),
+      example("4. Worked example: put it together", "ABCDE is a regular pentagon. What is the sum of $\\angle CBA$ and $\\angle CDE$, and the sum of all its interior angles?", ["Each interior angle of a regular pentagon is $108^\\circ$.", "$\\angle CBA + \\angle CDE = 108 + 108 = 216^\\circ$.", "The sum of all five interior angles is $540^\\circ$."], "$216^\\circ$ for the two angles and $540^\\circ$ for all five."),
+      practice("Review: polygons", 6),
+      summary("Check yourself", "• Can you define a polygon and name polygons by their sides?\n• Can you tell regular from irregular polygons using their sides and angles?\n• Can you draw a regular polygon, a triangle and a quadrilateral with a ruler, a protractor and a compass?"),
+    ],
+    practice: ["g7t1-poly-names-07", "g7t1-poly-regular-10", "g7t1-poly-regular-11", "g7t1-poly-regular-13", "g7t1-poly-construct-02", "g7t1-poly-construct-08"],
+  },
+
   // =========================================================================================================== Week 2 (LE Q1 Lesson 2)
   {
     key: "g7t1-w2-d1", week: 2, day: 1, unit: "A", title: "Week 2, Day 1: Convex and Non-Convex Polygons",
