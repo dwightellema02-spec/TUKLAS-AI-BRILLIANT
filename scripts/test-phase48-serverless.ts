@@ -50,6 +50,11 @@ async function main() {
     const noUrl = spawnSync("npx", ["tsx", "scripts/setup-database.ts"], { env: { ...process.env, DATABASE_URL: "" } as NodeJS.ProcessEnv, encoding: "utf-8" });
     assert(noUrl.status === 1 && /needs DATABASE_URL/.test(noUrl.stderr), "No address: refused");
 
+    section("1b. The limit store on this fresh database (shared mode must really run, not be skipped)");
+    const storeRun = spawnSync("npx", ["tsx", "scripts/test-phase48-store.ts"], { env: { ...process.env, DATABASE_URL: freshUrl } as NodeJS.ProcessEnv, encoding: "utf-8", maxBuffer: 20 * 1024 * 1024 });
+    assert(storeRun.status === 0 && /Shared \(database\) mode/.test(storeRun.stdout) && !/Shared mode skipped/.test(storeRun.stdout), "The store test runs its database half and passes");
+    assert(/RESULTS: (\d+) passed, 0 failed/.test(storeRun.stdout) && Number(/RESULTS: (\d+) passed/.exec(storeRun.stdout)?.[1]) >= 41, `...with at least 41 checks (${/RESULTS: (\d+) passed/.exec(storeRun.stdout)?.[1]})`);
+
     section("2. Start the function instances");
     const start = async (port: number, extra: Record<string, string> = {}) => {
       const p = spawn("node", ["scripts/serverless-shim.mjs"], { env: { ...process.env, DATABASE_URL: freshUrl, VERCEL: "1", NODE_ENV: "production", AI_PROVIDER: "local", AUTH_SECRET: authSecret, APP_URL: "https://tuklas.example.edu", PRIVACY_CONTACT_EMAIL: "privacy@example.edu", PORT: String(port), ...extra }, stdio: ["ignore", "pipe", "pipe"], detached: true });
