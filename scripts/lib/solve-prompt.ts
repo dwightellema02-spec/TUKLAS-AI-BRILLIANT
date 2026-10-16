@@ -7,6 +7,10 @@ const nums = (s: string) => [...s.replace(/,/g, "").matchAll(/\d+(?:\.\d+)?/g)].
 export function solveNumeric(p: string): number | undefined {
   const n = nums(p);
   let m: RegExpMatchArray | null;
+  // Phase 49 questions (from the Week 5 exemplar topics): original price from a sale price, the principal and the rate in simple interest
+  if (/is on sale for ₱[\d,]+ after a \d+% discount\. What was its original price/.test(p)) return n[0] / (1 - n[1] / 100);
+  if (/pays ₱[\d,]+ simple interest after \d+ years at \d+% per year\. What principal/.test(p)) return n[0] / ((n[2] / 100) * n[1]);
+  if (/earns ₱[\d,]+ simple interest in \d+ years\. What is the yearly interest rate/.test(p)) return (n[1] / (n[0] * n[2])) * 100;
   // wordings used by the tutor's worked examples (Phase 40)
   if (/is invested at \d+% simple interest per year for \d+ years\. How much interest/.test(p)) return (n[0] * n[1] * n[2]) / 100;
   if (/is invested at \d+% simple interest per year for \d+ years\. How much money/.test(p)) return n[0] + (n[0] * n[1] * n[2]) / 100;

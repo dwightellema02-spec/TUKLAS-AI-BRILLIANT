@@ -85,16 +85,16 @@ async function main() {
       const r = await api("POST", "/api/ai/tutor", S, { practiceSessionId: st.id, questionId: it.id ?? it.questionId, studentQuery: query, studentAnswer: answer, helpLevel: 1 });
       const d = r.json.data ?? {}; return `${d.message?.content ?? ""} ${d.message?.guidingQuestion ?? d.guidingQuestion ?? ""}`;
     };
-    const T = "Percentage Increase and Percentage Decrease";
+    const T = "Week 4, Day 1: Percentage Increase";
     let m = await ask(T, "rises from 200 to 250", "20");
     assert(/new value|started|original|start/i.test(m) && !/\b25\b/.test(m), `Dividing by the new value (20) is named without giving 25: "${m.slice(0, 160)}"`);
     m = await ask(T, "rises from 200 to 250", "50");
     assert(/change itself|compare|original/i.test(m) && !/\b25\b/.test(m), `Giving the change (50) is named: "${m.slice(0, 160)}"`);
     m = await ask(T, "rises from 200 to 250", "25");
     assert(/right|correct/i.test(m), `The correct answer is confirmed: "${m.slice(0, 100)}"`);
-    m = await ask("Interior and Exterior Angles of Polygons", "sum of the interior angles of a polygon with 5 sides", "900");
+    m = await ask("Week 3, Day 3: Angle Measures and the Number of Sides of Polygons", "sum of the interior angles of a polygon with 5 sides", "900");
     assert(/triangle|sides|fewer/i.test(m) && !/\b540\b/.test(m), `Using sides x 180 (900) is named without giving 540: "${m.slice(0, 160)}"`);
-    m = await ask("Rates and Unit Rates", "jeepney travels 240 km in 4 hours", "0.02");
+    m = await ask("Week 6, Day 3: Solving Problems Involving Rates", "jeepney travels 240 km in 4 hours", "0.02");
     assert(m.length > 20 && !/\b60\b/.test(m), `A wrong speed gets guidance without the value: "${m.slice(0, 160)}"`);
   } finally {
     if (server?.pid) { try { process.kill(-server.pid, "SIGKILL"); } catch { /* */ } }

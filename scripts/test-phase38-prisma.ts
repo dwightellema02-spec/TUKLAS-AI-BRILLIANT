@@ -7,6 +7,9 @@ import crypto from "crypto";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { PrismaClient } from "@prisma/client";
 import { GRADE7_TERM1_LESSONS, GRADE7_TERM1_QUESTIONS, GRADE7_TERM1_SKILLS } from "../src/lib/curriculum/grade7-term1";
+/** Lessons students can see. Week 1 is held back (DRAFT) until its Lesson Exemplar is supplied (Phase 49). */
+const SHOWN = GRADE7_TERM1_LESSONS.filter((l) => l.published !== false);
+const HIDDEN = GRADE7_TERM1_LESSONS.filter((l) => l.published === false);
 
 async function main() {
   const url = process.env.DATABASE_URL ?? "";
@@ -38,8 +41,8 @@ async function main() {
     assert(c1.lessons === GRADE7_TERM1_LESSONS.length + 1, `${GRADE7_TERM1_LESSONS.length} Term 1 lessons + the integers lesson (${c1.lessons})`);
     assert(c1.skills === GRADE7_TERM1_SKILLS.length + 3, `Skills seeded (${c1.skills})`);
     assert(c1.q === GRADE7_TERM1_QUESTIONS.length, `All ${GRADE7_TERM1_QUESTIONS.length} questions stored (${c1.q})`);
-    assert(c1.sets === GRADE7_TERM1_LESSONS.length, "One practice set per Term 1 lesson");
-    assert(c1.psq === GRADE7_TERM1_LESSONS.reduce((n, l) => n + l.practice.length, 0), "Practice sets hold exactly the planned questions");
+    assert(c1.sets === SHOWN.length, `One practice set per published Term 1 lesson (${SHOWN.length}); none for the held-back Week 1`);
+    assert(c1.psq === SHOWN.reduce((n, l) => n + l.practice.length, 0), "Practice sets hold exactly the planned questions");
     const seed2 = sh("npx", ["tsx", "prisma/seed.ts"], { SEED_CURRICULUM_ONLY: "true" });
     const c2 = await counts();
     assert(seed2.status === 0 && JSON.stringify(c1) === JSON.stringify(c2), "Seeding again changes nothing (idempotent)");
@@ -71,9 +74,10 @@ async function main() {
     const admin = (await api("POST", "/api/auth/login", undefined, { email: adminEmail, password: adminPassword })).json.token as string;
     const S = (await api("POST", "/api/auth/register", undefined, { name: "Student", email: `p38.s.${run}@example.edu`, password: "Sturdy-Pass1" })).json.token as string;
     const lessons = (await api("GET", "/api/lessons", S)).json.data as any[];
-    const w2 = lessons.find((x) => x.title === GRADE7_TERM1_LESSONS[1].title);
-    assert((await api("GET", `/api/student/lessons/${w2.id}/access`, S)).json.data?.allowed === false, "Week 2 is locked until Week 1 is completed (the platform's lesson sequencing)");
-    for (const l of GRADE7_TERM1_LESSONS) {
+    const w2 = lessons.find((x) => x.title === SHOWN[1].title);
+    assert(HIDDEN.every((h) => !lessons.some((x) => x.title === h.title)), "A student cannot see the held-back Week 1 lesson (no exemplar yet)");
+    assert((await api("GET", `/api/student/lessons/${w2.id}/access`, S)).json.data?.allowed === false, "The second published lesson (Week 2, Day 2) is locked until the first (Week 2, Day 1) is completed (the platform's lesson sequencing)");
+    for (const l of SHOWN) {
       const row = lessons.find((x) => x.title === l.title);
       assert(!!row, `Student can see "${l.title}"`);
       if (!row) continue;
@@ -97,9 +101,9 @@ async function main() {
       assert(done.status === 200, `  ${l.key}: lesson completes after its checkpoints are answered correctly (${done.status})`);
     }
     const sets = (await api("GET", "/api/practice-sets", S)).json.data as any[];
-    assert(sets.filter((s) => s.title.startsWith("Practice: ")).length === GRADE7_TERM1_LESSONS.length, "Student can see the 6 practice sets");
+    assert(sets.filter((s) => s.title.startsWith("Practice: ")).length === SHOWN.length, `Student can see the ${SHOWN.length} practice sets (one per daily lesson)`);
     let allCorrect = true, totalAnswered = 0;
-    for (const l of GRADE7_TERM1_LESSONS) {
+    for (const l of SHOWN) {
       const set = sets.find((s) => s.title === `Practice: ${l.title}`);
       const start = await api("POST", "/api/practice/start", S, { practiceSetId: set.id });
       assert(start.status === 201, `  ${l.key}: practice starts`);
@@ -126,7 +130,7 @@ async function main() {
     // the built-in tutor must not teach integer facts on polygon / percent / rate questions (it did: "numbers have a size and a sign...")
     const INTEGER_TALK = /number line|negative number|absolute value|temperature|direction from zero|size and a sign|below zero/i;
     let leaks = 0, tutorReplies = 0;
-    for (const l of GRADE7_TERM1_LESSONS) {
+    for (const l of SHOWN) {
       const set = sets.find((s) => s.title === `Practice: ${l.title}`);
       const st = (await api("POST", "/api/practice/start", S, { practiceSetId: set.id })).json.data;
       const q = (st.questions[0].question ?? st.questions[0]);

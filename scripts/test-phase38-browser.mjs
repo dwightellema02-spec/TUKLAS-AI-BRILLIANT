@@ -29,28 +29,31 @@ const sErr = [];
 const sctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
 await sctx.addCookies([{ name: "tuklas_session", value: S, url: base }]);
 const sp = await sctx.newPage(); watch(sp, sErr);
-const w1 = lessons.find((l) => /Polygons: Naming/.test(l.title));
-await sp.goto(`${base}/student/lessons/${w1.id}`); await sp.waitForTimeout(2500);
+// the three daily lessons that carry a diagram (Phase 49 split the weekly lessons into daily ones)
+const withDiagrams = [/Week 2, Day 1:/, /Week 2, Day 3:/, /Week 3, Day 1:/].map((re) => lessons.find((l) => re.test(l.title)));
 let images = 0, brokenImages = 0, mathErrors = 0, overflow = 0, katex = 0;
-for (let i = 0; i < 14; i++) {
-  const info = await sp.evaluate(() => ({
-    imgs: [...document.images].filter((x) => x.src.startsWith("data:")).map((x) => x.naturalWidth),
-    kerr: document.querySelectorAll(".katex-error").length, k: document.querySelectorAll(".katex").length,
-    over: document.documentElement.scrollWidth > window.innerWidth + 1,
-  }));
-  images += info.imgs.length; brokenImages += info.imgs.filter((w) => w === 0).length; mathErrors += info.kerr; katex += info.k; overflow += info.over ? 1 : 0;
-  const next = sp.getByRole("button", { name: /Next Section/ }).first();
-  if (!(await next.count())) break;
-  await next.click(); await sp.waitForTimeout(300);
+for (const lesson of withDiagrams) {
+  await sp.goto(`${base}/student/lessons/${lesson.id}`); await sp.waitForTimeout(2500);
+  for (let i = 0; i < 14; i++) {
+    const info = await sp.evaluate(() => ({
+      imgs: [...document.images].filter((x) => x.src.startsWith("data:")).map((x) => x.naturalWidth),
+      kerr: document.querySelectorAll(".katex-error").length, k: document.querySelectorAll(".katex").length,
+      over: document.documentElement.scrollWidth > window.innerWidth + 1,
+    }));
+    images += info.imgs.length; brokenImages += info.imgs.filter((w) => w === 0).length; mathErrors += info.kerr; katex += info.k; overflow += info.over ? 1 : 0;
+    const next = sp.getByRole("button", { name: /Next Section/ }).first();
+    if (!(await next.count())) break;
+    await next.click(); await sp.waitForTimeout(300);
+  }
 }
-check(images >= 2 && brokenImages === 0, `Week 1 diagrams all load (${images} images, ${brokenImages} broken)`);
+check(images >= 3 && brokenImages === 0, `The daily lessons' diagrams all load (${images} images, ${brokenImages} broken)`);
 check(katex > 10 && mathErrors === 0, `Math renders (${katex} formulas, ${mathErrors} errors)`);
 check(overflow === 0, "No section scrolls sideways on a 390px phone");
 check(sErr.length === 0, `No page errors or React warnings in the lesson (${sErr.join(" | ").slice(0, 300)})`);
 // all diagrams, wherever they appear, are valid pictures
 await sp.goto(`${base}/student/learning-path`); await sp.waitForTimeout(2500);
 const path = await sp.innerText("main");
-check(/Term 1 and Term 2/i.test(path) && /Lesson 7/i.test(path) && !/Lesson 1\b[\s\S]*Lesson 1\b/i.test(path), "Learning path names the whole course and numbers lessons 1-7 (integers is not 'Lesson 1')");
+check(/Term 1 and Term 2/i.test(path) && /Lesson 22/i.test(path) && !/Lesson 1\b[\s\S]*Lesson 1\b/i.test(path), "Learning path names the whole course and numbers the lessons one after another (integers is Lesson 22, not 'Lesson 1')");
 check(/Requires completion of/.test(path), "Locked lessons say what unlocks them");
 
 // ---- teacher, laptop
@@ -66,7 +69,7 @@ const intUnit = cdata.flatMap((t) => t.units).find((u) => /Integers/.test(u.titl
 await tp.goto(`${base}/teacher/curriculum/${intUnit.id}`); await tp.waitForTimeout(2500);
 check(/Understanding Integers/.test(await tp.innerText("main")), "The Term 2 unit page opens that unit's lessons (it used to show Term 1's first unit)");
 await tp.goto(`${base}/teacher/practice-sets`); await tp.waitForTimeout(2000);
-check(/Practice: Rates and Unit Rates/.test(await tp.innerText("main")), "Teacher sees the seeded practice sets");
+check(/Practice: Week 6, Day 3/.test(await tp.innerText("main")), "Teacher sees the seeded practice sets");
 check(tErr.length === 0, `No page errors in the teacher screens (${tErr.join(" | ").slice(0, 300)})`);
 await browser.close();
 console.log(failed ? `${failed} CHECK(S) FAILED` : "ALL BROWSER CHECKS PASSED");
