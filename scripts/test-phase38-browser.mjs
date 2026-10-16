@@ -29,8 +29,8 @@ const sErr = [];
 const sctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
 await sctx.addCookies([{ name: "tuklas_session", value: S, url: base }]);
 const sp = await sctx.newPage(); watch(sp, sErr);
-// the three daily lessons that carry a diagram (Phase 49 split the weekly lessons into daily ones)
-const withDiagrams = [/Week 2, Day 1:/, /Week 2, Day 3:/, /Week 3, Day 1:/].map((re) => lessons.find((l) => re.test(l.title)));
+// A new student can open only the first lesson (the rest unlock in order): Week 1, Day 1 (it has a diagram and math). Every diagram's validity is also checked by test-phase38-curriculum.ts.
+const withDiagrams = [/Week 1, Day 1:/].map((re) => lessons.find((l) => re.test(l.title)));
 let images = 0, brokenImages = 0, mathErrors = 0, overflow = 0, katex = 0;
 for (const lesson of withDiagrams) {
   await sp.goto(`${base}/student/lessons/${lesson.id}`); await sp.waitForTimeout(2500);
@@ -46,8 +46,8 @@ for (const lesson of withDiagrams) {
     await next.click(); await sp.waitForTimeout(300);
   }
 }
-check(images >= 3 && brokenImages === 0, `The daily lessons' diagrams all load (${images} images, ${brokenImages} broken)`);
-check(katex > 10 && mathErrors === 0, `Math renders (${katex} formulas, ${mathErrors} errors)`);
+check(images >= 1 && brokenImages === 0, `The first daily lesson's diagram loads (${images} images, ${brokenImages} broken)`);
+check(katex >= 3 && mathErrors === 0, `Math renders (${katex} formulas, ${mathErrors} errors)`);
 check(overflow === 0, "No section scrolls sideways on a 390px phone");
 check(sErr.length === 0, `No page errors or React warnings in the lesson (${sErr.join(" | ").slice(0, 300)})`);
 // all diagrams, wherever they appear, are valid pictures

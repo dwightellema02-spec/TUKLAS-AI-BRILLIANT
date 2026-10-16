@@ -188,7 +188,7 @@ for (const [d, t] of [[240, 4], [180, 3], [150, 2.5]] as const) {
 for (const [s, t] of [[45, 3], [60, 2.5], [80, 1.5]] as const) {
   num("g7t1-rate-problems", `A van travels at ${s} km/h for ${t} hours. How far does it go (in km)?`, s * t, `Distance = speed × time = ${s} × ${t} = ${s * t} km.`, "MEDIUM", { tolerance: 0.01, unit: "km" });
 }
-for (const [d, s] of [[180, 60], [150, 50], [90, 45]] as const) {
+for (const [d, s] of [[180, 60], [150, 50], [120, 30]] as const) {
   num("g7t1-rate-problems", `How long does it take to travel ${d} km at ${s} km/h (in hours)?`, d / s, `Time = distance ÷ speed = ${d} ÷ ${s} = ${d / s} hours.`, "MEDIUM", { tolerance: 0.01, unit: "h" });
 }
 num("g7t1-rate-problems", "Jim writes 10 pages in 4 hours. At this rate, how many pages can he write in 6 hours?", 15, "Unit rate = 10 ÷ 4 = 2.5 pages per hour. In 6 hours: 2.5 × 6 = 15 pages.", "HARD", { tolerance: 0.01 });
@@ -203,7 +203,7 @@ mc("g7t1-ext-int", "At one vertex of a polygon, the interior angle and the exter
 for (const [n, name, angle] of [[5, "pentagon", 108], [8, "octagon", 135]] as const) {
   num("g7t1-poly-regular", `Each interior angle of a regular ${name} measures how many degrees?`, angle, `A regular ${name} has ${n} equal interior angles of ${angle}° each.`, "EASY", { tolerance: 0.01, unit: "°" });
 }
-mc("g7t1-poly-regular", "A polygon that is both equilateral and equiangular is called a", "regular polygon", ["irregular polygon", "convex polygon only", "quadrilateral"], "Equilateral means all sides are equal and equiangular means all angles are equal; a polygon with both is regular.");
+mc("g7t1-poly-regular", "A polygon that is both equilateral and equiangular is called a", "regular polygon", ["irregular polygon", "triangle", "quadrilateral"], "Equilateral means all sides are equal and equiangular means all angles are equal; a polygon with both is regular.");
 num("g7t1-poly-regular", "ABCDE is a regular pentagon and side BC is 10 cm. How long is side AE (in cm)?", 10, "All sides of a regular polygon are equal, so AE = BC = 10 cm.", "EASY", { tolerance: 0.01, unit: "cm" });
 for (const [rate, original] of [[12, 600], [35, 2000]] as const) {
   const sale = original * (1 - rate / 100);

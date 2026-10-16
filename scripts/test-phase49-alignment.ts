@@ -1,6 +1,6 @@
 /**
  * Tuklas AI - Phase 49: the Grade 7 Term 1 lessons follow the DepEd Budget of Work and Lesson Exemplars DAY BY DAY. Pure (no server/DB).
- *   - one lesson per exemplar day (Weeks 2-6), in order; Week 1 held back (its exemplar was not supplied)
+ *   - one lesson per exemplar day (Weeks 1-6), in order
  *   - each lesson names the topics of its day, and does NOT mention topics that belong to another day or week (so a week's topics are never
  *     combined in one lesson, and nothing outside the exemplars is taught)
  *   - the practice questions stay inside the lesson's day too
@@ -12,8 +12,8 @@ let passed = 0, failed = 0;
 const assert = (c: boolean, m: string) => { if (c) { passed++; if (process.env.VERBOSE) console.log(`  ✅ ${m}`); } else { failed++; console.error(`  ❌ FAILED: ${m}`); } };
 const section = (t: string) => console.log(`\n--- ${t} ---`);
 
-/** Days per week in the Lesson Exemplars (Q1 Lessons 2-6): Week 2 has 4 days, Week 3 has 5, Weeks 4-6 have 4. */
-const DAYS: Record<number, number> = { 2: 4, 3: 5, 4: 4, 5: 4, 6: 4 };
+/** Days per week in the Lesson Exemplars (Q1 Lessons 1-6): Weeks 1 and 2 have 4 days, Week 3 has 5, Weeks 4-6 have 4. */
+const DAYS: Record<number, number> = { 1: 4, 2: 4, 3: 5, 4: 4, 5: 4, 6: 4 };
 type Rule = { must: RegExp[]; mustNot: RegExp[] };
 /**
  * Scope rules. A lesson may refer back to anything taught earlier (an earlier day or an earlier week) but must not teach, name or test
@@ -21,6 +21,7 @@ type Rule = { must: RegExp[]; mustNot: RegExp[] };
  */
 const ANGLE_PAIRS = /complementary|supplementary|linear pair|vertical angle/i;
 const WEEK_NOT: Record<number, RegExp> = {
+  1: /exterior angle|n\s*-\s*2|complementary|supplementary|linear pair|vertical angle|convex|percent|%|₱|unit rate|speed/i,
   2: /exterior angle|n\s*-\s*2|sum of the interior|percent|%|₱|unit rate|speed/i,
   3: /percent|%|₱|unit rate|speed|discount/i,
   4: /discount|commission|sales tax|VAT|simple interest|unit rate|speed/i,
@@ -28,6 +29,10 @@ const WEEK_NOT: Record<number, RegExp> = {
   6: /%|percent|discount|commission|interest/i,
 };
 const RULES: Record<string, Rule> = {
+  "g7t1-w1-d1": { must: [/polygon/i, /vertices/i, /interior angles?/i, /pentagon/i, /triangle/i], mustNot: [/regular|irregular|equilateral|equiangular|compass|central angle/i] },
+  "g7t1-w1-d2": { must: [/equilateral/i, /equiangular/i, /regular polygon/i, /irregular/i, /108/, /135/], mustNot: [/compass|central angle|circle/i] },
+  "g7t1-w1-d3": { must: [/compass/i, /protractor/i, /ruler/i, /circle/i, /72/, /45/, /36/], mustNot: [] },
+  "g7t1-w1-d4": { must: [/triangle/i, /quadrilateral/i, /protractor/i, /540/, /720/], mustNot: [] },
   "g7t1-w2-d1": { must: [/non-convex/i, /convex/i, /180/], mustNot: [ANGLE_PAIRS] },
   "g7t1-w2-d2": { must: [/complementary/i, /supplementary/i, /adjacent/i, /90/], mustNot: [/linear pair|vertical angle/i] },
   "g7t1-w2-d3": { must: [/linear pair/i, /vertical/i], mustNot: [] },
@@ -60,9 +65,8 @@ for (const [w, n] of Object.entries(DAYS)) {
   assert(ls.length === n && ls.every((l, i) => l.day === i + 1), `Week ${w}: ${n} daily lessons (Days 1-${n})`);
   assert(ls.every((l) => l.key === `g7t1-w${w}-d${l.day}` && l.title.startsWith(`Week ${w}, Day ${l.day}:`)), `Week ${w}: keys and titles carry the week and day`);
 }
-assert(daily.length === 21, "21 daily lessons for Weeks 2-6 (4 + 5 + 4 + 4 + 4)");
-const w1 = L.filter((l) => l.week === 1);
-assert(w1.length === 1 && w1[0].published === false && /Lesson Exemplar for Q1 Lesson 1/.test(w1[0].teacherNote), "Week 1 is held back (not published) with a note that its Lesson Exemplar is missing");
+assert(daily.length === 25, "25 daily lessons for Weeks 1-6 (4 + 4 + 5 + 4 + 4 + 4)");
+assert(L.every((l) => l.day !== undefined), "Every lesson is a daily lesson (no lesson holds a whole week)");
 assert(daily.every((l) => l.published !== false), "Every daily lesson is published");
 assert(daily.every((l) => new RegExp(`Lesson Exemplar Q1 Lesson ${l.week}, `).test(l.teacherNote)), "Every daily lesson's teacher note names the exemplar it follows");
 
@@ -94,9 +98,7 @@ const used = new Set(daily.flatMap((l) => l.practice));
 assert([...used].every((k) => Q.some((q) => q.key === k)), "Every practice question exists");
 
 section("5. Nothing beyond the exemplars is left in the question bank");
-for (const k of ["g7t1-angle-pairs-12", "g7t1-angle-pairs-13", "g7t1-pct-decrease-13", "g7t1-money-interest-05"]) assert(!Q.some((q) => q.key === k), `${k} (beyond the exemplar) is not in the bank`);
-const w1Skills = new Set(SK.filter((s) => s.competency === "w1").map((s) => s.key));
-assert(daily.every((l) => !l.skills.some((s) => w1Skills.has(s))), "No daily lesson teaches a Week 1 skill (Week 1 waits for its exemplar)");
+for (const k of ["g7t1-angle-pairs-12", "g7t1-angle-pairs-13", "g7t1-pct-decrease-13", "g7t1-money-interest-05", "g7t1-poly-regular-06", "g7t1-poly-regular-07", "g7t1-poly-regular-08", "g7t1-poly-regular-09", "g7t1-poly-construct-05", "g7t1-poly-construct-06"]) assert(!Q.some((q) => q.key === k), `${k} (beyond the exemplar) is not in the bank`);
 
 console.log(`\nPHASE 49 ALIGNMENT RESULTS: ${passed} passed, ${failed} failed (daily lessons: ${daily.length})`);
 process.exit(failed > 0 ? 1 : 0);

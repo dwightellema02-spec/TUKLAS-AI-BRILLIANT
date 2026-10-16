@@ -26,8 +26,8 @@ assert(GRADE7_TERM1_SKILLS.every((s) => s.prerequisites.every((p) => order.index
 const compKeys = new Set(GRADE7_TERM1_COMPETENCIES.map((c) => c.key));
 assert(GRADE7_TERM1_SKILLS.every((s) => compKeys.has(s.competency)), "Every skill has a competency");
 assert(new Set(GRADE7_TERM1_COMPETENCIES.map((c) => c.code)).size === GRADE7_TERM1_COMPETENCIES.length, "Competency codes are unique");
-assert(GRADE7_TERM1_UNITS.length === 2 && GRADE7_TERM1_LESSONS.length === 22, "2 units and 22 lessons (Week 1 held back, then one lesson per day for Weeks 2-6: 4 + 5 + 4 + 4 + 4)");
-assert(GRADE7_TERM1_LESSONS.map((l) => `${l.week}.${l.day ?? 0}`).join() === "1.0,2.1,2.2,2.3,2.4,3.1,3.2,3.3,3.4,3.5,4.1,4.2,4.3,4.4,5.1,5.2,5.3,5.4,6.1,6.2,6.3,6.4", "Lessons are in week and day order");
+assert(GRADE7_TERM1_UNITS.length === 2 && GRADE7_TERM1_LESSONS.length === 25, "2 units and 25 lessons (one lesson per day of the Lesson Exemplars: Week 1: 4, Week 2: 4, Week 3: 5, Weeks 4-6: 4 each)");
+assert(GRADE7_TERM1_LESSONS.map((l) => `${l.week}.${l.day ?? 0}`).join() === "1.1,1.2,1.3,1.4,2.1,2.2,2.3,2.4,3.1,3.2,3.3,3.4,3.5,4.1,4.2,4.3,4.4,5.1,5.2,5.3,5.4,6.1,6.2,6.3,6.4", "Lessons are in week and day order");
 assert(GRADE7_TERM1_SKILLS.every((s) => GRADE7_TERM1_LESSONS.some((l) => l.skills.includes(s.key))), "Every skill is taught by a lesson");
 
 section("2. Questions are well formed");

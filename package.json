@@ -79,7 +79,8 @@
     "vercel-build": "prisma generate && vite build && npm run build:vercel",
     "setup:db": "tsx scripts/setup-database.ts",
     "test:phase48": "tsx scripts/test-phase48-store.ts",
-    "test:phase48:pg": "tsx scripts/test-phase48-serverless.ts"
+    "test:phase48:pg": "tsx scripts/test-phase48-serverless.ts",
+    "test:phase49": "tsx scripts/test-phase49-alignment.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts",
