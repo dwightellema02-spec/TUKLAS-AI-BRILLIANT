@@ -1,11 +1,11 @@
 /** Small generated SVG diagrams (as data URIs) used by lesson image blocks. No external files. */
-const uri = (svg: string) => `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-const wrap = (w: number, h: number, body: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" font-family="Arial, sans-serif" font-size="13"><rect width="${w}" height="${h}" fill="#ffffff"/>${body}</svg>`;
-const pts = (n: number, cx: number, cy: number, r: number, start = -90) => Array.from({ length: n }, (_, i) => { const a = ((start + (360 / n) * i) * Math.PI) / 180; return [cx + r * Math.cos(a), cy + r * Math.sin(a)] as const; });
-const poly = (p: ReadonlyArray<readonly [number, number]>, fill: string, stroke = "#0f766e") => `<polygon points="${p.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ")}" fill="${fill}" stroke="${stroke}" stroke-width="2.5" stroke-linejoin="round"/>`;
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+export const uri = (svg: string) => `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+export const wrap = (w: number, h: number, body: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" font-family="Arial, sans-serif" font-size="13"><rect width="${w}" height="${h}" fill="#ffffff"/>${body}</svg>`;
+export const pts = (n: number, cx: number, cy: number, r: number, start = -90) => Array.from({ length: n }, (_, i) => { const a = ((start + (360 / n) * i) * Math.PI) / 180; return [cx + r * Math.cos(a), cy + r * Math.sin(a)] as const; });
+export const poly = (p: ReadonlyArray<readonly [number, number]>, fill: string, stroke = "#0f766e") => `<polygon points="${p.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ")}" fill="${fill}" stroke="${stroke}" stroke-width="2.5" stroke-linejoin="round"/>`;
+export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 /** One text line (several lines are stacked 17px apart). Text is XML-escaped: an unescaped "<" makes the whole SVG invalid and the picture breaks. */
-const label = (x: number, y: number, t: string | string[], anchor = "middle") =>
+export const label = (x: number, y: number, t: string | string[], anchor = "middle") =>
   (Array.isArray(t) ? t : [t]).map((line, i) => `<text x="${x}" y="${y + i * 17}" text-anchor="${anchor}" fill="#334155">${esc(line)}</text>`).join("");
 
 /** Regular polygons with 3, 4, 5, 6, 8 and 10 sides, labelled by name. */

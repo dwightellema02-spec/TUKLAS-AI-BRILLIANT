@@ -83,6 +83,8 @@ for (const l of daily) {
   assert(l.blocks.length >= 6 && l.blocks.length <= 13, `${l.key}: a day's lesson has 6-13 sections (${l.blocks.length})`);
   assert(l.skills.length <= 3 && l.objectives.length <= 4, `${l.key}: at most 3 skills and 4 objectives (${l.skills.length} skills, ${l.objectives.length} objectives)`);
   assert(l.blocks.filter((b) => b.type === "EXAMPLE").length <= 5 && l.minutes <= 50, `${l.key}: at most 5 worked examples, at most 50 minutes`);
+  assert(l.blocks.some((b) => b.type === "IMAGE"), `${l.key}: has at least one illustration`);
+  assert(l.blocks.filter((b) => b.type === "CHECKPOINT").length >= 3, `${l.key}: has at least 3 checkpoint quizzes`);
 }
 
 section("4. Practice questions stay inside the day");

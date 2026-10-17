@@ -49,3 +49,7 @@ Where an exemplar gives a sub-topic two days and does not say how to divide them
 
 ## Teachers
 These lessons are a first draft aligned to the documents: a teacher should read each lesson against the exemplar before students use it, and add lesson videos day by day.
+
+## Phase 50: see it, then do it
+
+Every one of the 25 daily lessons now has at least one illustration (inline SVG, `grade7-term1-diagrams*.ts`) placed beside the worked example it explains, and at least 3 checkpoint quizzes, including a "Your turn" question with different numbers after worked examples. Checkpoints are graded on the server. `scripts/test-phase49-alignment.ts` enforces both minimums. Content stays inside each day's Lesson Exemplar scope. The answers were checked by hand and by the existing numeric recomputation; no teacher has reviewed them yet.
