@@ -16,7 +16,7 @@ const check = (ok, msg) => { if (!ok) failed++; console.log((ok ? "PASS " : "FAI
 const j = async (m, p, t, b) => { const r = await fetch(base + p, { method: m, headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, ...(await r.json().catch(() => ({}))) }; };
 const run = crypto.randomBytes(3).toString("hex");
 const admin = (await j("POST", "/api/auth/login", null, { email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD })).token;
-await j("POST", "/api/admin/users", admin, { name: "Teacher Rivera", email: `t41.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER" });
+await j("POST", "/api/admin/users", admin, { name: "Teacher Rivera", email: `t41.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER", verifyMathematics: true });
 const T = (await j("POST", "/api/auth/login", null, { email: `t41.${run}@example.edu`, password: "Sturdy-Pass1" })).token;
 const S = (await j("POST", "/api/auth/register", null, { name: "Student", email: `s41.${run}@example.edu`, password: "Sturdy-Pass1" })).token;
 

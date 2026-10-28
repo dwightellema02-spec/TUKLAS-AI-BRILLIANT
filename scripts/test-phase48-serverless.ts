@@ -104,7 +104,7 @@ async function main() {
     assert(openD.status === 200, "Control: with sharing switched off, another instance does NOT know about the lock-out (200) - this is the gap the store closes");
 
     section("6. The tutor limit is shared too");
-    await a("POST", "/api/admin/users", admin, { name: "Teach", email: `p48.t.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER" });
+    await a("POST", "/api/admin/users", admin, { name: "Teach", email: `p48.t.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER", verifyMathematics: true });
     const T = (await a("POST", "/api/auth/login", undefined, { email: `p48.t.${run}@example.edu`, password: "Sturdy-Pass1" })).json.token as string;
     await a("POST", "/api/auth/accept-privacy", T);
     const S3 = await mkStudent(a, "s3");

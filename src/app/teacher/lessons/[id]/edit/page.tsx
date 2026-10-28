@@ -6,6 +6,7 @@ import { ContentBlockEditor, ContentBlock } from "@/components/studio/ContentBlo
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { MathAuthorizationNotice, useMathAuthorization } from "@/components/teacher/MathAuthorizationNotice";
 import { groupSkillsByUnit } from "@/lib/curriculum/skill-label";
 import { LessonStatus, ResourceType } from "@prisma/client";
 import {
@@ -38,6 +39,7 @@ export default function TeacherLessonEditorPage({
   onNavigate,
 }: TeacherLessonEditorPageProps) {
   const { user } = useAuth();
+  const mathAuth = useMathAuthorization();
   const [lesson, setLesson] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -264,6 +266,7 @@ export default function TeacherLessonEditorPage({
   return (
     <div className="py-8 sm:py-12 bg-slate-50 min-h-[calc(100vh-140px)]">
       <div className="max-w-6xl mx-auto px-4 sm:px-6">
+        <MathAuthorizationNotice auth={mathAuth} />
         {/* Navigation Breadcrumb */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div className="flex items-center gap-2 text-xs text-slate-500">

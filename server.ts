@@ -8,7 +8,7 @@ import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
-import { dbService, fallbackStore, LessonIncompleteError, hasValidDatabaseUrl, prisma } from "./src/lib/db.ts";
+import { dbService, fallbackStore, LessonIncompleteError, hasValidDatabaseUrl, prisma, SUBJECT_AUTH_MESSAGE } from "./src/lib/db.ts";
 import { hashPassword, verifyPassword } from "./src/lib/auth/password.ts";
 import { createSessionToken, verifySessionToken, SessionPayload } from "./src/lib/auth/session.ts";
 import { gradeChoiceAnswer, toStudentBlockView } from "./src/lib/lesson/block-grading.ts";
@@ -272,6 +272,39 @@ app.use("/api", (req: Request, res: Response, next: NextFunction) => {
   }
   if (API_LIMIT && !allowRate(res, `ip:${ip}`, API_LIMIT, 60_000)) return;
   return next();
+});
+
+// Phase 51: only Mathematics teachers verified by an administrator may create, import, edit, publish or add videos to Mathematics lessons
+// (Grades 7 to 10). This one guard sits in front of EVERY lesson-writing route, so a hidden button, a crafted request or a forgotten route
+// cannot get around it; assertCanEditLesson repeats the check inside the data layer. A generic TEACHER role is not enough, and neither is ADMIN.
+// The subject comes from the database (Unit -> Term -> Grade -> Subject), never from the request body.
+const LESSON_WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+function lessonWriteTarget(req: Request): { lessonId?: string; unitId?: string } | null {
+  const p = req.path;
+  let m: RegExpMatchArray | null;
+  if (/^\/lessons\/?$/i.test(p)) return { unitId: typeof req.body?.unitId === "string" ? req.body.unitId : undefined };
+  if ((m = p.match(/^\/lessons\/([^/]+)(?:\/|$)/i))) return { lessonId: m[1] };
+  if ((m = p.match(/^\/teacher\/lessons\/([^/]+)\/publish\/?$/i))) return { lessonId: m[1] };
+  if (/^\/teacher\/lessons\/import\/?$/i.test(p)) return { unitId: typeof req.query.unitId === "string" ? req.query.unitId : undefined };
+  if ((m = p.match(/^\/units\/([^/]+)\/reorder-lessons\/?$/i))) return { unitId: m[1] };
+  return null;
+}
+app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!LESSON_WRITE_METHODS.has(req.method)) return next();
+    const target = lessonWriteTarget(req);
+    if (!target) return next();
+    const session = getSessionFromRequest(req);
+    // Signed-out callers and students are answered by the route itself (401/403), exactly as before.
+    if (!session || (session.role !== "TEACHER" && session.role !== "ADMIN")) return next();
+    const decision = await dbService.canAuthorLessons(session.userId, session.role, target);
+    if (decision.allowed) return next();
+    await dbService.recordAudit({ actorId: session.userId, action: "lesson.authoring_denied", targetType: "lesson", targetId: target.lessonId ?? target.unitId, detail: { method: req.method, path: req.path.slice(0, 120), subject: decision.subjectCode }, ip: req.ip }).catch(() => undefined);
+    return res.status(403).json({ error: SUBJECT_AUTH_MESSAGE, code: "SUBJECT_AUTHORIZATION_REQUIRED" });
+  } catch (e) {
+    console.error("Lesson authoring guard failed (request refused):", e instanceof Error ? e.message : e);
+    return res.status(500).json({ error: "The request could not be checked. Please try again." });
+  }
 });
 
 function getSessionFromRequest(req: Request): SessionPayload | null {
@@ -3121,7 +3154,20 @@ app.post("/api/admin/users", async (req: Request, res: Response) => {
     });
     // Audit trail (no secrets): who created which account with which role.
     await dbService.recordAudit({ actorId: session.userId, action: "admin.user.create", targetType: "user", targetId: user.id, detail: { role }, ip: req.ip });
-    return res.status(201).json({ data: { id: user.id, email: user.email, name: user.name, role: user.role } });
+    // Phase 51: an administrator may verify the Mathematics assignment in the same step. Only the admin session can ask for it; never self-service.
+    let mathematicsVerified = false;
+    let warning: string | undefined;
+    if (req.body?.verifyMathematics === true && (role === "TEACHER" || role === "ADMIN")) {
+      try {
+        await dbService.grantSubjectAuthorization(user.id, "MATH", session.userId, null);
+        await dbService.recordAudit({ actorId: session.userId, action: "admin.subject_authorization.grant", targetType: "user", targetId: user.id, detail: { subject: "MATH", at: "account creation" }, ip: req.ip });
+        mathematicsVerified = true;
+      } catch (e) {
+        // The account exists; only the verification failed (for example the curriculum has not been seeded). Say so instead of failing the whole request.
+        warning = `The account was created, but Mathematics authorization could not be recorded: ${e instanceof Error ? e.message : "unknown error"}`;
+      }
+    }
+    return res.status(201).json({ data: { id: user.id, email: user.email, name: user.name, role: user.role, mathematicsVerified, ...(warning ? { warning } : {}) } });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Failed to create user";
     return res.status(400).json({ error: message });
@@ -3205,6 +3251,49 @@ app.post("/api/admin/users/:userId/reset-password", async (req: Request, res: Re
     await dbService.updateUserPassword(target.id, await hashPassword(temp)); // revokes all their sessions
     await dbService.recordAudit({ actorId: session.userId, action: "admin.user.reset_password", targetType: "user", targetId: target.id, ip: req.ip });
     return res.json({ success: true, note: "Give the temporary password to the user privately and ask them to change it after signing in." });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+// ---- Phase 51: Mathematics (subject) authorization, verified by an administrator ----
+app.get("/api/me/subject-authorization", async (req: Request, res: Response) => {
+  try {
+    const session = getSessionFromRequest(req);
+    if (!session) return res.status(401).json({ error: "Unauthorized: Please sign in." });
+    const subjects = session.role === "TEACHER" || session.role === "ADMIN" ? await dbService.subjectsAuthorizedFor(session.userId) : [];
+    return res.json({ data: { subjects, canAuthorMathematics: subjects.includes("MATH"), message: subjects.includes("MATH") ? null : SUBJECT_AUTH_MESSAGE } });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.get("/api/admin/subject-authorizations", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    return res.json({ data: await dbService.listSubjectAuthorizations() });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.post("/api/admin/users/:userId/subject-authorization", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const subjectCode = req.body?.subjectCode === undefined ? "MATH" : req.body.subjectCode;
+    if (typeof subjectCode !== "string" || !/^[A-Z]{2,12}$/.test(subjectCode)) return res.status(400).json({ error: "Subject code is not valid." });
+    const target = await adminTarget(req, res, session); if (!target) return; // an administrator cannot verify their own account
+    if (target.disabled) return res.status(409).json({ error: "This account is disabled." });
+    if (target.role !== "TEACHER" && target.role !== "ADMIN") return res.status(409).json({ error: "Only teacher or administrator accounts can be authorized to write lessons." });
+    const row = await dbService.grantSubjectAuthorization(target.id, subjectCode, session.userId, typeof req.body?.note === "string" ? req.body.note : null);
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.subject_authorization.grant", targetType: "user", targetId: target.id, detail: { subject: subjectCode }, ip: req.ip });
+    return res.status(201).json({ data: { userId: target.id, subjectCode, verifiedAt: row.verifiedAt, note: row.note } });
+  } catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "Failed" }); }
+});
+
+app.post("/api/admin/users/:userId/subject-authorization/revoke", async (req: Request, res: Response) => {
+  try {
+    const session = requireAdmin(req, res); if (!session) return;
+    const subjectCode = req.body?.subjectCode === undefined ? "MATH" : req.body.subjectCode;
+    if (typeof subjectCode !== "string" || !/^[A-Z]{2,12}$/.test(subjectCode)) return res.status(400).json({ error: "Subject code is not valid." });
+    const target = await adminTarget(req, res, session); if (!target) return;
+    if (!(await dbService.revokeSubjectAuthorization(target.id, subjectCode, session.userId))) return res.status(404).json({ error: "This person has no current authorization for that subject." });
+    await dbService.recordAudit({ actorId: session.userId, action: "admin.subject_authorization.revoke", targetType: "user", targetId: target.id, detail: { subject: subjectCode }, ip: req.ip });
+    return res.json({ success: true });
   } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : "Failed" }); }
 });
 

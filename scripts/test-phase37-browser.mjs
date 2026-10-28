@@ -22,7 +22,7 @@ const browser = await chromium.launch({ executablePath: exe, args: ["--no-sandbo
 const errors = [];
 const adminCtx = await browser.newContext();
 await adminCtx.request.post(base + "/api/auth/login", { data: { email: process.env.ADMIN_EMAIL || "admin@tuklas.ai", password: process.env.ADMIN_PASSWORD || "Tuklas2026!" } });
-await adminCtx.request.post(base + "/api/admin/users", { data: { name: "Mr. Santos", email: `p37.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER" } });
+await adminCtx.request.post(base + "/api/admin/users", { data: { name: "Mr. Santos", email: `p37.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER", verifyMathematics: true } });
 const T = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 await T.request.post(base + "/api/auth/login", { data: { email: `p37.${run}@example.edu`, password: "Sturdy-Pass1" } });
 // the teacher writes one lesson (a teacher can attach questions only to their own lessons)

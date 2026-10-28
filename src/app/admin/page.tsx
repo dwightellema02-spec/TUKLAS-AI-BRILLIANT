@@ -29,7 +29,9 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
 
   const [accounts, setAccounts] = useState<Array<{ id: string; name: string; email: string; role: string; disabled?: boolean }>>([]);
   const [audit, setAudit] = useState<Array<{ id: string; action: string; actorId: string | null; targetId: string | null; createdAt: string }>>([]);
-  const [acctForm, setAcctForm] = useState({ name: "", email: "", password: "", role: "TEACHER" });
+  const [acctForm, setAcctForm] = useState({ name: "", email: "", password: "", role: "TEACHER", verifyMathematics: false });
+  // Phase 51: ids of accounts an administrator has verified as Mathematics teachers
+  const [mathVerified, setMathVerified] = useState<Set<string>>(new Set());
   const [acctMsg, setAcctMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const loadAccounts = async () => {
@@ -43,6 +45,8 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
         })
       );
       setAccounts(lists.flat());
+      const auth = await authFetch("/api/admin/subject-authorizations");
+      if (auth.ok) setMathVerified(new Set(((await auth.json()).data ?? []).filter((a: any) => a.subjectCode === "MATH").map((a: any) => a.userId as string)));
     } catch {
       /* list stays empty */
     }
@@ -75,6 +79,19 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
     });
     const json = await res.json().catch(() => ({}));
     setAcctMsg({ ok: res.ok, text: res.ok ? json.note || "Done." : json.error || "That action failed" });
+    loadAccounts();
+    loadAudit();
+  };
+
+  const setMathAuthorization = async (id: string, verify: boolean) => {
+    setAcctMsg(null);
+    const res = await authFetch(`/api/admin/users/${id}/subject-authorization${verify ? "" : "/revoke"}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subjectCode: "MATH" }),
+    });
+    const json = await res.json().catch(() => ({}));
+    setAcctMsg({ ok: res.ok, text: res.ok ? (verify ? "Mathematics authorization verified." : "Mathematics authorization removed.") : json.error || "That action failed" });
     loadAccounts();
     loadAudit();
   };
@@ -115,7 +132,7 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
       return;
     }
     setAcctMsg({ ok: true, text: `Created ${acctForm.role.toLowerCase()} account for ${acctForm.email}. Share the password with them privately.` });
-    setAcctForm({ name: "", email: "", password: "", role: acctForm.role });
+    setAcctForm({ name: "", email: "", password: "", role: acctForm.role, verifyMathematics: false });
     loadAccounts();
     loadAudit();
   };
@@ -226,6 +243,12 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
               <option value="TEACHER">Teacher</option>
               <option value="ADMIN">Admin</option>
             </select>
+            {(acctForm.role === "TEACHER" || acctForm.role === "ADMIN") && (
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input type="checkbox" checked={acctForm.verifyMathematics} onChange={(e) => setAcctForm({ ...acctForm, verifyMathematics: e.target.checked })} />
+                I have verified this person as a Mathematics teacher
+              </label>
+            )}
             <Button type="submit" variant="primary" size="sm" className="sm:col-span-2 bg-purple-600 hover:bg-purple-700">Create account</Button>
           </form>
           {acctMsg && <p role="status" className={`text-xs mb-3 ${acctMsg.ok ? "text-emerald-700" : "text-red-600"}`}>{acctMsg.text}</p>}
@@ -253,8 +276,12 @@ export default function AdminPage({ onNavigate }: AdminPageProps) {
                 <span className={a.disabled ? "text-slate-400 line-through" : ""}><b>{a.name}</b> · {a.email}</span>
                 <span className="flex items-center gap-2">
                   <Badge variant="default">{a.role}{a.disabled ? " · disabled" : ""}</Badge>
+                  <Badge variant={mathVerified.has(a.id) ? "success" : "default"}>{mathVerified.has(a.id) ? "Mathematics verified" : "Mathematics not verified"}</Badge>
                   {a.id !== user?.id && (
                     <>
+                      {!a.disabled && (
+                        <button type="button" onClick={() => setMathAuthorization(a.id, !mathVerified.has(a.id))} className="text-[11px] text-slate-600 hover:text-purple-700 underline" aria-label={`${mathVerified.has(a.id) ? "Remove" : "Verify"} Mathematics authorization for ${a.email}`}>{mathVerified.has(a.id) ? "Remove Mathematics authorization" : "Verify as Mathematics teacher"}</button>
+                      )}
                       <button type="button" onClick={() => accountAction(a.id, a.disabled ? "enable" : "disable")} className="text-[11px] text-slate-600 hover:text-purple-700 underline">{a.disabled ? "Enable" : "Disable"}</button>
                       <button type="button" onClick={() => accountAction(a.id, "revoke-sessions")} className="text-[11px] text-slate-600 hover:text-purple-700 underline">Sign out devices</button>
                       <button type="button" onClick={() => { const pw = window.prompt(`Temporary password for ${a.email} (8+ characters, a letter and a digit)`); if (pw) accountAction(a.id, "reset-password", { temporaryPassword: pw }); }} className="text-[11px] text-slate-600 hover:text-purple-700 underline">Reset password</button>

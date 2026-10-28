@@ -103,7 +103,7 @@ async function main() {
 
     section("2. Setup: a teacher authors a lesson with real question blocks");
     const admin = await login(ADMIN_EMAIL, ADMIN_PASSWORD);
-    await api("POST", "/api/admin/users", admin, { name: "Teacher P27", email: email("t"), password: PASSWORD, role: "TEACHER" });
+    await api("POST", "/api/admin/users", admin, { name: "Teacher P27", email: email("t"), password: PASSWORD, role: "TEACHER", verifyMathematics: true });
     const T = await login(email("t"), PASSWORD);
     const reg = async (tag: string) => {
       const r = await api("POST", "/api/auth/register", undefined, { name: `Student ${tag}`, email: email(tag), password: PASSWORD });

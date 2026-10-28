@@ -23,7 +23,7 @@ for (let i = 0; i < 90; i++) { await new Promise((r) => setTimeout(r, 500)); try
 const j = async (m, p, t, b) => (await fetch(base + p, { method: m, headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) }, body: b ? JSON.stringify(b) : undefined })).json();
 const run = crypto.randomBytes(3).toString("hex");
 const admin = (await j("POST", "/api/auth/login", null, { email: ADMIN_EMAIL, password: ADMIN_PASSWORD })).token;
-await j("POST", "/api/admin/users", admin, { name: "Teach", email: `bt.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER" });
+await j("POST", "/api/admin/users", admin, { name: "Teach", email: `bt.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER", verifyMathematics: true });
 const T = (await j("POST", "/api/auth/login", null, { email: `bt.${run}@example.edu`, password: "Sturdy-Pass1" })).token;
 const sreg = await j("POST", "/api/auth/register", null, { name: "Pat Student", email: `bs.${run}@example.edu`, password: "Sturdy-Pass1" });
 const S = sreg.token;

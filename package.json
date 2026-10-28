@@ -80,7 +80,9 @@
     "setup:db": "tsx scripts/setup-database.ts",
     "test:phase48": "tsx scripts/test-phase48-store.ts",
     "test:phase48:pg": "tsx scripts/test-phase48-serverless.ts",
-    "test:phase49": "tsx scripts/test-phase49-alignment.ts"
+    "test:phase49": "tsx scripts/test-phase49-alignment.ts",
+    "test:phase51": "AI_PROVIDER=local tsx scripts/test-phase51-subject-authorization.ts",
+    "test:phase51:pg": "tsx scripts/test-phase51-prisma.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts",

@@ -69,9 +69,12 @@ async function main() {
 
     section("1. Setup: two teachers, an admin, a student");
     const admin = await login(ADMIN_EMAIL, ADMIN_PASSWORD);
-    await api("POST", "/api/admin/users", admin, { name: "Teacher One", email: email("t1"), password: PASSWORD, role: "TEACHER" });
-    await api("POST", "/api/admin/users", admin, { name: "Teacher Two", email: email("t2"), password: PASSWORD, role: "TEACHER" });
+    await api("POST", "/api/admin/users", admin, { name: "Teacher One", email: email("t1"), password: PASSWORD, role: "TEACHER", verifyMathematics: true });
+    await api("POST", "/api/admin/users", admin, { name: "Teacher Two", email: email("t2"), password: PASSWORD, role: "TEACHER", verifyMathematics: true });
     const T1 = await login(email("t1"), PASSWORD), T2 = await login(email("t2"), PASSWORD);
+    // Phase 51: an administrator authors Mathematics lessons only when verified; the bootstrap admin stays unverified.
+    await api("POST", "/api/admin/users", admin, { name: "Admin Verified", email: email("va"), password: PASSWORD, role: "ADMIN", verifyMathematics: true });
+    const adminV = await login(email("va"), PASSWORD);
     const reg = async (tag: string) => {
       const r = await api("POST", "/api/auth/register", undefined, { name: `Student ${tag}`, email: email(tag), password: PASSWORD });
       return { token: r.json.token as string, id: r.json.user.id as string };
@@ -125,10 +128,11 @@ async function main() {
     assert((await api("POST", `/api/lessons/${L}/reorder-blocks`, T1, { orderedBlockIds: [tx, q1, q2] })).status === 200, "The owner reorders blocks");
     assert((await api("PATCH", `/api/questions/${question.id}`, T1, { prompt: `P28 question ${run} (edited)` })).status === 200, "The owner edits the question");
     assert((await api("POST", `/api/practice-sets/${practiceSet.id}/questions`, T1, { questionId: question.id })).status === 200, "The owner adds a question to the practice set");
-    assert((await api("PUT", `/api/lessons/${L}/blocks/${tx}`, admin, { title: "Intro (admin)" })).status === 200, "An administrator can edit another teacher's block");
+    assert((await api("PUT", `/api/lessons/${L}/blocks/${tx}`, admin, { title: "Intro (admin)" })).status === 403, "An administrator WITHOUT Mathematics verification cannot edit it (Phase 51)");
+    assert((await api("PUT", `/api/lessons/${L}/blocks/${tx}`, adminV, { title: "Intro (admin)" })).status === 200, "A verified administrator can edit another teacher's block");
     assert((await api("PATCH", `/api/questions/${question.id}`, admin, { prompt: `P28 question ${run} (admin)` })).status === 200, "An administrator can edit another teacher's question");
     const currentOrder = ((await api("GET", `/api/lessons?unitId=${unit.id}`, admin)).json.data as any[]).sort((a, b) => a.sequenceOrder - b.sequenceOrder).map((l) => l.id);
-    assert((await api("POST", `/api/units/${unit.id}/reorder-lessons`, admin, { orderedLessonIds: currentOrder })).status === 200, "An administrator may reorder a shared unit (same order re-submitted)");
+    assert((await api("POST", `/api/units/${unit.id}/reorder-lessons`, adminV, { orderedLessonIds: currentOrder })).status === 200, "A verified administrator may reorder a shared unit (same order re-submitted)");
 
     section("4. Completion requires answering every question correctly");
     const path = async (tok: string) => (await api("GET", "/api/student/learning-path", tok)).json.data;

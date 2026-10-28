@@ -1802,6 +1802,14 @@ if (useInMemoryAccounts) loadPersistedUsers();
 // UNIFIED DATA REPOSITORY API (Prisma with Safe Fallback)
 // -------------------------------------------------------------
 
+// Phase 51: verified subject assignments for the in-memory (no database) mode. The database mode uses TeacherSubjectAssignment.
+type MemorySubjectAssignment = { id: string; userId: string; subjectCode: string; verifiedById: string; verifiedAt: Date; note: string | null; revokedAt: Date | null; revokedById: string | null };
+const memorySubjectAssignments: MemorySubjectAssignment[] = [];
+/** Grades a Mathematics assignment covers. */
+export const MATH_AUTHORING_GRADES = [7, 8, 9, 10] as const;
+export const SUBJECT_AUTH_MESSAGE =
+  "Mathematics authorization required: only Mathematics teachers verified by an administrator can create, import, edit, publish or add videos to Mathematics lessons (Grades 7 to 10). Ask an administrator to verify your Mathematics assignment.";
+
 const memoryAuditLog: Array<{ id: string; actorId: string | null; action: string; targetType: string | null; targetId: string | null; detail: string | null; ip: string | null; createdAt: Date }> = [];
 
 export const dbService = {
@@ -3585,10 +3593,107 @@ export const dbService = {
   // PHASE 22: DOCUMENT RESOURCES + EXTRACTED CHUNKS
   // -------------------------------------------------------------
 
+  // -------------------------------------------------------------
+  // PHASE 51: SUBJECT-BASED AUTHORIZATION (Mathematics lessons, Grades 7 to 10)
+  // The subject of a lesson or unit always comes from the database (Unit -> Term -> Grade -> Subject), never from the request.
+  // -------------------------------------------------------------
+
+  /** The subject code and grade level a lesson or unit belongs to, or null when it cannot be resolved. */
+  async resolveAuthoringSubject(target: { lessonId?: string; unitId?: string }): Promise<{ subjectCode: string; gradeLevel: number | null } | null> {
+    const lessonId = typeof target.lessonId === "string" && target.lessonId && target.lessonId.length <= 100 ? target.lessonId : undefined;
+    const unitId = typeof target.unitId === "string" && target.unitId && target.unitId.length <= 100 ? target.unitId : undefined;
+    if (!lessonId && !unitId) return null;
+    if (hasValidDatabaseUrl) {
+      const gradeSelect = { term: { select: { grade: { select: { level: true, subject: { select: { code: true } } } } } } } as const;
+      const unit: any = lessonId
+        ? (await prisma.lesson.findUnique({ where: { id: lessonId }, select: { unit: { select: gradeSelect } } }))?.unit
+        : await prisma.unit.findUnique({ where: { id: unitId! }, select: gradeSelect });
+      const grade = unit?.term?.grade;
+      return grade ? { subjectCode: grade.subject.code as string, gradeLevel: grade.level as number } : null;
+    }
+    const cur = fallbackStore.curriculum;
+    const found = lessonId ? cur.lessons.some((l: any) => l.id === lessonId) : cur.unit.id === unitId;
+    return found ? { subjectCode: cur.subject.code, gradeLevel: cur.grade.level } : null;
+  },
+
+  /** Whether this person holds a current (not revoked) administrator-verified assignment for the subject. */
+  async hasSubjectAuthorization(userId: string, subjectCode: string): Promise<boolean> {
+    if (!userId || !subjectCode) return false;
+    if (hasValidDatabaseUrl) {
+      return !!(await prisma.teacherSubjectAssignment.findFirst({ where: { userId, revokedAt: null, subject: { code: subjectCode } }, select: { id: true } }));
+    }
+    return memorySubjectAssignments.some((a) => a.userId === userId && a.subjectCode === subjectCode && !a.revokedAt);
+  },
+
+  /**
+   * The single rule for authoring a lesson of a subject. Deny by default: a teacher or administrator needs a verified, current assignment
+   * for the lesson's subject (an administrator is not exempt). If the target cannot be resolved the platform subject (Mathematics) is required,
+   * so an unknown id cannot be told apart from a restricted one.
+   */
+  async canAuthorLessons(userId: string, role: string, target: { lessonId?: string; unitId?: string }): Promise<{ allowed: boolean; subjectCode: string }> {
+    const subject = await this.resolveAuthoringSubject(target);
+    const subjectCode = subject?.subjectCode ?? "MATH";
+    if (role !== "TEACHER" && role !== "ADMIN") return { allowed: false, subjectCode };
+    if (subjectCode === "MATH" && subject?.gradeLevel != null && !(MATH_AUTHORING_GRADES as readonly number[]).includes(subject.gradeLevel)) {
+      return { allowed: false, subjectCode };
+    }
+    return { allowed: await this.hasSubjectAuthorization(userId, subjectCode), subjectCode };
+  },
+
+  /** An administrator verifies (or re-verifies) a teacher's subject assignment. Idempotent. */
+  async grantSubjectAuthorization(userId: string, subjectCode: string, verifiedById: string, note?: string | null) {
+    const cleanNote = note ? String(note).replace(/[\u0000-\u001F\u007F]/g, " ").trim().slice(0, 200) || null : null;
+    if (hasValidDatabaseUrl) {
+      const subject = await prisma.subject.findUnique({ where: { code: subjectCode }, select: { id: true } });
+      if (!subject) throw new Error("That subject has not been set up yet.");
+      const row = await prisma.teacherSubjectAssignment.upsert({
+        where: { userId_subjectId: { userId, subjectId: subject.id } },
+        create: { userId, subjectId: subject.id, verifiedById, note: cleanNote },
+        update: { verifiedById, verifiedAt: new Date(), note: cleanNote, revokedAt: null, revokedById: null },
+      });
+      return { id: row.id, userId, subjectCode, verifiedById, verifiedAt: row.verifiedAt, note: row.note, revokedAt: null as Date | null };
+    }
+    if (fallbackStore.curriculum.subject.code !== subjectCode) throw new Error("That subject has not been set up yet.");
+    let row = memorySubjectAssignments.find((a) => a.userId === userId && a.subjectCode === subjectCode);
+    if (row) Object.assign(row, { verifiedById, verifiedAt: new Date(), note: cleanNote, revokedAt: null, revokedById: null });
+    else memorySubjectAssignments.push((row = { id: `tsa_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, userId, subjectCode, verifiedById, verifiedAt: new Date(), note: cleanNote, revokedAt: null, revokedById: null }));
+    return { id: row.id, userId, subjectCode, verifiedById, verifiedAt: row.verifiedAt, note: row.note, revokedAt: null as Date | null };
+  },
+
+  /** Ends a teacher's subject authorization (the row stays as history). Returns false if there was no current assignment. */
+  async revokeSubjectAuthorization(userId: string, subjectCode: string, revokedById: string): Promise<boolean> {
+    if (hasValidDatabaseUrl) {
+      const r = await prisma.teacherSubjectAssignment.updateMany({ where: { userId, revokedAt: null, subject: { code: subjectCode } }, data: { revokedAt: new Date(), revokedById } });
+      return r.count > 0;
+    }
+    const row = memorySubjectAssignments.find((a) => a.userId === userId && a.subjectCode === subjectCode && !a.revokedAt);
+    if (!row) return false;
+    row.revokedAt = new Date(); row.revokedById = revokedById;
+    return true;
+  },
+
+  /** Current (not revoked) assignments, for the administrator screen. */
+  async listSubjectAuthorizations() {
+    if (hasValidDatabaseUrl) {
+      const rows = await prisma.teacherSubjectAssignment.findMany({ where: { revokedAt: null }, include: { subject: { select: { code: true } } }, orderBy: { verifiedAt: "desc" } });
+      return rows.map((r) => ({ userId: r.userId, subjectCode: r.subject.code, verifiedById: r.verifiedById, verifiedAt: r.verifiedAt, note: r.note }));
+    }
+    return memorySubjectAssignments.filter((a) => !a.revokedAt).map((a) => ({ userId: a.userId, subjectCode: a.subjectCode, verifiedById: a.verifiedById, verifiedAt: a.verifiedAt, note: a.note }));
+  },
+
+  /** Subject codes this person is currently verified for. */
+  async subjectsAuthorizedFor(userId: string): Promise<string[]> {
+    return (await this.listSubjectAuthorizations()).filter((a) => a.userId === userId).map((a) => a.subjectCode);
+  },
+
   /** Verify the caller may modify a lesson's resources and return the lesson. */
   async assertCanEditLesson(lessonId: string, userRole: string, userId: string) {
     if (userRole !== "TEACHER" && userRole !== "ADMIN") {
       throw new Error("Forbidden: Teacher or Administrator access required.");
+    }
+    // Phase 51: the subject check comes first, so an unauthorized person learns nothing about whether the lesson exists.
+    if (!(await this.canAuthorLessons(userId, userRole, { lessonId })).allowed) {
+      throw new Error(`Forbidden: ${SUBJECT_AUTH_MESSAGE}`);
     }
     const lesson = await this.getLessonById(lessonId);
     if (!lesson) throw new Error("Lesson not found");

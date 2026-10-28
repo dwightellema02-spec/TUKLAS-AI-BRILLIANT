@@ -4,6 +4,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { LessonStatus } from "@prisma/client";
+import { MathAuthorizationNotice, useMathAuthorization } from "@/components/teacher/MathAuthorizationNotice";
 import {
   BookOpen,
   ArrowLeft,
@@ -24,6 +25,7 @@ export interface TeacherLessonsPageProps {
 
 export default function TeacherLessonsPage({ onNavigate }: TeacherLessonsPageProps) {
   const { user } = useAuth();
+  const mathAuth = useMathAuthorization();
   const [lessons, setLessons] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
@@ -105,6 +107,7 @@ export default function TeacherLessonsPage({ onNavigate }: TeacherLessonsPagePro
   return (
     <div className="py-8 sm:py-12 bg-slate-50 min-h-[calc(100vh-140px)]">
       <div className="max-w-6xl mx-auto px-4 sm:px-6">
+        <MathAuthorizationNotice auth={mathAuth} />
         {/* Navigation & Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div>

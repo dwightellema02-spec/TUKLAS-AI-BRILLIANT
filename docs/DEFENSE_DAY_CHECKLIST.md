@@ -11,6 +11,7 @@ The app sleeps after 15 minutes without visitors (Render free) and its database 
 
 ## The day before
 - [ ] Create the demo accounts now, not live: 1 teacher, 1 class, 3 students (note them on paper, not in chat). Sign in to each once.
+- [ ] Phase 51: sign in as the administrator and verify the demo teacher as a Mathematics teacher (Administrator page, tick the box when creating the account, or press "Verify as Mathematics teacher"). Without it the teacher can read but cannot create, import, edit, publish or add videos to lessons. Check that the teacher's lesson page shows no "Mathematics authorization required" notice.
 - [ ] Teacher: have one lesson ready to open (for example Week 5, Day 1) and one practice set.
 - [ ] Student: finish one lesson and one practice set so the progress and analytics screens show data.
 - [ ] Charge laptop and phone. Install the laptop fallback: Node 22, Git, `git clone`, `git checkout` the branch you deploy, `npm ci --legacy-peer-deps`.

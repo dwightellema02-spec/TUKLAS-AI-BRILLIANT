@@ -52,7 +52,7 @@ async function main() {
 
     const admin = (await call("login", "POST", "/api/auth/login", undefined, { email: adminEmail, password: adminPassword })).json.token as string;
     await call("accept", "POST", "/api/auth/accept-privacy", admin); // production asks every account to accept the privacy notice first (Phase 43)
-    await call("admin", "POST", "/api/admin/users", admin, { name: "Teacher", email: `p42l.t.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER" });
+    await call("admin", "POST", "/api/admin/users", admin, { name: "Teacher", email: `p42l.t.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER", verifyMathematics: true });
     const T = (await call("login", "POST", "/api/auth/login", undefined, { email: `p42l.t.${run}@example.edu`, password: "Sturdy-Pass1" })).json.token as string;
     await call("accept", "POST", "/api/auth/accept-privacy", T);
     const cls = (await call("teacher", "POST", "/api/teacher/classes", T, { name: "Load class", gradeLevel: 7 })).json.data;
