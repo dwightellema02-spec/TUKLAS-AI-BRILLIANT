@@ -24,8 +24,11 @@ async function main() {
     for (let i = 0; i < 90; i++) { await new Promise((r) => setTimeout(r, 500)); try { if ((await fetch(`${base}/api/health`)).ok) break; } catch { /* */ } }
     const login = async (e: string, p: string) => (await api("POST", "/api/auth/login", undefined, { email: e, password: p })).json.token as string;
     const admin = await login(ADMIN_EMAIL, ADMIN_PASSWORD);
-    await api("POST", "/api/admin/users", admin, { name: "T", email: `p37.t.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER" });
+    await api("POST", "/api/admin/users", admin, { name: "T", email: `p37.t.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER", verifyMathematics: true });
     const T = await login(`p37.t.${run}@example.edu`, "Sturdy-Pass1");
+    // Phase 51: attaching a question to someone else's lesson needs an administrator who is verified for Mathematics.
+    await api("POST", "/api/admin/users", admin, { name: "A", email: `p37.a.${run}@example.edu`, password: "Sturdy-Pass1", role: "ADMIN", verifyMathematics: true });
+    const adminV = await login(`p37.a.${run}@example.edu`, "Sturdy-Pass1");
     const S = (await api("POST", "/api/auth/register", undefined, { name: "S", email: `p37.s.${run}@example.edu`, password: "Sturdy-Pass1" })).json.token as string;
     const skills = (await api("GET", "/api/skills", T)).json.data as any[];
     const skillA = skills[0].id as string, skillB = skills[1].id as string;
@@ -48,12 +51,12 @@ async function main() {
     const detail = (await api("GET", `/api/lessons/${lesson.id}`, admin)).json.data;
     const lessonSkill = detail.skills?.[0]?.skillId ?? detail.skills?.[0]?.skill?.id ?? detail.skillIds?.[0];
     assert(!!lessonSkill, `(setup) the lesson has a skill (${lessonSkill})`);
-    const inh = await mk(admin, { lessonId: lesson.id });
+    const inh = await mk(adminV, { lessonId: lesson.id });
     assert(inh.status === 201 && inh.json.data.skillId === lessonSkill, `No skill given: the lesson's first skill is used (${inh.json.data?.skillId})`);
     const other = skills.find((s) => s.id !== lessonSkill)!.id;
-    const explicit = await mk(admin, { lessonId: lesson.id, skillId: other });
+    const explicit = await mk(adminV, { lessonId: lesson.id, skillId: other });
     assert(explicit.json.data.skillId === other, "A skill the teacher chose is never overridden by the lesson's");
-    assert((await mk(admin, { lessonId: lesson.id, skillId: "nope" })).status === 400, "An unknown skill is refused even with a lesson");
+    assert((await mk(adminV, { lessonId: lesson.id, skillId: "nope" })).status === 400, "An unknown skill is refused even with a lesson");
 
     section("3. Editing");
     const q = withSkill.json.data.id as string;

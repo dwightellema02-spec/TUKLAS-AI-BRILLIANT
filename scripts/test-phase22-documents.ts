@@ -352,6 +352,8 @@ async function main() {
   console.log("\n--- 9. Permission-aware retrieval + tutor grounding (in-process, real extraction) ---");
   {
     const teacher = { role: "TEACHER", id: "usr_teacher_01" };
+    // Phase 51: authoring needs an administrator-verified Mathematics assignment (the demo teacher has none until it is recorded).
+    await dbService.grantSubjectAuthorization("usr_teacher_01", "MATH", "usr_admin_01");
     const lessonId = "lsn_01";
     const access = await dbService.getLessonAccess("usr_student_01", lessonId);
     assert(access.allowed === true, "Precondition: seeded student can access seeded lesson lsn_01");
@@ -498,6 +500,9 @@ async function main() {
     const T2 = tok("usr_teacher_other", "TEACHER");
     const S1 = tok("usr_student_01", "STUDENT");
     const S2 = tok("usr_student_02", "STUDENT");
+    // Phase 51: the spawned server has its own store, so the administrator verifies the demo teacher there too.
+    const grant = await fetch(`${base}/api/admin/users/usr_teacher_01/subject-authorization`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok("usr_admin_01", "ADMIN")}` }, body: JSON.stringify({ subjectCode: "MATH" }) });
+    assert(grant.status === 201, "Administrator verifies the demo teacher's Mathematics assignment");
     const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
     const upload = (lessonId: string, fileName: string, body: Buffer | Uint8Array, token?: string, title?: string) =>
       fetch(`${base}/api/lessons/${lessonId}/documents`, {

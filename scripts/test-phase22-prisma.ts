@@ -32,6 +32,8 @@ async function main() {
   const lesson = lessons.find((l) => l.authorId);
   if (!lesson) throw new Error("No seeded lesson with an author; run the seed first.");
   const teacherId = lesson.authorId!;
+  // Phase 51: authoring needs an administrator-verified Mathematics assignment.
+  await dbService.grantSubjectAuthorization(teacherId, "MATH", (await prisma.user.findFirst({ where: { role: "ADMIN" }, select: { id: true } }))?.id ?? teacherId);
   console.log(`Using lesson "${lesson.title}" (${lesson.id}) authored by ${teacherId}`);
 
   const buf = fs.readFileSync(path.join(process.cwd(), "scripts/fixtures/phase22/las-adding-integers.docx"));

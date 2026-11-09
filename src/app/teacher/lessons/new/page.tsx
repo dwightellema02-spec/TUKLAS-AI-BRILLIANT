@@ -4,6 +4,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { groupSkillsByUnit } from "@/lib/curriculum/skill-label";
+import { MathAuthorizationNotice, useMathAuthorization } from "@/components/teacher/MathAuthorizationNotice";
 import {
   BookOpen,
   ArrowLeft,
@@ -22,6 +23,8 @@ export interface TeacherNewLessonPageProps {
 
 export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPageProps) {
   const { user } = useAuth();
+  const mathAuth = useMathAuthorization();
+  const blockedByAuth = mathAuth.loaded && !mathAuth.canAuthorMathematics; // the server enforces this; the page only explains it
   const [curriculum, setCurriculum] = useState<any[]>([]);
   const [skillsList, setSkillsList] = useState<any[]>([]);
   const [loadingMeta, setLoadingMeta] = useState(true);
@@ -176,6 +179,8 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
           </Button>
         </div>
 
+        <MathAuthorizationNotice auth={mathAuth} />
+
         {/* Phase 45: import from a document */}
         <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xs mb-6" data-testid="import-card">
           <h2 className="text-sm font-bold text-slate-900">Start from a document</h2>
@@ -216,7 +221,7 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
               <input type="checkbox" data-testid="import-attach" checked={importAttach} onChange={(e) => setImportAttach(e.target.checked)} className="mt-0.5" />
               <span>Also keep the document with the lesson so the AI tutor can use it to help students. (An answer key in it stays hidden from students.)</span>
             </label>
-            <Button type="submit" variant="primary" size="sm" disabled={importing || !importFile}>
+            <Button type="submit" variant="primary" size="sm" disabled={importing || !importFile || blockedByAuth}>
               {importing ? "Importing..." : "Import draft"}
             </Button>
           </form>
@@ -439,7 +444,7 @@ export default function TeacherNewLessonPage({ onNavigate }: TeacherNewLessonPag
               <Button
                 type="submit"
                 variant="primary"
-                disabled={saving || !title.trim()}
+                disabled={saving || !title.trim() || blockedByAuth}
                 className="gap-2"
               >
                 <Save className="w-4 h-4" />

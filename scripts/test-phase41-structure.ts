@@ -29,7 +29,7 @@ async function main() {
     console.log(`Server up (${DB_MODE ? "PostgreSQL" : "in-memory"} mode)`);
     const login = async (e: string, p: string) => (await api("POST", "/api/auth/login", undefined, { email: e, password: p })).json.token as string;
     const admin = await login(ADMIN_EMAIL, ADMIN_PASSWORD);
-    for (const t of ["t1", "t2"]) await api("POST", "/api/admin/users", admin, { name: `Teacher ${t}`, email: email(t), password: PASSWORD, role: "TEACHER" });
+    for (const t of ["t1", "t2"]) await api("POST", "/api/admin/users", admin, { name: `Teacher ${t}`, email: email(t), password: PASSWORD, role: "TEACHER", verifyMathematics: true });
     const T1 = await login(email("t1"), PASSWORD), T2 = await login(email("t2"), PASSWORD);
     const S = (await api("POST", "/api/auth/register", undefined, { name: "Stu", email: email("s"), password: PASSWORD })).json.token as string;
 

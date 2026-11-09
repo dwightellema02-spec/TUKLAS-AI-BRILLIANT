@@ -181,6 +181,7 @@ async function main() {
     assert(entries.filter((e) => e.action.startsWith("admin.user.")).every((e) => e.actorId === adminId), "...with the administrator as the actor");
     assert(has("auth.login.blocked_disabled", idU3), "A sign-in attempt on a disabled account is recorded");
     assert(!aud.text.includes(TEMP) && !aud.text.includes(NEWPW) && !aud.text.includes(PASSWORD) && !/passwordHash|\$2[aby]\$/.test(aud.text), "No password, temporary password or hash appears anywhere in the log");
+    await api("POST", `/api/admin/users/${idU3}/subject-authorization`, admin, { subjectCode: "MATH" }); // Phase 51: authoring needs a verified Mathematics assignment
     const T = await login(email("u3"), PASSWORD);
     const unit = (await api("GET", "/api/curriculum", T)).json.data?.[0]?.grades?.[0]?.terms?.[0]?.units?.[0];
     const les = (await api("POST", "/api/lessons", T, { title: `P30 lesson ${run}`, unitId: unit.id, learningObjectives: ["x"] })).json.data.id as string;

@@ -64,13 +64,13 @@ async function main() {
     if (!admin) throw new Error("no admin token; cannot continue");
 
     const createUser = (tok: string | undefined, body: object) => api("POST", "/api/admin/users", tok, body);
-    const t1 = await createUser(admin, { name: "Teacher One", email: email("t1"), password: PASSWORD, role: "TEACHER" });
+    const t1 = await createUser(admin, { name: "Teacher One", email: email("t1"), password: PASSWORD, role: "TEACHER", verifyMathematics: true });
     assert(t1.status === 201 && t1.json.data?.role === "TEACHER" && !JSON.stringify(t1.json).match(/passwordHash|\$2[aby]\$/), "Admin creates a TEACHER; response carries no password hash");
     const T1 = (await login(email("t1"), PASSWORD))!;
     assert(!!T1, "The new teacher can sign in");
-    await createUser(admin, { name: "Teacher Two", email: email("t2"), password: PASSWORD, role: "TEACHER" });
+    await createUser(admin, { name: "Teacher Two", email: email("t2"), password: PASSWORD, role: "TEACHER", verifyMathematics: true });
     const T2 = (await login(email("t2"), PASSWORD))!;
-    await createUser(admin, { name: "Teacher Three", email: email("t3"), password: PASSWORD, role: "TEACHER" });
+    await createUser(admin, { name: "Teacher Three", email: email("t3"), password: PASSWORD, role: "TEACHER", verifyMathematics: true });
     const T3 = (await login(email("t3"), PASSWORD))!;
 
     assert((await createUser(T1, { name: "X", email: email("x"), password: PASSWORD, role: "ADMIN" })).status === 403, "A teacher cannot create accounts");
@@ -259,7 +259,7 @@ async function main() {
       const id = l.json.data?.id as string;
       if (publish) {
         await api("POST", `/api/lessons/${id}/blocks`, T1, { type: "TEXT", title: "Intro", content: "Integers are whole numbers.", sequenceOrder: 1 });
-        for (const targetStatus of ["REVIEW", "APPROVED", "PUBLISHED"]) await api("POST", `/api/lessons/${id}/status`, admin, { targetStatus });
+        for (const targetStatus of ["REVIEW", "APPROVED", "PUBLISHED"]) await api("POST", `/api/lessons/${id}/status`, T1, { targetStatus }); // the author publishes (Phase 51: an unverified admin may not)
       }
       return id;
     };

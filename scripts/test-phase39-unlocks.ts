@@ -31,7 +31,7 @@ async function main() {
 
     section("0. Setup");
     const admin = await login(ADMIN_EMAIL, ADMIN_PASSWORD);
-    for (const t of ["t1", "t2"]) await api("POST", "/api/admin/users", admin, { name: `Teacher ${t}`, email: email(t), password: PASSWORD, role: "TEACHER" });
+    for (const t of ["t1", "t2"]) await api("POST", "/api/admin/users", admin, { name: `Teacher ${t}`, email: email(t), password: PASSWORD, role: "TEACHER", verifyMathematics: true });
     const T1 = await login(email("t1"), PASSWORD), T2 = await login(email("t2"), PASSWORD);
     const reg = async (tag: string) => { const r = await api("POST", "/api/auth/register", undefined, { name: `Stu ${tag}`, email: email(tag), password: PASSWORD }); return { token: r.json.token as string, id: r.json.user.id as string }; };
     const s1 = await reg("s1"), s2 = await reg("s2"), s3 = await reg("s3");

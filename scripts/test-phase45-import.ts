@@ -32,7 +32,7 @@ async function main() {
     };
     const login = async (e: string, p: string) => (await api("POST", "/api/auth/login", undefined, { email: e, password: p })).json.token as string;
     const admin = await login(ADMIN_EMAIL, ADMIN_PASSWORD);
-    const mkT = async (tag: string) => { await api("POST", "/api/admin/users", admin, { name: `Teacher ${tag}`, email: `p45.${tag}.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER" }); return login(`p45.${tag}.${run}@example.edu`, "Sturdy-Pass1"); };
+    const mkT = async (tag: string) => { await api("POST", "/api/admin/users", admin, { name: `Teacher ${tag}`, email: `p45.${tag}.${run}@example.edu`, password: "Sturdy-Pass1", role: "TEACHER", verifyMathematics: true }); return login(`p45.${tag}.${run}@example.edu`, "Sturdy-Pass1"); };
     const T1 = await mkT("t1"), T2 = await mkT("t2"), T3 = await mkT("t3");
     const S = (await api("POST", "/api/auth/register", undefined, { name: "Pupil", email: `p45.s.${run}@example.edu`, password: "Sturdy-Pass1" })).json.token as string;
     const cur = (await api("GET", "/api/curriculum", T1)).json.data;

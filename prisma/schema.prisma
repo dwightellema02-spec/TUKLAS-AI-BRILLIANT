@@ -158,6 +158,8 @@ model User {
   updatedAt    DateTime @updatedAt
 
   progress                StudentProgress[]
+  /// Phase 51: verified subject authorizations (an administrator records them; a generic TEACHER role is not enough to author lessons).
+  subjectAssignments      TeacherSubjectAssignment[]
   authoredLessons         Lesson[]                         @relation("LessonAuthor")
   lessonSessions          LessonSession[]
   checkpointAttempts      CheckpointAttempt[]
@@ -195,6 +197,7 @@ model Subject {
   updatedAt   DateTime @updatedAt
 
   grades Grade[]
+  teacherAssignments TeacherSubjectAssignment[]
 }
 
 model Grade {
@@ -1185,4 +1188,23 @@ model RateEvent {
 
   @@index([key, at])
   @@index([at])
+}
+
+/// Phase 51: a teacher may create, import, edit, publish and attach videos to lessons of a subject only while an administrator has verified
+/// that assignment. One Mathematics assignment covers Grades 7 to 10. Revoking keeps the row (history) and ends the permission.
+model TeacherSubjectAssignment {
+  id           String    @id @default(uuid())
+  userId       String
+  subjectId    String
+  verifiedById String // the administrator who recorded the verification
+  verifiedAt   DateTime  @default(now())
+  note         String? // short, e.g. "Mathematics teacher, appointment verified by the school head"
+  revokedAt    DateTime?
+  revokedById  String?
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, subjectId])
+  @@index([subjectId])
 }

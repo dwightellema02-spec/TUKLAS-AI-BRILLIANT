@@ -1,0 +1,10 @@
+{
+  "name": "Tuklas AI (demo mode)",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
+  "postCreateCommand": "npm ci --legacy-peer-deps && DATABASE_URL=postgresql://u:p@localhost:5432/x npx prisma generate",
+  "postAttachCommand": "AI_PROVIDER=local nohup npm run dev > /tmp/tuklas-dev.log 2>&1 &",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": { "label": "Tuklas AI", "onAutoForward": "openBrowser" }
+  }
+}
