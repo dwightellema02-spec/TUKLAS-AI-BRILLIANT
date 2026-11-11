@@ -3738,7 +3738,8 @@ async function startServer() {
     // Dynamically load Vite in development
     const { createServer } = await import("vite");
     const vite = await createServer({
-      server: { middlewareMode: true },
+      // Development only. ".app.github.dev" lets the page open through a GitHub Codespaces forwarded address; without it Vite refuses the host.
+      server: { middlewareMode: true, allowedHosts: [".app.github.dev"] },
       appType: "spa",
     });
     app.use(vite.middlewares);
